@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/sdk" },
+    { "path": "./packages/surface" },
+    { "path": "./packages/types" },
+    { "path": "./packages/config" },
+    { "path": "./packages/files" },
+    { "path": "./packages/docs" },
+    { "path": "./packages/actions" },
+    { "path": "./packages/scripts" }
+  ]
+}

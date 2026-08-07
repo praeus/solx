@@ -1,0 +1,30 @@
+{
+  "name": "@solx/scripts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Action-scoped script runner bindings for the solx SDK. Re-exported under solx/scripts.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "dependencies": {
+    "@solx/surface": "workspace:*",
+    "@solx/types": "workspace:*",
+    "@solx/actions": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  }
+}

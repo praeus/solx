@@ -1,0 +1,49 @@
+[package]
+name = "solx-bindings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "In-process Neon bindings for solx-core. One binary, seven modules."
+
+[features]
+# Both backends are compiled in by default so a single `solx.node`
+# supports local and remote (client) usage at *runtime*, not as a
+# build-time either/or choice. Each manager exposes two explicit
+# constructors: `xOpen(...)` (gated on `local`, wires the in-process
+# solx-types/solx-files/solx-docs/solx-actions impls) and `xConnect(
+# serverUrl, token)` (gated on `client`, wires an HTTP-backed
+# `solx-client::Remote*` proxy into the same `Arc<dyn Trait>` slot).
+# Consumers pick which constructor to call per-manager (mirroring how
+# `solx-manager::App::build_with_config` decides local vs. remote from
+# config/env) — they never branch on which impl they got afterwards.
+#
+# `ConfigService` has no trait upstream and is never proxied — it's
+# local-only in both modes (see `config.rs`).
+#
+# Building with only one of these features still works (e.g. a
+# thin client-only binary that skips libsql/tantivy/wasmtime); the
+# other backend's constructors then throw a clear "not compiled in"
+# `SolxError` instead of failing to link.
+default = ["local", "client"]
+local = []
+client = []
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+solx-types    = { workspace = true }
+solx-config   = { workspace = true }
+solx-files    = { workspace = true }
+solx-docs     = { workspace = true }
+solx-actions  = { workspace = true }
+solx-scripts  = { workspace = true }
+solx-surface  = { workspace = true }
+solx-client   = { workspace = true }
+neon          = { workspace = true }
+tokio         = { workspace = true }
+serde         = { workspace = true }
+serde_json    = { workspace = true }
+async-trait   = { workspace = true }
+thiserror     = "1"
+base64        = "0.22"
