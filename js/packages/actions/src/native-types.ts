@@ -22,7 +22,7 @@ export interface NativeActionsModule {
   ): unknown;
   /** Client mode: proxies every call to a remote `solx-server`. */
   actionsConnect(serverUrl: string, token: string): unknown;
-  actionsPost(mgr: unknown, path: string, name: string, inputJson: string): Promise<string>;
+  actionsSave(mgr: unknown, path: string, name: string, inputJson: string): Promise<string>;
   actionsGet(mgr: unknown, path: string, name: string): Promise<string>;
   actionsDelete(mgr: unknown, path: string, name: string): Promise<void>;
   actionsList(mgr: unknown, optionsJson: string): Promise<string>;

@@ -7,7 +7,7 @@ Neon bindings + a tree-shakeable SDK.
 import { createSolx } from 'solx';
 
 const solx = await createSolx();                 // uses ~/.praeus/solx
-await solx.types.post('/types/custom', 'Person', { schema: { /* ... */ } });
+await solx.types.save('/types/custom', 'Person', { schema: { /* ... */ } });
 await solx.config.set('greeting', 'hello');
 await solx.files.put('files/docs/x/hello.txt', new TextEncoder().encode('hi'));
 ```

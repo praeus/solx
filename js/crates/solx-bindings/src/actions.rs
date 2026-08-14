@@ -112,7 +112,7 @@ fn connect(mut cx: FunctionContext) -> JsResult<JsBox<JsActionManager>> {
     }
 }
 
-fn post(mut cx: FunctionContext) -> JsResult<JsPromise> {
+fn save(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let mgr = cx.argument::<JsBox<JsActionManager>>(0)?;
     let path = cx.argument::<JsString>(1)?.value(&mut cx);
     let name = cx.argument::<JsString>(2)?.value(&mut cx);
@@ -127,7 +127,7 @@ fn post(mut cx: FunctionContext) -> JsResult<JsPromise> {
 
     let inner = mgr.inner.clone();
     run_async(&mut cx, async move {
-        ActionManager::post(&*inner, &path, &name, input).await
+        ActionManager::save(&*inner, &path, &name, input).await
     })
 }
 
@@ -191,7 +191,7 @@ fn exec(mut cx: FunctionContext) -> JsResult<JsPromise> {
 pub fn register_actions_module(cx: &mut ModuleContext) -> NeonResult<()> {
     cx.export_function("actionsOpen", open)?;
     cx.export_function("actionsConnect", connect)?;
-    cx.export_function("actionsPost", post)?;
+    cx.export_function("actionsSave", save)?;
     cx.export_function("actionsGet", get)?;
     cx.export_function("actionsDelete", delete)?;
     cx.export_function("actionsList", list)?;

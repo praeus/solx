@@ -88,7 +88,7 @@ fn connect(mut cx: FunctionContext) -> JsResult<JsBox<JsDocManager>> {
     }
 }
 
-fn post(mut cx: FunctionContext) -> JsResult<JsPromise> {
+fn save(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let mgr = cx.argument::<JsBox<JsDocManager>>(0)?;
     let path = cx.argument::<JsString>(1)?.value(&mut cx);
     let name = cx.argument::<JsString>(2)?.value(&mut cx);
@@ -103,7 +103,7 @@ fn post(mut cx: FunctionContext) -> JsResult<JsPromise> {
 
     let inner = mgr.inner.clone();
     run_async(&mut cx, async move {
-        DocManager::post(&*inner, &path, &name, input).await
+        DocManager::save(&*inner, &path, &name, input).await
     })
 }
 
@@ -162,7 +162,7 @@ fn search(mut cx: FunctionContext) -> JsResult<JsPromise> {
 pub fn register_docs_module(cx: &mut ModuleContext) -> NeonResult<()> {
     cx.export_function("docsOpen", open)?;
     cx.export_function("docsConnect", connect)?;
-    cx.export_function("docsPost", post)?;
+    cx.export_function("docsSave", save)?;
     cx.export_function("docsGet", get)?;
     cx.export_function("docsDelete", delete)?;
     cx.export_function("docsList", list)?;

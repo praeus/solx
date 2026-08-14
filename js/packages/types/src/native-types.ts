@@ -7,7 +7,7 @@
 export interface NativeTypesModule {
   typesOpen(dbPath: string): unknown;
   typesConnect(serverUrl: string, token: string): unknown;
-  typesPost(mgr: unknown, path: string, name: string, inputJson: string): Promise<string>;
+  typesSave(mgr: unknown, path: string, name: string, inputJson: string): Promise<string>;
   typesGet(mgr: unknown, path: string, name: string): Promise<string>;
   typesDelete(mgr: unknown, path: string, name: string): Promise<void>;
   typesList(mgr: unknown, optionsJson: string): Promise<string>;

@@ -13,7 +13,7 @@ export interface NativeDocsModule {
   docsOpen(dbPath: string, indexDir: string, typesHandle: unknown): unknown;
   /** Client mode: proxies every call to a remote `solx-server`. */
   docsConnect(serverUrl: string, token: string): unknown;
-  docsPost(mgr: unknown, path: string, name: string, inputJson: string): Promise<string>;
+  docsSave(mgr: unknown, path: string, name: string, inputJson: string): Promise<string>;
   docsGet(mgr: unknown, path: string, name: string): Promise<string>;
   docsDelete(mgr: unknown, path: string, name: string): Promise<void>;
   docsList(mgr: unknown, optionsJson: string): Promise<string>;

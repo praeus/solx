@@ -4,12 +4,12 @@
 //! ```js
 //! const solx = require("solx.node");
 //! const mgr  = solx.typesOpen("/path/to/types.db");   // sync
-//! const t    = await solx.typesPost(mgr, "/types/custom", "Person", JSON.stringify(input));
+//! const t    = await solx.typesSave(mgr, "/types/custom", "Person", JSON.stringify(input));
 //! ```
 //!
 //! Each sub-module is registered by its own `register_*_module` function
 //! which exports camelCase function names with the sub-module name as
-//! a prefix (e.g. `typesOpen`, `configOpen`, `docsPost`). The
+//! a prefix (e.g. `typesOpen`, `configOpen`, `docsSave`). The
 //! TS-side `Local*` classes are thin wrappers around these primitives
 //! — they exist to give users proper async, error types, and DTO
 //! conversion, none of which are ergonomic to do in raw `solx.node`.

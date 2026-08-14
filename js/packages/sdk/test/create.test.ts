@@ -43,12 +43,12 @@ describeIfNative('createSolx (round-trip)', () => {
     if (appdata) rmSync(appdata, { recursive: true, force: true });
   });
 
-  test('post → get → resolve → validate → list → delete', async () => {
+  test('save → get → resolve → validate → list → delete', async () => {
     expect(solx.appdata).toBe(appdata);
     expect(solx.types).toBeDefined();
 
-    // 1. Post a type. (Create-or-replace; path normalizes to /types/custom.)
-    const t = await solx.types.post('/types/custom', 'Person', {
+    // 1. Save a type. (Create-or-replace; path normalizes to /types/custom.)
+    const t = await solx.types.save('/types/custom', 'Person', {
       schema: {
         type: 'object',
         required: ['name'],
@@ -96,7 +96,7 @@ describeIfNative('createSolx (round-trip)', () => {
 
   test('path normalization happens on the native side', async () => {
     // Missing leading slash should still resolve after normalization.
-    const t = await solx.types.post('/types/x', 'X', {
+    const t = await solx.types.save('/types/x', 'X', {
       schema: { type: 'string' },
     });
     const got = await solx.types.get('/types/x', 'X');

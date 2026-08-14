@@ -31,7 +31,7 @@ describeIfNative('DocManager (round-trip)', () => {
   beforeAll(async () => {
     appdata = mkdtempSync(join(tmpdir(), 'solx-docs-test-'));
     types = await TypeManager.open(join(appdata, 'types.db'));
-    await types.post('/types/custom', 'Note', {
+    await types.save('/types/custom', 'Note', {
       schema: { type: 'object', properties: { body: { type: 'string' } } },
     });
     docs = await DocManager.open(
@@ -45,35 +45,35 @@ describeIfNative('DocManager (round-trip)', () => {
     if (appdata) rmSync(appdata, { recursive: true, force: true });
   });
 
-  test('post → get → list → search → delete', async () => {
-    const posted = await docs.post('/notes', 'first', {
+  test('save → get → list → search → delete', async () => {
+    const saved = await docs.save('/notes', 'first', {
       typeRef: '/types/custom/Note',
       title: 'First note',
       contents: { body: 'hello docs' },
     });
-    expect(posted.path).toBe('/notes');
-    expect(posted.name).toBe('first');
-    expect(posted.typeRef).toBe('/types/custom/Note');
-    expect(posted.title).toBe('First note');
-    expect(posted.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(saved.path).toBe('/notes');
+    expect(saved.name).toBe('first');
+    expect(saved.typeRef).toBe('/types/custom/Note');
+    expect(saved.title).toBe('First note');
+    expect(saved.id).toMatch(/^[0-9a-f-]{36}$/);
 
     const got = await docs.get('/notes', 'first');
-    expect(got.id).toBe(posted.id);
+    expect(got.id).toBe(saved.id);
     expect(got.contents).toEqual({ body: 'hello docs' });
 
     const page = await docs.list({ pathPrefix: '/notes' });
     expect(page.items).toHaveLength(1);
-    expect(page.items[0]?.id).toBe(posted.id);
+    expect(page.items[0]?.id).toBe(saved.id);
 
     const results = await docs.search({ q: 'hello', pathPrefix: '/notes' });
-    expect(results.hits.some((h) => h.id === posted.id)).toBe(true);
+    expect(results.hits.some((h) => h.id === saved.id)).toBe(true);
 
     await docs.delete('/notes', 'first');
     await expect(docs.get('/notes', 'first')).rejects.toThrow(SolxError);
   }, 30_000);
 
-  test('post rejects a document that fails schema validation against a stricter type', async () => {
-    await types.post('/types/custom', 'Strict', {
+  test('save rejects a document that fails schema validation against a stricter type', async () => {
+    await types.save('/types/custom', 'Strict', {
       schema: {
         type: 'object',
         required: ['body'],
@@ -81,7 +81,7 @@ describeIfNative('DocManager (round-trip)', () => {
       },
     });
     await expect(
-      docs.post('/notes', 'bad', {
+      docs.save('/notes', 'bad', {
         typeRef: '/types/custom/Strict',
         contents: {},
       }),

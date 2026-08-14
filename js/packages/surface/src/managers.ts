@@ -24,7 +24,7 @@ import type { JsonValue } from './json.js';
 // ---------- TypeManager ----------
 
 export interface TypeManager {
-  post(path: string, name: string, input: TypeInput): Promise<TypeEntity>;
+  save(path: string, name: string, input: TypeInput): Promise<TypeEntity>;
   get(path: string, name: string): Promise<TypeEntity>;
   delete(path: string, name: string): Promise<void>;
   list(opts?: ListOptions): Promise<Page<TypeEntity>>;
@@ -47,7 +47,7 @@ export interface FileStore {
 // ---------- DocManager ----------
 
 export interface DocManager {
-  post(path: string, name: string, input: DocumentInput): Promise<Document>;
+  save(path: string, name: string, input: DocumentInput): Promise<Document>;
   get(path: string, name: string): Promise<Document>;
   delete(path: string, name: string): Promise<void>;
   list(opts?: ListOptions): Promise<Page<Document>>;
@@ -57,7 +57,7 @@ export interface DocManager {
 // ---------- ActionManager ----------
 
 export interface ActionManager {
-  post(path: string, name: string, input: ActionInput): Promise<Action>;
+  save(path: string, name: string, input: ActionInput): Promise<Action>;
   get(path: string, name: string): Promise<Action>;
   delete(path: string, name: string): Promise<void>;
   list(opts?: ListOptions): Promise<Page<Action>>;

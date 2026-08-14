@@ -246,10 +246,10 @@ export class DocManager {
     });
   }
 
-  async post(path: string, name: string, input: DocumentInput): Promise<Document> {
+  async save(path: string, name: string, input: DocumentInput): Promise<Document> {
     return withSolxError(async () => {
       const native = loadNative() as unknown as NativeDocsModule;
-      const json = await native.docsPost(
+      const json = await native.docsSave(
         this.handle,
         path,
         name,

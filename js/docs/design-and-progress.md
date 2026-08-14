@@ -255,7 +255,7 @@ except `solx-config`:
 |--------------------|---------------|------------------|------------|-------------|-------|
 | `solx-types`       | `types.rs`    | `TypeManager`    | `open`     | `connect`   | round-trip + loader fallback |
 | `solx-files`       | `files.rs`    | `FileStore`      | `open`     | `connect`   | put / get / list / delete + path-safety |
-| `solx-docs`        | `docs.rs`     | `DocManager`     | `open`     | `connect`   | post / get / list / search / delete + schema-validation rejection |
+| `solx-docs`        | `docs.rs`     | `DocManager`     | `open`     | `connect`   | save / get / list / search / delete + schema-validation rejection |
 | `solx-actions`     | `actions.rs`  | `ActionManager`  | `open`     | `connect`   | CRUD + `exec` against a seeded built-in + unknown-action rejection |
 | `solx-scripts`     | `scripts.rs`  | `ScriptRunner`   | n/a — binds to an already-open `ActionManager` | | `json`/`exec` stages, last-statement return, `$params` seeding, unsupported-verb rejection |
 | `solx-config`      | `config.rs`   | `ConfigService`  | `open`/`openIn` (always local) | — | set / get / patch / mutate / packages / derived paths + reopen persistence + umbrella wiring |

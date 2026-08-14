@@ -59,26 +59,26 @@ describeIfNative('ActionManager (round-trip)', () => {
     await expect(actions.exec('/does/not', 'exist', {})).rejects.toThrow(SolxError);
   });
 
-  test('post → get → list → delete a custom action', async () => {
-    const posted = await actions.post('/tools', 'greet', {
+  test('save → get → list → delete a custom action', async () => {
+    const saved = await actions.save('/tools', 'greet', {
       caption: 'Greet',
       description: 'A no-op command action, never executed in this test.',
       actionType: 'command',
       fnName: 'echo hello',
     });
-    expect(posted.path).toBe('/tools');
-    expect(posted.name).toBe('greet');
-    expect(posted.actionType).toBe('command');
-    expect(posted.trusted).toBe(false);
-    expect(posted.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(saved.path).toBe('/tools');
+    expect(saved.name).toBe('greet');
+    expect(saved.actionType).toBe('command');
+    expect(saved.trusted).toBe(false);
+    expect(saved.id).toMatch(/^[0-9a-f-]{36}$/);
 
     const got = await actions.get('/tools', 'greet');
-    expect(got.id).toBe(posted.id);
+    expect(got.id).toBe(saved.id);
     expect(got.fnName).toBe('echo hello');
 
     const page = await actions.list({ pathPrefix: '/tools' });
     expect(page.items).toHaveLength(1);
-    expect(page.items[0]?.id).toBe(posted.id);
+    expect(page.items[0]?.id).toBe(saved.id);
 
     await actions.delete('/tools', 'greet');
     await expect(actions.get('/tools', 'greet')).rejects.toThrow(SolxError);

@@ -2,7 +2,7 @@
  * TS-side wrapper around the `solx-bindings` Neon module.
  *
  * The Rust side exports flat, prefixed function names
- * (`typesOpen`, `typesPost`, `typesGet`, etc.) under
+ * (`typesOpen`, `typesSave`, `typesGet`, etc.) under
  * `require("@solx/<triple>")` (a per-platform npm package).
  * This module:
  *
@@ -140,10 +140,10 @@ export class TypeManager {
     return mgr.handle;
   }
 
-  async post(path: string, name: string, input: TypeInput): Promise<TypeEntity> {
+  async save(path: string, name: string, input: TypeInput): Promise<TypeEntity> {
     return withSolxError(async () => {
       const native = loadNative();
-      const json = await native.typesPost(
+      const json = await native.typesSave(
         this.handle,
         path,
         name,

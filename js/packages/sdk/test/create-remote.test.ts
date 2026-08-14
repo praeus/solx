@@ -99,7 +99,7 @@ function startMockServer(): Promise<{ server: Server; url: string }> {
         res.setHeader('content-type', 'application/json');
 
         switch (req.url) {
-          case '/types/post': {
+          case '/types/save': {
             const key = `${body.path}/${body.name}`;
             const entity: TypeEntitySnake = {
               id: types.get(key)?.id ?? randomUUID(),
@@ -125,7 +125,7 @@ function startMockServer(): Promise<{ server: Server; url: string }> {
             res.end(JSON.stringify(entity));
             return;
           }
-          case '/docs/post': {
+          case '/docs/save': {
             const key = `${body.path}/${body.name}`;
             const doc: DocumentSnake = {
               id: docs.get(key)?.id ?? randomUUID(),
@@ -231,16 +231,16 @@ describeIfNative('createSolx (client/remote mode round-trip)', () => {
     expect(existsSync(appdata)).toBe(true);
   });
 
-  test('types.post → types.get round-trips through the mock server', async () => {
-    const posted = await solx.types.post('/types/custom', 'Person', {
+  test('types.save → types.get round-trips through the mock server', async () => {
+    const saved = await solx.types.save('/types/custom', 'Person', {
       schema: { type: 'object' },
       groups: ['g1'],
     });
-    expect(posted.path).toBe('/types/custom');
-    expect(posted.groups).toEqual(['g1']);
+    expect(saved.path).toBe('/types/custom');
+    expect(saved.groups).toEqual(['g1']);
 
     const got = await solx.types.get('/types/custom', 'Person');
-    expect(got.id).toBe(posted.id);
+    expect(got.id).toBe(saved.id);
   });
 
   test('files.put → files.get round-trips through the mock server', async () => {
@@ -252,15 +252,15 @@ describeIfNative('createSolx (client/remote mode round-trip)', () => {
     expect(new TextDecoder().decode(got)).toBe('hello remote files');
   });
 
-  test('docs.post → docs.get round-trips through the mock server', async () => {
-    const posted = await solx.docs.post('/notes', 'remote-note', {
+  test('docs.save → docs.get round-trips through the mock server', async () => {
+    const saved = await solx.docs.save('/notes', 'remote-note', {
       typeRef: '/types/custom/Note',
       contents: { body: 'hi' },
     });
-    expect(posted.typeRef).toBe('/types/custom/Note');
+    expect(saved.typeRef).toBe('/types/custom/Note');
 
     const got = await solx.docs.get('/notes', 'remote-note');
-    expect(got.id).toBe(posted.id);
+    expect(got.id).toBe(saved.id);
   });
 
   test('actions.exec round-trips through the mock server', async () => {

@@ -194,10 +194,10 @@ export class ActionManager {
     });
   }
 
-  async post(path: string, name: string, input: ActionInput): Promise<Action> {
+  async save(path: string, name: string, input: ActionInput): Promise<Action> {
     return withSolxError(async () => {
       const native = loadNative() as unknown as NativeActionsModule;
-      const json = await native.actionsPost(
+      const json = await native.actionsSave(
         this.handle,
         path,
         name,

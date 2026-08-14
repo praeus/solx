@@ -298,7 +298,7 @@ fn open(mut cx: FunctionContext) -> JsResult<JsBox<JsTypeManager>> {
     Ok(cx.boxed(JsTypeManager(Arc::new(inner))))
 }
 
-fn post(mut cx: FunctionContext) -> JsResult<JsPromise> {
+fn save(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let mgr = cx.argument::<JsBox<JsTypeManager>>(0)?;
     let path = cx.argument::<JsString>(1)?.value(&mut cx);
     let name = cx.argument::<JsString>(2)?.value(&mut cx);
@@ -311,7 +311,7 @@ fn post(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let channel = cx.channel();
     let (deferred, promise) = cx.promise();
     std::thread::spawn(move || {
-        let result = rt.block_on(mgr.post(&path, &name, input));
+        let result = rt.block_on(mgr.save(&path, &name, input));
         deferred.settle_with(&channel, move |mut cx| match result {
             Ok(v)  => Ok(cx.string(serde_json::to_string(&v).unwrap())),
             Err(e) => cx.throw_error(format!("{:?}", e)),
@@ -480,8 +480,8 @@ import { createSolx } from 'solx';
 const solx = await createSolx();                 // uses ~/.praeus/solx
 const types = solx.types;
 
-// post a type
-await types.post('/types/custom', 'Person', {
+// save a type
+await types.save('/types/custom', 'Person', {
   schema: {
     type: 'object',
     required: ['name'],
@@ -489,8 +489,8 @@ await types.post('/types/custom', 'Person', {
   },
 });
 
-// post a doc validated against it
-await solx.docs.post('/research', 'note', {
+// save a doc validated against it
+await solx.docs.save('/research', 'note', {
   typeRef: '/types/custom/Person',
   contents: { name: 'Ada' },
   title: 'AI note',

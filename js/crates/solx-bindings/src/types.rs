@@ -38,7 +38,7 @@ fn open(mut cx: FunctionContext) -> JsResult<JsBox<JsTypeManager>> {
     // We open the database synchronously on the JS thread using
     // a one-shot current-thread runtime. This is acceptable
     // because `open()` is a one-time setup cost; subsequent
-    // calls (`post`, `get`, etc.) all use the long-lived
+    // calls (`save`, `get`, etc.) all use the long-lived
     // binding runtime via `run_async`.
     //
     // The `#[cfg(feature = "local")]` / `#[cfg(feature = "client")]`
@@ -100,7 +100,7 @@ fn connect(mut cx: FunctionContext) -> JsResult<JsBox<JsTypeManager>> {
     }
 }
 
-fn post(mut cx: FunctionContext) -> JsResult<JsPromise> {
+fn save(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let mgr = cx.argument::<JsBox<JsTypeManager>>(0)?;
     let path = cx.argument::<JsString>(1)?.value(&mut cx);
     let name = cx.argument::<JsString>(2)?.value(&mut cx);
@@ -119,7 +119,7 @@ fn post(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let path = path.clone();
     let name = name.clone();
     run_async(&mut cx, async move {
-        TypeManager::post(&*inner, &path, &name, input).await
+        TypeManager::save(&*inner, &path, &name, input).await
     })
 }
 
@@ -198,7 +198,7 @@ fn validate(mut cx: FunctionContext) -> JsResult<JsPromise> {
 pub fn register_types_module(cx: &mut ModuleContext) -> NeonResult<()> {
     cx.export_function("typesOpen", open)?;
     cx.export_function("typesConnect", connect)?;
-    cx.export_function("typesPost", post)?;
+    cx.export_function("typesSave", save)?;
     cx.export_function("typesGet", get)?;
     cx.export_function("typesDelete", delete)?;
     cx.export_function("typesList", list)?;
