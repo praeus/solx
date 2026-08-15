@@ -11,13 +11,28 @@
  *   GET    /api/documents/:path/:name
  *   POST   /api/documents
  *   DELETE /api/documents/:path/:name
+ *   GET    /api/actions
+ *   GET    /api/actions/search
+ *   GET    /api/actions/:path/:name
+ *   POST   /api/actions
+ *   DELETE /api/actions/:path/:name
+ *   POST   /api/actions/:path/:name/exec
  *   GET    /api/types
+ *   GET    /api/types/:path/:name
+ *   POST   /api/types
+ *   DELETE /api/types/:path/:name
+ *   GET    /api/files/list
+ *   GET    /api/files/content
+ *   PUT    /api/files
+ *   DELETE /api/files
  *   GET    /api/config
  *   PATCH  /api/config
  */
 
 import { mountDocumentsRoutes } from "./routes/documents";
+import { mountActionsRoutes } from "./routes/actions";
 import { mountTypesRoutes } from "./routes/types";
+import { mountFilesRoutes } from "./routes/files";
 import { mountConfigRoutes } from "./routes/config";
 import { mountHealthRoutes } from "./routes/health";
 import { getSolx, tryGetSolx } from "./solx-context";
@@ -34,7 +49,7 @@ Bun.serve({
     // CORS for development (Vite dev server on a different port)
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
       "Access-Control-Max-Age": "86400",
     };
@@ -90,8 +105,14 @@ async function route(
   if (url.pathname.startsWith("/api/documents")) {
     return mountDocumentsRoutes(req, url, method, corsHeaders);
   }
+  if (url.pathname.startsWith("/api/actions")) {
+    return mountActionsRoutes(req, url, method, corsHeaders);
+  }
   if (url.pathname.startsWith("/api/types")) {
     return mountTypesRoutes(req, url, method, corsHeaders);
+  }
+  if (url.pathname.startsWith("/api/files")) {
+    return mountFilesRoutes(req, url, method, corsHeaders);
   }
   if (url.pathname.startsWith("/api/config")) {
     return mountConfigRoutes(req, url, method, corsHeaders);

@@ -15,9 +15,9 @@ export interface TabDefinition {
 
 export const DEFAULT_TABS: TabDefinition[] = [
   { id: "documents", label: "Documents", enabled: true },
-  { id: "actions", label: "Actions", enabled: false },
-  { id: "types", label: "Types", enabled: false },
-  { id: "files", label: "Files", enabled: false },
+  { id: "actions", label: "Actions", enabled: true },
+  { id: "types", label: "Types", enabled: true },
+  { id: "files", label: "Files", enabled: true },
 ];
 
 interface Props {
