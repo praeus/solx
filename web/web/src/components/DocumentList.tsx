@@ -26,6 +26,8 @@ interface Props {
   onPageChange: (page: number) => void;
   onCreateClick: () => void;
   onRetry?: () => void;
+  /** Open the editor for an existing document. */
+  onOpen?: (doc: DocumentSummary) => void;
 }
 
 export function DocumentList({
@@ -38,6 +40,7 @@ export function DocumentList({
   onPageChange,
   onCreateClick,
   onRetry,
+  onOpen,
 }: Props) {
   if (error) {
     return (
@@ -85,7 +88,11 @@ export function DocumentList({
     <div className="doc-list-container">
       <div className="doc-list">
         {documents.map((doc, i) => (
-          <DocumentCard key={String(doc.id ?? `${doc.path}/${doc.name}-${i}`)} document={doc} />
+          <DocumentCard
+            key={String(doc.id ?? `${doc.path}/${doc.name}-${i}`)}
+            document={doc}
+            onOpen={onOpen}
+          />
         ))}
       </div>
 
@@ -116,14 +123,16 @@ export function DocumentList({
 
 interface CardProps {
   document: DocumentSummary;
+  onOpen?: (doc: DocumentSummary) => void;
 }
 
-function DocumentCard({ document: doc }: CardProps) {
+function DocumentCard({ document: doc, onOpen }: CardProps) {
   const path = String(doc.path ?? "/");
   const name = String(doc.name ?? "Unnamed");
   const title = (doc.title ?? "").toString().trim();
   const summary = (doc.summary ?? "").toString().trim();
-  const typeName = String(doc.type_name ?? doc.type_ref ?? "").replace(/^.*\//, "");
+  // type_ref is a full reference ("/types/docs/Post") — badge shows the leaf.
+  const typeName = String(doc.type_ref ?? "").replace(/^.*\//, "");
   const updatedAt = String(doc.updated_at ?? "");
   const deleteMutation = useDeleteDocument();
 
@@ -138,9 +147,11 @@ function DocumentCard({ document: doc }: CardProps) {
       className="doc-card"
       role="button"
       tabIndex={0}
+      onClick={() => onOpen?.(doc)}
       onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          // Future: open detail view
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen?.(doc);
         }
       }}
     >

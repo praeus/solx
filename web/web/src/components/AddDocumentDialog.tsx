@@ -23,7 +23,8 @@ export function AddDocumentDialog({ open, onClose, defaultPath, onCreated }: Pro
   const [name, setName] = useState("");
   const [path, setPath] = useState(defaultPath ?? "/");
   const [title, setTitle] = useState("");
-  const [typeName, setTypeName] = useState("");
+  /** Full type reference (e.g. "/types/docs/Post"), not a bare name. */
+  const [typeRef, setTypeRef] = useState("");
   const [summary, setSummary] = useState("");
 
   const typesQuery = useDocumentTypes();
@@ -35,7 +36,7 @@ export function AddDocumentDialog({ open, onClose, defaultPath, onCreated }: Pro
       setPath(defaultPath ?? "/");
       setName("");
       setTitle("");
-      setTypeName("");
+      setTypeRef("");
       setSummary("");
       createMutation.reset();
     }
@@ -64,7 +65,7 @@ export function AddDocumentDialog({ open, onClose, defaultPath, onCreated }: Pro
       await createMutation.mutateAsync({
         path: trimmedPath,
         name: trimmedName,
-        type_name: typeName || undefined,
+        type_ref: typeRef || undefined,
         title: title.trim() || undefined,
         summary: summary.trim() || undefined,
       });
@@ -136,8 +137,8 @@ export function AddDocumentDialog({ open, onClose, defaultPath, onCreated }: Pro
             <span className="dialog__label">Type</span>
             <select
               className="dialog__input"
-              value={typeName}
-              onChange={(e) => setTypeName(e.target.value)}
+              value={typeRef}
+              onChange={(e) => setTypeRef(e.target.value)}
             >
               <option value="">(none)</option>
               {documentTypes.map((t) => {

@@ -37,15 +37,18 @@ server/src/routes/
 
 ### `server/src/routes/actions.ts`
 
-Mirror `documents.ts` shape. Five endpoints:
+Mirror `documents.ts` shape. Four endpoints:
 
 | Method | Path | Calls | Notes |
 |---|---|---|---|
 | `GET` | `/api/actions` | `solx.actions.list(opts)` | Forwards `path_prefix`, `limit`, `offset`, `sort_by`, `sort_order`, `filter_field`, `filter_value` |
-| `GET` | `/api/actions/search` | `solx.actions.list(opts)` with `filter_field=name` LIKE | Browse/search by free-text name |
 | `GET` | `/api/actions/:path/:name` | `solx.actions.get(path, name)` | Same `splitRef` helper as documents |
 | `POST` | `/api/actions` | `solx.actions.post(path, name, input)` | Body: `{ path, name, input: { typeRef, caption, ... } }` |
 | `DELETE` | `/api/actions/:path/:name` | `solx.actions.delete(path, name)` | |
+
+There is no `/api/actions/search`. Name search is `/api/actions` with
+`filter_field=name&filter_value=<q>`, which `solx-actions::list` now
+implements natively (see `ListSchema` in `solx-actions/src/lib.rs`).
 | `POST` | `/api/actions/:path/:name/exec` | `solx.actions.exec(path, name, params)` | Body: `{ params: JsonValue }` |
 
 ### `server/src/routes/types.ts` (extend existing)

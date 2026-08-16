@@ -31,8 +31,8 @@ import {
   fetchTypes,
   listFiles,
   patchConfig,
-  searchActions,
   searchDocuments,
+  updateDocument,
   uploadFile,
   type ActionExecResult,
   type ActionSummary,
@@ -65,6 +65,9 @@ export interface UseDocumentsOptions {
   offset?: number;
   sort_by?: string;
   sort_order?: "asc" | "desc";
+  /** LIKE filter on a column — type_ref | author | title | summary | name. */
+  filter_field?: string;
+  filter_value?: string;
   enabled?: boolean;
 }
 
@@ -109,6 +112,25 @@ export function useCreateDocument() {
     mutationFn: createDocument,
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["documents"] });
+    },
+  });
+}
+
+export function useUpdateDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      path,
+      name,
+      input,
+    }: {
+      path: string;
+      name: string;
+      input: Parameters<typeof updateDocument>[2];
+    }) => updateDocument(path, name, input),
+    onSuccess: (_data, vars) => {
+      void qc.invalidateQueries({ queryKey: ["documents"] });
+      void qc.invalidateQueries({ queryKey: ["documents", "item", vars.path, vars.name] });
     },
   });
 }
@@ -165,24 +187,20 @@ export interface UseTypesBrowseOptions {
   offset?: number;
   sort_by?: string;
   sort_order?: "asc" | "desc";
+  /** LIKE filter on a column — name | description | groups. */
+  filter_field?: string;
+  filter_value?: string;
   enabled?: boolean;
 }
 
 export function useTypes(
   opts: UseTypesBrowseOptions = {},
 ): UseQueryResult<Page<TypeEntity>> {
+  const { enabled, ...params } = opts;
   return useQuery({
-    queryKey: ["types", "browse", opts],
-    queryFn: () => {
-      const params: Record<string, string | number | undefined> = {};
-      if (opts.path_prefix) params.path_prefix = opts.path_prefix;
-      if (opts.limit) params.limit = opts.limit;
-      if (opts.offset) params.offset = opts.offset;
-      if (opts.sort_by) params.sort_by = opts.sort_by;
-      if (opts.sort_order) params.sort_order = opts.sort_order;
-      return fetchTypes(params);
-    },
-    enabled: opts.enabled !== false,
+    queryKey: ["types", "browse", params],
+    queryFn: () => fetchTypes(params),
+    enabled: enabled !== false,
     placeholderData: (previous) => previous,
   });
 }
@@ -205,6 +223,13 @@ export interface UseActionsOptions {
   offset?: number;
   sort_by?: string;
   sort_order?: "asc" | "desc";
+  /**
+   * LIKE filter on a column — name | caption | description | category |
+   * capabilities | phrases | action_type | param_type_ref | result_type_ref |
+   * fn_name | bin_name. `action_config` is intentionally not filterable.
+   */
+  filter_field?: string;
+  filter_value?: string;
   enabled?: boolean;
 }
 
@@ -213,23 +238,6 @@ export function useActions(opts: UseActionsOptions = {}): UseQueryResult<Page<Ac
     queryKey: ["actions", "list", opts],
     queryFn: () => fetchActions(opts),
     enabled: opts.enabled !== false,
-    placeholderData: (previous) => previous,
-  });
-}
-
-export interface UseSearchActionsOptions {
-  q?: string;
-  path_prefix?: string;
-  limit?: number;
-  offset?: number;
-  enabled?: boolean;
-}
-
-export function useSearchActions(opts: UseSearchActionsOptions): UseQueryResult<Page<ActionSummary>> {
-  return useQuery({
-    queryKey: ["actions", "search", opts],
-    queryFn: () => searchActions(opts),
-    enabled: (opts.enabled ?? true) && Boolean(opts.q && opts.q.trim()),
     placeholderData: (previous) => previous,
   });
 }

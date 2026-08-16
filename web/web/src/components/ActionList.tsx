@@ -18,6 +18,8 @@ interface Props {
   onPageChange: (page: number) => void;
   onCreateClick: () => void;
   onRetry?: () => void;
+  /** Open the editor for an existing action. */
+  onOpen?: (action: ActionSummary) => void;
 }
 
 export function ActionList({
@@ -29,6 +31,7 @@ export function ActionList({
   onPageChange,
   onCreateClick,
   onRetry,
+  onOpen,
 }: Props) {
   if (error) {
     return (
@@ -75,6 +78,7 @@ export function ActionList({
           <ActionCard
             key={String(action.id ?? `${action.path}/${action.name}-${i}`)}
             action={action}
+            onOpen={onOpen}
           />
         ))}
       </div>
@@ -103,7 +107,13 @@ export function ActionList({
   );
 }
 
-function ActionCard({ action }: { action: ActionSummary }) {
+function ActionCard({
+  action,
+  onOpen,
+}: {
+  action: ActionSummary;
+  onOpen?: (action: ActionSummary) => void;
+}) {
   const path = String(action.path ?? "/");
   const name = String(action.name ?? "Unnamed");
   const caption = String(action.caption ?? "").trim();
@@ -120,7 +130,18 @@ function ActionCard({ action }: { action: ActionSummary }) {
   };
 
   return (
-    <div className="doc-card" role="button" tabIndex={0}>
+    <div
+      className="doc-card"
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen?.(action)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen?.(action);
+        }
+      }}
+    >
       <div className="doc-card__body">
         <div className="doc-card__header">
           <span className="doc-card__name">{name}</span>

@@ -8,17 +8,19 @@
 // We deliberately don't import @solx/surface types at the network layer because
 // the Bun backend serializes them as plain JSON; the frontend re-types the
 // responses locally. If we later want strict parity, we can import the DTOs.
+// Field casing note: the Bun backend translates the camelCase solx-js SDK
+// surface to/from snake_case at its edge (server/src/wire.ts), so everything
+// below matches the Rust wire format. Do not mix camelCase in here.
 export interface DocumentSummary {
   id?: string;
   path: string;
   name: string;
   title?: string | null;
   summary?: string | null;
-  type_name?: string | null;
   type_ref?: string | null;
   author?: string | null;
   pub_date?: string | null;
-  knowledge_base_name?: string | null;
+  confidence?: number | null;
   created_at?: string;
   updated_at?: string;
   [key: string]: unknown;
@@ -55,6 +57,8 @@ export interface TypeEntity {
   description?: string;
   schema?: Record<string, unknown>;
   groups?: string[];
+  created_at?: string;
+  updated_at?: string;
   [key: string]: unknown;
 }
 
@@ -162,21 +166,49 @@ export function fetchDocument(path: string, name: string): Promise<DocumentSumma
 export function createDocument(input: {
   path: string;
   name: string;
+  /** Full type reference, e.g. "/types/docs/BlogPostWithComments". */
+  type_ref?: string;
+  /** Bare type name (mapped to typeRef = "/builtin/types/<Name>"). */
   type_name?: string;
   title?: string;
   summary?: string;
+  author?: string;
+  pub_date?: string;
+  confidence?: number;
   contents?: Record<string, unknown>;
+  files?: Array<{ name: string; relPath: string; contentType?: string }>;
 }): Promise<DocumentSummary> {
   const { path, name, type_name, ...rest } = input;
-  // solx expects a `typeRef` (e.g. "/packages/solx-google/BlogPostWithComments")
-  // inside the document input. The dropdown already sends the full path/name ref.
   const wireInput: Record<string, unknown> = { ...rest };
-  if (type_name) {
-    wireInput.typeRef = type_name;
+  // Map the bare type_name (e.g. "Post") into the wire-level typeRef. The
+  // /builtin/types namespace is where solx stores the core document types;
+  // if the caller passes a full type_ref, prefer that.
+  if (type_name && !wireInput.typeRef && !wireInput.type_ref) {
+    wireInput.typeRef = `/builtin/types/${type_name}`;
   }
   return request<DocumentSummary>("/api/documents", {
     method: "POST",
     body: JSON.stringify({ path, name, input: wireInput }),
+  });
+}
+
+export function updateDocument(
+  path: string,
+  name: string,
+  input: {
+    /** Full type reference, e.g. "/types/docs/Post". */
+    type_ref?: string;
+    title?: string;
+    summary?: string;
+    contents?: Record<string, unknown>;
+    /** Legacy / future-friendly alias accepted alongside type_ref. */
+    type_name?: string;
+    [key: string]: unknown;
+  },
+): Promise<DocumentSummary> {
+  return request<DocumentSummary>(`/api/documents/${encodeURI(path)}/${encodeURIComponent(name)}`, {
+    method: "POST",
+    body: JSON.stringify({ path, name, input }),
   });
 }
 
@@ -187,7 +219,15 @@ export function deleteDocument(path: string, name: string): Promise<void> {
 
 /** ── Types ───────────────────────────────────────────────────────────── */
 
-export function fetchTypes(opts: { limit?: number; offset?: number } = {}): Promise<Page<TypeEntity>> {
+export function fetchTypes(opts: {
+  path_prefix?: string;
+  limit?: number;
+  offset?: number;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
+  filter_field?: string;
+  filter_value?: string;
+} = {}): Promise<Page<TypeEntity>> {
   return request<Page<TypeEntity>>(`/api/types${qs(opts)}`);
 }
 
@@ -225,11 +265,12 @@ export interface ActionSummary {
   description?: string | null;
   category?: string | null;
   action_type?: string | null;
-  param_type_name?: string | null;
-  result_type_name?: string | null;
+  /** Full type reference for the action's parameter, e.g. "/types/core/Null". */
+  param_type_ref?: string | null;
+  /** Full type reference for the action's result. */
+  result_type_ref?: string | null;
   capabilities?: string[];
   phrases?: string[];
-  permission_name?: string | null;
   bin_name?: string | null;
   fn_name?: string | null;
   action_config?: Record<string, unknown> | null;
@@ -258,14 +299,8 @@ export function fetchActions(opts: {
   return request<Page<ActionSummary>>(`/api/actions${qs(opts)}`);
 }
 
-export function searchActions(opts: {
-  q?: string;
-  path_prefix?: string;
-  limit?: number;
-  offset?: number;
-} = {}): Promise<Page<ActionSummary>> {
-  return request<Page<ActionSummary>>(`/api/actions/search${qs(opts)}`);
-}
+// No searchActions(): solx-actions has no server-side filtering, so the
+// Actions tab scopes by path here and narrows in memory (lib/clientView.ts).
 
 export function fetchAction(path: string, name: string): Promise<ActionSummary> {
   const encoded = `${encodeURI(path)}/${encodeURIComponent(name)}`;
@@ -280,17 +315,16 @@ export function createAction(input: {
   category?: string;
   capabilities?: string[];
   phrases?: string[];
-  param_type_name?: string;
-  result_type_name?: string;
+  param_type_ref?: string;
+  result_type_ref?: string;
   action_type?: string;
   bin_name?: string;
   fn_name?: string;
   action_config?: Record<string, unknown>;
-  permission_name?: string;
   trusted?: boolean;
 }): Promise<ActionSummary> {
   const { path, name, ...rest } = input;
-  // Action type PascalCase in the UI -> snake_case on the wire.
+  // ActionType is a lowercase enum on the Rust side ("wasm", "webhook", …).
   const wireInput: Record<string, unknown> = { ...rest };
   if (typeof wireInput.action_type === "string") {
     wireInput.action_type = wireInput.action_type.toLowerCase();
@@ -343,6 +377,17 @@ export function listFiles(prefix: string): Promise<FileListResponse> {
 
 export function fetchFileContent(relPath: string): Promise<FileContentResponse> {
   return request<FileContentResponse>(`/api/files/content${qs({ relPath })}`);
+}
+
+/**
+ * URL of the binary file endpoint. Use as `<img src>` or in Tiptap
+ * `<img src>` so the browser loads the file directly with the right
+ * Content-Type (vs. the base64-JSON `fetchFileContent`). Returns a
+ * path-only URL so the Vite dev server proxy (which forwards `/api/*`
+ * to the Bun backend) works in dev, and a relative URL works in prod.
+ */
+export function fileRawUrl(relPath: string): string {
+  return `/api/files/raw${qs({ relPath })}`;
 }
 
 export function uploadFile(relPath: string, bytes: Uint8Array): Promise<{ relPath: string }> {

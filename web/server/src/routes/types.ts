@@ -10,12 +10,12 @@
 import { getSolx } from "../solx-context";
 import {
   errJson,
-  listOptionsFromUrl,
   okJson,
   readJson,
   splitRef,
   validatePathName,
 } from "./_helpers";
+import { listOptionsFromUrl, pageToWire, typeInputFromWire, typeToWire } from "../wire";
 
 export async function mountTypesRoutes(
   req: Request,
@@ -52,7 +52,7 @@ async function handleList(url: URL, corsHeaders: Record<string, string>): Promis
   const solx = await getSolx();
   const opts = listOptionsFromUrl(url);
   const result = await solx.types.list(opts as Parameters<typeof solx.types.list>[0]);
-  return okJson(result, 200, corsHeaders);
+  return okJson(pageToWire(result, typeToWire), 200, corsHeaders);
 }
 
 async function handleGet(rest: string, corsHeaders: Record<string, string>): Promise<Response> {
@@ -62,7 +62,7 @@ async function handleGet(rest: string, corsHeaders: Record<string, string>): Pro
   }
   const solx = await getSolx();
   const result = await solx.types.get(split.path, split.name);
-  return okJson(result, 200, corsHeaders);
+  return okJson(typeToWire(result), 200, corsHeaders);
 }
 
 async function handleSave(req: Request, corsHeaders: Record<string, string>): Promise<Response> {
@@ -74,7 +74,7 @@ async function handleSave(req: Request, corsHeaders: Record<string, string>): Pr
 
   const validated = validatePathName(parsed.value, corsHeaders);
   if (!validated.ok) return validated.response;
-  const input = parsed.value.input ?? {};
+  const input = typeInputFromWire(parsed.value.input ?? {});
 
   const solx = await getSolx();
   const result = await solx.types.save(
@@ -82,7 +82,7 @@ async function handleSave(req: Request, corsHeaders: Record<string, string>): Pr
     validated.name,
     input as Parameters<typeof solx.types.save>[2],
   );
-  return okJson(result, 201, corsHeaders);
+  return okJson(typeToWire(result), 201, corsHeaders);
 }
 
 async function handleDelete(rest: string, corsHeaders: Record<string, string>): Promise<Response> {

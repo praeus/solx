@@ -5,7 +5,9 @@
  *   okJson()     — JSON response with CORS headers
  *   errJson()    — JSON error response with CORS headers
  *   readJson()   — parses a JSON request body or returns a 400 response
- *   listOptionsFromUrl() — translates query params into a ListOptions object
+ *
+ * Query-param and entity translation lives in ../wire.ts — every SDK call
+ * goes through it so the snake_case ⇄ camelCase conversion happens once.
  */
 
 /** JSON response with CORS headers and a default 200 status. */
@@ -66,43 +68,37 @@ export interface Split {
  *   { path: "/research/ai", name: "note" }.
  * The last "/<segment>" is always the name; the rest is the path.
  * Returns null if the segment doesn't contain a name.
+ *
+ * Each `/`-separated segment is URL-decoded individually so names that
+ * contain percent-encoded characters (e.g. spaces encoded as `%20`) are
+ * returned as their decoded form. The path is reconstructed by
+ * re-joining the decoded segments with `/`s, preserving the canonical
+ * leading-slash form.
  */
 export function splitRef(rest: string): Split | null {
   if (!rest.startsWith("/")) return null;
+  // Strip leading/trailing slashes, then split on the remaining slashes.
   const trimmed = rest.replace(/^\/+/, "").replace(/\/+$/, "");
   if (!trimmed) return null;
-  const lastSlash = trimmed.lastIndexOf("/");
-  if (lastSlash === -1) {
-    return { path: "/", name: trimmed };
-  }
-  const name = trimmed.slice(lastSlash + 1);
-  const path = "/" + trimmed.slice(0, lastSlash);
+  const segments = trimmed.split("/").map((s) => safeDecode(s));
+  if (segments.length === 0) return null;
+  const name = segments[segments.length - 1];
   if (!name) return null;
+  const path = segments.length === 1 ? "/" : "/" + segments.slice(0, -1).join("/");
   return { path, name };
 }
 
 /**
- * Parse the common entity-list query params (`path_prefix`, `limit`, `offset`,
- * `sort_by`, `sort_order`, `filter_field`, `filter_value`) into an object
- * suitable for the solx-js `list()` call.
+ * Decode a single URL-encoded segment. If the segment contains a
+ * malformed escape sequence we return it verbatim rather than 400-ing —
+ * the upstream solx lookup will surface the not-found error.
  */
-export function listOptionsFromUrl(url: URL): Record<string, unknown> {
-  const opts: Record<string, unknown> = {};
-  const pathPrefix = url.searchParams.get("path_prefix");
-  if (pathPrefix) opts.path_prefix = pathPrefix;
-  const limit = url.searchParams.get("limit");
-  if (limit) opts.limit = Number(limit);
-  const offset = url.searchParams.get("offset");
-  if (offset) opts.offset = Number(offset);
-  const sortBy = url.searchParams.get("sort_by");
-  if (sortBy) opts.sort_by = sortBy;
-  const sortOrder = url.searchParams.get("sort_order");
-  if (sortOrder) opts.sort_order = sortOrder;
-  const filterField = url.searchParams.get("filter_field");
-  if (filterField) opts.filter_field = filterField;
-  const filterValue = url.searchParams.get("filter_value");
-  if (filterValue) opts.filter_value = filterValue;
-  return opts;
+function safeDecode(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
 }
 
 /**

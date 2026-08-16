@@ -12,27 +12,36 @@
  *   │   ⚙ (settings, bottom-left)  + (add, BR)     │
  *   └──────────────────────────────────────────────┘
  *
- * Documents tab:
- *   - "query" input drives the mode:
- *       - starts with "/" → browse mode (useDocuments, with optional sort)
- *       - everything else → search mode (useSearchDocuments with facets)
+ * Query routing — one rule, applied per tab from TAB_CAPABILITIES:
  *
- * Actions / Types / Files tabs:
- *   - Either browse by path or search by name (mirrors the logic for documents).
- *   - Type- and Action-specific facets are omitted in this PR.
- *   - Files tab uses a prefix filter instead of a search bar.
+ *   Documents, no text query → /api/documents        (path + type + sort)
+ *   Documents, text query    → /api/documents/search  (path + type facets,
+ *                              relevance-ranked; SearchQuery has no sort axis)
+ *   Actions / Types          → /api/{actions,types}   (path + name substring
+ *                              via filter_field, + sort)
+ *
+ * Every query is filtered, sorted and paginated in the database. Every
+ * control composes with AND semantics; none of them replaces another.
+ * Files tab keeps its own prefix filter instead of the shared search bar.
  */
 
-import { useMemo, useState } from "react";
+import { Suspense, lazy, useState } from "react";
 import { TabBar, DEFAULT_TABS } from "./components/TabBar";
 import {
   SearchBar,
-  type SearchFacets,
-  type SearchMode,
-  type SortBy,
-  type SortOrder,
+  EMPTY_BROWSE_STATE,
+  TAB_CAPABILITIES,
+  type BrowseState,
+  type TabId,
 } from "./components/SearchBar";
 import { DocumentList } from "./components/DocumentList";
+// DocumentEditor is lazy-loaded because it transitively pulls in CodeMirror,
+// Tiptap, and EJS — ~430 KB minified that we don't need until the user
+// opens an editor. We also only mount it when `docEditor.open` is true so
+// the dynamic import doesn't fire on the initial Documents-tab render.
+const DocumentEditor = lazy(() =>
+  import("./components/DocumentEditor").then((m) => ({ default: m.DocumentEditor })),
+);
 import { ActionList } from "./components/ActionList";
 import { ActionEditor } from "./components/ActionEditor";
 import { TypeList } from "./components/TypeList";
@@ -40,8 +49,8 @@ import { TypeEditor } from "./components/TypeEditor";
 import { FileList } from "./components/FileList";
 import { FileEditor } from "./components/FileEditor";
 import { SettingsPanel } from "./components/SettingsPanel";
-import { AddDocumentDialog } from "./components/AddDocumentDialog";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { DocumentEditorSkeleton } from "./components/DocumentEditorSkeleton";
 import type {
   ActionSummary,
   DocumentSummary,
@@ -52,7 +61,6 @@ import {
   useDocuments,
   useFilesList,
   useHealth,
-  useSearchActions,
   useSearchDocuments,
   useTypes,
 } from "./api/hooks";
@@ -60,14 +68,10 @@ import "./App.css";
 
 const PAGE_SIZE = 20;
 
-function detectMode(query: string, pathPrefix: string): SearchMode {
-  // Browse mode is triggered by either the main query OR the path-prefix
-  // facet starting with "/". When neither is set we still default to browse
-  // (with no prefix) so the user sees "everything" instead of an empty list.
-  if (query.trim().startsWith("/")) return "browse";
-  if (pathPrefix.trim().startsWith("/")) return "browse";
-  if (query.trim().length > 0) return "search";
-  return "browse";
+const SEARCHABLE_TABS: TabId[] = ["documents", "actions", "types"];
+
+function isSearchableTab(id: string): id is TabId {
+  return (SEARCHABLE_TABS as string[]).includes(id);
 }
 
 function activeTabLabel(id: string): string {
@@ -83,15 +87,17 @@ function activeTabLabel(id: string): string {
 export function App() {
   const [activeTab, setActiveTab] = useState<string>("documents");
 
-  // ── Documents / Actions / Types search state ──
-  const [query, setQuery] = useState("");
+  // ── Documents / Actions / Types browse state ──
+  // One object, so a reset is atomic and page-resetting has a single home.
+  const [browse, setBrowse] = useState<BrowseState>(EMPTY_BROWSE_STATE);
   const [page, setPage] = useState(0);
-  const [facets, setFacets] = useState<SearchFacets>({});
-  const [sortBy, setSortBy] = useState<SortBy>("updated_at");
-  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
 
   // ── Edit dialogs ──
-  const [addOpen, setAddOpen] = useState(false);
+  const [docEditor, setDocEditor] = useState<{
+    open: boolean;
+    existing: { path: string; name: string } | null;
+    entity: DocumentSummary | null;
+  }>({ open: false, existing: null, entity: null });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [actionEditor, setActionEditor] = useState<{
     open: boolean;
@@ -108,58 +114,69 @@ export function App() {
     relPath: string | null;
   }>({ open: false, relPath: null });
 
+  // Any change to a filter invalidates the current page number.
+  const handleBrowseChange = (next: BrowseState) => {
+    setBrowse(next);
+    setPage(0);
+  };
+
+  // Filters are tab-specific — a "/blogs" scope means nothing on the Actions
+  // tab — so switching tabs starts clean rather than carrying stale state.
+  const handleTabChange = (tab: string) => {
+    setActiveTab(tab);
+    setBrowse(EMPTY_BROWSE_STATE);
+    setPage(0);
+  };
+
   // ── Fetch hooks ──
   const healthQuery = useHealth();
 
-  const pathPrefix = facets.path_prefix?.trim() ?? "";
-  const mode = detectMode(query, pathPrefix);
+  const query = browse.query.trim();
+  const pathPrefix = browse.pathPrefix.trim();
+  const hasQuery = query.length > 0;
 
-  // Documents
-  // Browse mode runs when:
-  //   - the user typed "/foo" in the search box, OR
-  //   - the path-prefix facet is "/foo", OR
-  //   - both query and path are empty (show everything).
-  const browseQuery = useDocuments({
-    path_prefix: mode === "browse" ? pathPrefix || undefined : undefined,
+  // Documents: full-text when there's a query (relevance-ranked, no sort
+  // axis), plain list otherwise (sortable). Path and type narrow both.
+  const docsListQuery = useDocuments({
+    path_prefix: pathPrefix || undefined,
+    filter_field: browse.typeRef ? "type_ref" : undefined,
+    filter_value: browse.typeRef || undefined,
+    sort_by: browse.sortBy,
+    sort_order: browse.sortOrder,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
-    sort_by: sortBy,
-    sort_order: sortOrder,
-    enabled: activeTab === "documents" && mode === "browse",
+    enabled: activeTab === "documents" && !hasQuery,
   });
-  const searchResultQuery = useSearchDocuments({
-    q: mode === "search" ? query.trim() || undefined : undefined,
-    path_prefix: facets.path_prefix || undefined,
-    type_ref: facets.type_ref || undefined,
+  const docsSearchQuery = useSearchDocuments({
+    q: query || undefined,
+    path_prefix: pathPrefix || undefined,
+    type_ref: browse.typeRef || undefined,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
-    enabled: activeTab === "documents" && mode === "search",
+    enabled: activeTab === "documents" && hasQuery,
   });
 
-  // Actions
+  // Actions / Types: substring filter on the column the tab declares, plus
+  // path scope and sort — all pushed down to libsql.
   const actionsQuery = useActions({
-    path_prefix: mode === "browse" ? pathPrefix || undefined : undefined,
+    path_prefix: pathPrefix || undefined,
+    filter_field: hasQuery ? TAB_CAPABILITIES.actions.filterField : undefined,
+    filter_value: hasQuery ? query : undefined,
+    sort_by: browse.sortBy,
+    sort_order: browse.sortOrder,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
-    sort_by: sortBy,
-    sort_order: sortOrder,
-    enabled: activeTab === "actions" && mode === "browse",
+    enabled: activeTab === "actions",
   });
-  const searchActionsQuery = useSearchActions({
-    q: mode === "search" ? query.trim() || undefined : undefined,
-    limit: PAGE_SIZE,
-    offset: page * PAGE_SIZE,
-    enabled: activeTab === "actions" && mode === "search",
-  });
-
-  // Types
   const typesListQuery = useTypes({
-    path_prefix: mode === "browse" ? pathPrefix || undefined : undefined,
+    path_prefix: pathPrefix || undefined,
+    filter_field: hasQuery ? TAB_CAPABILITIES.types.filterField : undefined,
+    filter_value: hasQuery ? query : undefined,
+    sort_by: browse.sortBy,
+    sort_order: browse.sortOrder,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
-    sort_by: sortBy,
-    sort_order: sortOrder,
-    enabled: activeTab === "types" && mode === "browse",
+    enabled: activeTab === "types",
   });
 
   // Files — owned by App so its error can be surfaced in the global banner.
@@ -167,35 +184,40 @@ export function App() {
   // inside FileList on top of this result.
   const filesQuery = useFilesList("", activeTab === "files");
 
-  // Reset page whenever query/facets/sort change
-  const pageResetKey = JSON.stringify({ tab: activeTab, query, facets, sortBy, sortOrder });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useMemo(() => setPage(0), [pageResetKey]);
+  // Documents results, from whichever endpoint answered.
+  const documents = hasQuery
+    ? (docsSearchQuery.data?.hits ?? []).map(toDocumentSummary)
+    : (docsListQuery.data?.items ?? []);
+  const documentsTotal = hasQuery
+    ? (docsSearchQuery.data?.total ?? 0)
+    : (docsListQuery.data?.total ?? 0);
 
-  // Active query per tab
-  const documents = browseQuery.data?.items ?? [];
-  const searchHits = searchResultQuery.data?.hits ?? [];
-  const documentsTotal = mode === "search"
-    ? (searchResultQuery.data?.total ?? 0)
-    : (browseQuery.data?.total ?? 0);
-  const actionsList = actionsQuery.data?.items ?? [];
-  const searchActionsList = searchActionsQuery.data?.items ?? [];
-  const actionsTotal = mode === "search"
-    ? (searchActionsQuery.data?.total ?? 0)
-    : (actionsQuery.data?.total ?? 0);
-  const typesList = typesListQuery.data?.items ?? [];
-  const typesTotal = typesListQuery.data?.total ?? 0;
+  const showSearchBar = isSearchableTab(activeTab);
 
-  const isSearch = mode === "search";
-  const showSearchBar = activeTab === "documents" || activeTab === "actions" || activeTab === "types";
+  // Per-tab view bindings for the shared search bar.
+  const activeTotal =
+    activeTab === "documents"
+      ? documentsTotal
+      : activeTab === "actions"
+        ? (actionsQuery.data?.total ?? 0)
+        : (typesListQuery.data?.total ?? 0);
+
+  const activeFetching =
+    activeTab === "documents"
+      ? hasQuery
+        ? docsSearchQuery.isFetching
+        : docsListQuery.isFetching
+      : activeTab === "actions"
+        ? actionsQuery.isFetching
+        : typesListQuery.isFetching;
 
   // Per-tab fetch errors. We surface these in a dedicated banner so
   // the user gets immediate feedback that solx-server isn't reachable
   // — beyond what the periodic /api/health check reports.
   const tabErrors: Array<{ kind: "documents" | "actions" | "types" | "files"; message: string }> = [];
-  const browseErr = (browseQuery.error ?? searchResultQuery.error) as Error | null;
-  if (browseErr) tabErrors.push({ kind: "documents", message: browseErr.message });
-  const actionErr = (actionsQuery.error ?? searchActionsQuery.error) as Error | null;
+  const docsErr = (docsListQuery.error ?? docsSearchQuery.error) as Error | null;
+  if (docsErr) tabErrors.push({ kind: "documents", message: docsErr.message });
+  const actionErr = actionsQuery.error as Error | null;
   if (actionErr) tabErrors.push({ kind: "actions", message: actionErr.message });
   const typeErr = typesListQuery.error as Error | null;
   if (typeErr) tabErrors.push({ kind: "types", message: typeErr.message });
@@ -233,10 +255,9 @@ export function App() {
           <button
             className="app-banner__btn"
             onClick={() => {
-              void browseQuery.refetch();
-              void searchResultQuery.refetch();
+              void docsListQuery.refetch();
+              void docsSearchQuery.refetch();
               void actionsQuery.refetch();
-              void searchActionsQuery.refetch();
               void typesListQuery.refetch();
               void filesQuery.refetch();
             }}
@@ -249,29 +270,18 @@ export function App() {
         </div>
       )}
 
-      <TabBar tabs={DEFAULT_TABS} activeTab={activeTab} onTabChange={setActiveTab} />
+      <TabBar tabs={DEFAULT_TABS} activeTab={activeTab} onTabChange={handleTabChange} />
 
       {showSearchBar && (
         <SearchBar
-          activeTab={(activeTab === "documents" || activeTab === "actions" || activeTab === "types")
-            ? activeTab
-            : "documents"}
-          query={query}
-          onQueryChange={(q) => setQuery(q)}
-          mode={mode}
-          facets={facets}
-          onFacetsChange={setFacets}
-          sortBy={sortBy}
-          sortOrder={sortOrder}
-          onSortByChange={setSortBy}
-          onSortOrderChange={setSortOrder}
-          loading={
-            activeTab === "documents"
-              ? (isSearch ? searchResultQuery.isFetching : browseQuery.isFetching)
-              : activeTab === "actions"
-                ? (isSearch ? searchActionsQuery.isFetching : actionsQuery.isFetching)
-                : typesListQuery.isFetching
-          }
+          activeTab={activeTab}
+          state={browse}
+          onChange={handleBrowseChange}
+          total={activeTotal}
+          loading={activeFetching}
+          // Relevance ranking is a property of the full-text endpoint, so
+          // derive it from the capability table rather than naming a tab.
+          ranked={hasQuery && TAB_CAPABILITIES[activeTab].textQuery === "fulltext"}
         />
       )}
 
@@ -279,53 +289,69 @@ export function App() {
         <ErrorBoundary label="Entity browser">
           {activeTab === "documents" && (
             <DocumentList
-              mode={mode}
-              documents={isSearch ? searchHits.map(toDocumentSummary) : documents}
+              mode={hasQuery ? "search" : "browse"}
+              documents={documents}
               total={documentsTotal}
-              loading={
-                isSearch
-                  ? searchResultQuery.isLoading
-                  : browseQuery.isLoading
-              }
-              error={(isSearch ? searchResultQuery.error : browseQuery.error) as Error | null}
+              loading={hasQuery ? docsSearchQuery.isLoading : docsListQuery.isLoading}
+              error={(hasQuery ? docsSearchQuery.error : docsListQuery.error) as Error | null}
               page={page}
               onPageChange={setPage}
-              onCreateClick={() => setAddOpen(true)}
+              onCreateClick={() =>
+                setDocEditor({ open: true, existing: null, entity: null })
+              }
+              onOpen={(doc) =>
+                setDocEditor({
+                  open: true,
+                  existing: { path: doc.path, name: doc.name },
+                  entity: doc,
+                })
+              }
               onRetry={() => {
-                void browseQuery.refetch();
-                void searchResultQuery.refetch();
+                void docsListQuery.refetch();
+                void docsSearchQuery.refetch();
               }}
             />
           )}
 
           {activeTab === "actions" && (
             <ActionList
-              documents={isSearch ? searchActionsList : actionsList}
-              total={actionsTotal}
-              loading={isSearch ? searchActionsQuery.isLoading : actionsQuery.isLoading}
-              error={(isSearch ? searchActionsQuery.error : actionsQuery.error) as Error | null}
+              documents={actionsQuery.data?.items ?? []}
+              total={actionsQuery.data?.total ?? 0}
+              loading={actionsQuery.isLoading}
+              error={actionsQuery.error as Error | null}
               page={page}
               onPageChange={setPage}
               onCreateClick={() =>
                 setActionEditor({ open: true, existing: null, entity: null })
               }
-              onRetry={() => {
-                void actionsQuery.refetch();
-                void searchActionsQuery.refetch();
-              }}
+              onOpen={(action) =>
+                setActionEditor({
+                  open: true,
+                  existing: { path: action.path, name: action.name },
+                  entity: action,
+                })
+              }
+              onRetry={() => void actionsQuery.refetch()}
             />
           )}
 
           {activeTab === "types" && (
             <TypeList
-              documents={typesList}
-              total={typesTotal}
+              documents={typesListQuery.data?.items ?? []}
+              total={typesListQuery.data?.total ?? 0}
               loading={typesListQuery.isLoading}
               error={typesListQuery.error as Error | null}
               page={page}
               onPageChange={setPage}
               onCreateClick={() =>
                 setTypeEditor({ open: true, existing: null, entity: null })
+              }
+              onOpen={(type) =>
+                setTypeEditor({
+                  open: true,
+                  existing: { path: type.path, name: type.name },
+                  entity: type,
+                })
               }
               onRetry={() => void typesListQuery.refetch()}
             />
@@ -352,7 +378,8 @@ export function App() {
       <button
         className="app-fab app-fab--right"
         onClick={() => {
-          if (activeTab === "documents") setAddOpen(true);
+          if (activeTab === "documents")
+            setDocEditor({ open: true, existing: null, entity: null });
           else if (activeTab === "actions")
             setActionEditor({ open: true, existing: null, entity: null });
           else if (activeTab === "types")
@@ -382,18 +409,28 @@ export function App() {
       </button>
 
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-      <AddDocumentDialog
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        defaultPath={mode === "browse" ? pathPrefix || "/" : "/"}
-      />
+      {/* Only mount the editor when actually opened — this is what
+          defers the lazy chunk (CodeMirror + Tiptap + EJS) until the
+          user clicks a card. While the chunk loads we show a skeleton
+          the same size as the editor so the layout doesn't jump. */}
+      {docEditor.open && (
+        <Suspense fallback={<DocumentEditorSkeleton />}>
+          <DocumentEditor
+            open={docEditor.open}
+            onClose={() => setDocEditor({ open: false, existing: null, entity: null })}
+            existing={docEditor.existing}
+            existingEntity={docEditor.entity}
+            defaultPath={pathPrefix || "/"}
+          />
+        </Suspense>
+      )}
 
       <ActionEditor
         open={actionEditor.open}
         onClose={() => setActionEditor({ open: false, existing: null, entity: null })}
         existing={actionEditor.existing}
         existingEntity={actionEditor.entity}
-        defaultPath={mode === "browse" ? pathPrefix || "/" : "/"}
+        defaultPath={pathPrefix || "/"}
       />
 
       <TypeEditor
@@ -401,7 +438,7 @@ export function App() {
         onClose={() => setTypeEditor({ open: false, existing: null, entity: null })}
         existing={typeEditor.existing}
         existingEntity={typeEditor.entity}
-        defaultPath={mode === "browse" ? pathPrefix || "/" : "/"}
+        defaultPath={pathPrefix || "/"}
       />
 
       <FileEditor

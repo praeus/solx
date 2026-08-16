@@ -3,6 +3,8 @@
  *
  *   GET    /api/files/list            → solx.files.list(prefix)
  *   GET    /api/files/content         → solx.files.get(relPath) — returns base64
+ *   GET    /api/files/raw?relPath=…   → solx.files.get(relPath) — returns bytes with Content-Type
+ *                                         (used by <img src> and Tiptap image nodes)
  *   PUT    /api/files                 → solx.files.put(relPath, bytes) — body { relPath, bytesB64 }
  *   DELETE /api/files                 → solx.files.delete(relPath) — body { relPath }
  *
@@ -29,6 +31,11 @@ export async function mountFilesRoutes(
   // GET /api/files/content?relPath=...
   if (pathname === "/api/files/content" && method === "GET") {
     return handleGet(url, corsHeaders);
+  }
+
+  // GET /api/files/raw?relPath=... (binary, for <img src> etc.)
+  if (pathname === "/api/files/raw" && method === "GET") {
+    return handleRaw(url, corsHeaders);
   }
 
   // PUT /api/files (body has relPath + bytesB64)
@@ -85,6 +92,68 @@ async function handleGet(url: URL, corsHeaders: Record<string, string>): Promise
   // The native binding returns a Uint8Array; convert to base64 for JSON.
   const bytesB64 = Buffer.from(bytes).toString("base64");
   return okJson({ relPath, bytesB64, size: bytes.length }, 200, corsHeaders);
+}
+
+/**
+ * handleRaw — serve the file as binary with the right Content-Type so that
+ * `<img src="/api/files/raw?relPath=…">` and Tiptap `<img>` nodes can render
+ * the file directly. The content type is inferred from the file extension;
+ * anything we don't recognize falls back to application/octet-stream so the
+ * browser still offers a download.
+ */
+async function handleRaw(url: URL, corsHeaders: Record<string, string>): Promise<Response> {
+  const solx = await getSolx();
+  const relPath = url.searchParams.get("relPath");
+  if (!relPath) {
+    return errJson("invalid", "relPath query parameter is required", 400, corsHeaders);
+  }
+  const bytes = await solx.files.get(relPath);
+  const body = Buffer.from(bytes);
+  const contentType = contentTypeFromName(relPath);
+  return new Response(body, {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": contentType,
+      "Content-Length": String(body.length),
+      // Cheap cache: images don't change unless the user re-uploads them,
+      // and the dev server runs on the same machine. 1h keeps reloads
+      // snappy without ignoring edits forever.
+      "Cache-Control": "public, max-age=3600",
+    },
+  });
+}
+
+function contentTypeFromName(name: string): string {
+  const lower = name.toLowerCase();
+  const slash = lower.lastIndexOf("/");
+  const dot = lower.lastIndexOf(".");
+  if (dot <= slash) return "application/octet-stream";
+  const ext = lower.slice(dot + 1);
+  switch (ext) {
+    case "png": return "image/png";
+    case "jpg":
+    case "jpeg": return "image/jpeg";
+    case "gif": return "image/gif";
+    case "webp": return "image/webp";
+    case "svg": return "image/svg+xml";
+    case "avif": return "image/avif";
+    case "bmp": return "image/bmp";
+    case "ico": return "image/x-icon";
+    case "pdf": return "application/pdf";
+    case "json": return "application/json";
+    case "wasm": return "application/wasm";
+    case "html":
+    case "htm": return "text/html; charset=utf-8";
+    case "css": return "text/css; charset=utf-8";
+    case "js":
+    case "mjs": return "text/javascript; charset=utf-8";
+    case "md":
+    case "txt": return "text/plain; charset=utf-8";
+    case "csv": return "text/csv; charset=utf-8";
+    case "solx": return "text/x-solx; charset=utf-8";
+    default: return "application/octet-stream";
+  }
 }
 
 async function handlePut(req: Request, corsHeaders: Record<string, string>): Promise<Response> {

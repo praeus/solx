@@ -16,6 +16,8 @@ interface Props {
   onPageChange: (page: number) => void;
   onCreateClick: () => void;
   onRetry?: () => void;
+  /** Open the editor for an existing type. */
+  onOpen?: (type: TypeEntity) => void;
 }
 
 export function TypeList({
@@ -27,6 +29,7 @@ export function TypeList({
   onPageChange,
   onCreateClick,
   onRetry,
+  onOpen,
 }: Props) {
   if (error) {
     return (
@@ -73,6 +76,7 @@ export function TypeList({
           <TypeCard
             key={String(type.id ?? `${type.path}/${type.name}-${i}`)}
             type={type}
+            onOpen={onOpen}
           />
         ))}
       </div>
@@ -101,7 +105,13 @@ export function TypeList({
   );
 }
 
-function TypeCard({ type }: { type: TypeEntity }) {
+function TypeCard({
+  type,
+  onOpen,
+}: {
+  type: TypeEntity;
+  onOpen?: (type: TypeEntity) => void;
+}) {
   const path = String(type.path ?? "/");
   const name = String(type.name ?? "Unnamed");
   const description = String(type.description ?? "").trim();
@@ -119,7 +129,18 @@ function TypeCard({ type }: { type: TypeEntity }) {
   };
 
   return (
-    <div className="doc-card" role="button" tabIndex={0}>
+    <div
+      className="doc-card"
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen?.(type)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen?.(type);
+        }
+      }}
+    >
       <div className="doc-card__body">
         <div className="doc-card__header">
           <span className="doc-card__name">{name}</span>

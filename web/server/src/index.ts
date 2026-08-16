@@ -12,7 +12,6 @@
  *   POST   /api/documents
  *   DELETE /api/documents/:path/:name
  *   GET    /api/actions
- *   GET    /api/actions/search
  *   GET    /api/actions/:path/:name
  *   POST   /api/actions
  *   DELETE /api/actions/:path/:name

@@ -4,7 +4,7 @@
  * Mirrors the sol-browser ActionEditor at a reduced scope:
  *   - Core fields: name, caption, description, category, phrases, capabilities,
  *     parameter type, result type, action_type, exec artifact, invoke resource,
- *     permission name, model instructions, raw action_config JSON.
+ *     model instructions, raw action_config JSON.
  *   - Run panel: JSON params, Run button, result textarea, trace table.
  *
  * NOT in scope (future work): artifact selector, link selector, project
@@ -52,12 +52,12 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
   const [category, setCategory] = useState("");
   const [phrases, setPhrases] = useState<string[]>([]);
   const [capabilities, setCapabilities] = useState<string[]>([]);
-  const [paramTypeName, setParamTypeName] = useState("");
-  const [resultTypeName, setResultTypeName] = useState("");
+  // Full type references (e.g. "/types/core/Null"), not bare names.
+  const [paramTypeRef, setParamTypeRef] = useState("");
+  const [resultTypeRef, setResultTypeRef] = useState("");
   const [actionType, setActionType] = useState("");
   const [binName, setBinName] = useState("");
   const [fnName, setFnName] = useState("");
-  const [permissionName, setPermissionName] = useState("");
   const [modelInstructions, setModelInstructions] = useState("");
   const [actionConfigJson, setActionConfigJson] = useState("");
 
@@ -85,12 +85,11 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
       setCapabilities(
         Array.isArray(existingEntity.capabilities) ? existingEntity.capabilities.map(String) : [],
       );
-      setParamTypeName(String(existingEntity.param_type_name ?? ""));
-      setResultTypeName(String(existingEntity.result_type_name ?? ""));
+      setParamTypeRef(String(existingEntity.param_type_ref ?? ""));
+      setResultTypeRef(String(existingEntity.result_type_ref ?? ""));
       setActionType(String(existingEntity.action_type ?? "").toLowerCase());
       setBinName(String(existingEntity.bin_name ?? ""));
       setFnName(String(existingEntity.fn_name ?? ""));
-      setPermissionName(String(existingEntity.permission_name ?? ""));
       const cfg = (existingEntity.action_config ?? {}) as Record<string, unknown>;
       const mi = cfg.model_instructions;
       setModelInstructions(typeof mi === "string" ? mi : "");
@@ -108,12 +107,11 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
       setCategory("");
       setPhrases([]);
       setCapabilities([]);
-      setParamTypeName("");
-      setResultTypeName("");
+      setParamTypeRef("");
+      setResultTypeRef("");
       setActionType("");
       setBinName("");
       setFnName("");
-      setPermissionName("");
       setModelInstructions("");
       setActionConfigJson("");
     }
@@ -153,7 +151,8 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
         return;
       }
     }
-    // Overlay modelInstructions into the action_config blob if non-empty.
+    // `model_instructions` is not a field on the Rust `Action` entity — it
+    // lives in the free-form config blob so it round-trips on save.
     if (modelInstructions.trim()) {
       actionConfig = { ...(actionConfig ?? {}), model_instructions: modelInstructions };
     }
@@ -167,12 +166,11 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
         category: category.trim() || undefined,
         phrases: phrases.length ? phrases : undefined,
         capabilities: capabilities.length ? capabilities : undefined,
-        param_type_name: paramTypeName || undefined,
-        result_type_name: resultTypeName || undefined,
+        param_type_ref: paramTypeRef || undefined,
+        result_type_ref: resultTypeRef || undefined,
         action_type: actionType || undefined,
         bin_name: binName.trim() || undefined,
         fn_name: fnName.trim() || undefined,
-        permission_name: permissionName.trim() || undefined,
         action_config: actionConfig,
       });
       onSaved?.({ path: result.path, name: result.name });
@@ -317,12 +315,12 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
             <label className="form-label">Parameter Type</label>
             <select
               className="form-input"
-              value={paramTypeName}
-              onChange={(e) => setParamTypeName(e.target.value)}
+              value={paramTypeRef}
+              onChange={(e) => setParamTypeRef(e.target.value)}
             >
               <option value="">(none)</option>
               {types.map((t) => (
-                <option key={`${t.path}/${t.name}`} value={String(t.name)}>
+                <option key={`${t.path}/${t.name}`} value={`${t.path}/${t.name}`}>
                   {String(t.name)}
                 </option>
               ))}
@@ -333,12 +331,12 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
             <label className="form-label">Result Type</label>
             <select
               className="form-input"
-              value={resultTypeName}
-              onChange={(e) => setResultTypeName(e.target.value)}
+              value={resultTypeRef}
+              onChange={(e) => setResultTypeRef(e.target.value)}
             >
               <option value="">(none)</option>
               {types.map((t) => (
-                <option key={`${t.path}/${t.name}`} value={String(t.name)}>
+                <option key={`${t.path}/${t.name}`} value={`${t.path}/${t.name}`}>
                   {String(t.name)}
                 </option>
               ))}
@@ -379,16 +377,6 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
               onChange={(e) => setFnName(e.target.value)}
               placeholder="e.g. run, https://..., python3 my_script.py"
               spellCheck={false}
-            />
-          </div>
-
-          <div className="form-field">
-            <label className="form-label">Permission Required</label>
-            <input
-              className="form-input"
-              value={permissionName}
-              onChange={(e) => setPermissionName(e.target.value)}
-              placeholder="e.g. admin"
             />
           </div>
 
