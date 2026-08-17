@@ -49,6 +49,13 @@
         "@solx/types": "workspace:*",
       },
     },
+    "packages/http": {
+      "name": "@solx/http",
+      "version": "0.0.0",
+      "dependencies": {
+        "@solx/surface": "file:../surface",
+      },
+    },
     "packages/scripts": {
       "name": "@solx/scripts",
       "version": "0.0.0",
@@ -197,6 +204,8 @@
     "@solx/docs": ["@solx/docs@workspace:packages/docs"],
 
     "@solx/files": ["@solx/files@workspace:packages/files"],
+
+    "@solx/http": ["@solx/http@workspace:packages/http"],
 
     "@solx/scripts": ["@solx/scripts@workspace:packages/scripts"],
 
@@ -351,6 +360,8 @@
     "why-is-node-running": ["why-is-node-running@2.3.0", "", { "dependencies": { "siginfo": "^2.0.0", "stackback": "0.0.2" }, "bin": { "why-is-node-running": "cli.js" } }, "sha512-hUrmaWBdVDcxvYqnyh09zunKzROWjbZTiNy8dBEjkS7ehEDQibXJ7XvlmtbwuTclUiIyN+CyXQD4Vmko8fNm8w=="],
 
     "yocto-queue": ["yocto-queue@1.2.2", "", {}, "sha512-4LCcse/U2MHZ63HAJVE+v71o7yOdIe4cZ70Wpf8D/IyjDKYQLV5GD46B+hSTjJsvV5PztjvHoU580EftxjDZFQ=="],
+
+    "@solx/http/@solx/surface": ["@solx/surface@file:packages/surface", {}],
 
     "mlly/pathe": ["pathe@2.0.3", "", {}, "sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w=="],
 

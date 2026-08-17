@@ -1,0 +1,29 @@
+{
+  "name": "@solx/http",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pure-fetch HTTP client for solx-server. Browser-safe counterpart to the Neon-backed *.connect() managers — re-exported under solx/http.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "//": "@solx/surface is a file: dep, not workspace:*, unlike its siblings — @solx/http is meant to be consumed from outside this Bun workspace too (e.g. solx-web/web via a plain file: dependency, with no vendor-copy step), and workspace:* only resolves inside a workspace that includes this package.",
+  "dependencies": {
+    "@solx/surface": "file:../surface"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  }
+}

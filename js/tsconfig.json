@@ -8,6 +8,7 @@
     { "path": "./packages/files" },
     { "path": "./packages/docs" },
     { "path": "./packages/actions" },
-    { "path": "./packages/scripts" }
+    { "path": "./packages/scripts" },
+    { "path": "./packages/http" }
   ]
 }
