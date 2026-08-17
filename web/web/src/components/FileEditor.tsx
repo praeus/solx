@@ -1,16 +1,38 @@
 /**
  * FileEditor — modal for viewing/uploading/deleting a single file.
  *
- * Two modes:
+ * Three modes:
  *   - Open mode (existing path): show relPath, size, byte preview (text or
  *     base64-inlined image), and Download/Delete buttons.
- *   - Upload mode (no path): a file picker + relPath field + Upload button.
+ *   - Create mode (no path), which itself offers two ways to produce
+ *     content:
+ *       - "From disk" — a file picker + relPath field + Upload button.
+ *       - "New text file" — relPath field + language picker + a Monaco
+ *         editor, for authoring a `.solx` script, note, or JSON fixture
+ *         directly without leaving the browser (mirrors old sol-browser's
+ *         `TextArtifactDialog`).
  *
- * Upload closes the dialog on success. Open mode is download-only.
+ * Both create-mode paths end in the same `uploadFile` call and close the
+ * dialog on success. Open mode is download-only.
  */
 
+import Editor from "@monaco-editor/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeleteFile, useFileContent, useUploadFile } from "../api/hooks";
+
+const LANGUAGE_OPTIONS = [
+  { label: "Plain Text", monaco: "plaintext" },
+  { label: "Markdown", monaco: "markdown" },
+  { label: "JSON", monaco: "json" },
+  { label: "solx script", monaco: "plaintext" },
+  { label: "HTML", monaco: "html" },
+  { label: "CSS", monaco: "css" },
+  { label: "JavaScript", monaco: "javascript" },
+  { label: "TypeScript", monaco: "typescript" },
+  { label: "Python", monaco: "python" },
+  { label: "YAML", monaco: "yaml" },
+  { label: "XML", monaco: "xml" },
+] as const;
 
 interface Props {
   open: boolean;
@@ -33,6 +55,21 @@ export function FileEditor({ open, onClose, relPath, defaultRelPath, onUploaded,
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Create-mode source picker: disk upload vs. authoring text inline.
+  const [createMode, setCreateMode] = useState<"upload" | "text">("upload");
+  const [textContent, setTextContent] = useState("");
+  const [langIdx, setLangIdx] = useState(0);
+  const [monacoTheme, setMonacoTheme] = useState<"vs" | "vs-dark">("vs");
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    setMonacoTheme(mq.matches ? "vs-dark" : "vs");
+    const listener = (e: MediaQueryListEvent) => setMonacoTheme(e.matches ? "vs-dark" : "vs");
+    mq.addEventListener("change", listener);
+    return () => mq.removeEventListener("change", listener);
+  }, []);
+
   // Reset when the dialog opens.
   useEffect(() => {
     if (!open) return;
@@ -40,6 +77,9 @@ export function FileEditor({ open, onClose, relPath, defaultRelPath, onUploaded,
     setPendingFile(null);
     if (!isOpen) {
       setRelPathInput(defaultRelPath ?? "files/shared/");
+      setCreateMode("upload");
+      setTextContent("");
+      setLangIdx(0);
     }
   }, [open, isOpen, defaultRelPath]);
 
@@ -92,6 +132,23 @@ export function FileEditor({ open, onClose, relPath, defaultRelPath, onUploaded,
     }
   };
 
+  const handleCreateText = async () => {
+    setError(null);
+    const target = relPathInput.trim();
+    if (!target) {
+      setError("relPath is required.");
+      return;
+    }
+    const bytes = new TextEncoder().encode(textContent);
+    try {
+      const result = await uploadMutation.mutateAsync({ relPath: target, bytes });
+      onUploaded?.(result.relPath);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const handleDownload = () => {
     if (!preview) return;
     const bytes = base64ToBytes(preview.bytesB64);
@@ -121,9 +178,11 @@ export function FileEditor({ open, onClose, relPath, defaultRelPath, onUploaded,
   return (
     <>
       <div className="dialog-backdrop" onClick={onClose} />
-      <div className="dialog dialog--wide" role="dialog" aria-label={isOpen ? "File viewer" : "Upload file"}>
+      <div className="dialog dialog--wide" role="dialog" aria-label={isOpen ? "File viewer" : "New file"}>
         <div className="dialog__header">
-          <h2 className="dialog__title">{isOpen ? "File" : "Upload File"}</h2>
+          <h2 className="dialog__title">
+            {isOpen ? "File" : createMode === "text" ? "New Text File" : "Upload File"}
+          </h2>
           <button className="dialog__close" onClick={onClose} aria-label="Close">
             ✕
           </button>
@@ -160,6 +219,33 @@ export function FileEditor({ open, onClose, relPath, defaultRelPath, onUploaded,
             </>
           ) : (
             <>
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                <button
+                  type="button"
+                  className="dialog__btn"
+                  style={
+                    createMode === "upload"
+                      ? { background: "var(--accent)", color: "#fff", borderColor: "var(--accent)" }
+                      : undefined
+                  }
+                  onClick={() => setCreateMode("upload")}
+                >
+                  From disk
+                </button>
+                <button
+                  type="button"
+                  className="dialog__btn"
+                  style={
+                    createMode === "text"
+                      ? { background: "var(--accent)", color: "#fff", borderColor: "var(--accent)" }
+                      : undefined
+                  }
+                  onClick={() => setCreateMode("text")}
+                >
+                  New text file
+                </button>
+              </div>
+
               <div className="dialog__field">
                 <label className="dialog__label">Path</label>
                 <div className="dialog__input-row">
@@ -167,25 +253,76 @@ export function FileEditor({ open, onClose, relPath, defaultRelPath, onUploaded,
                     className="dialog__input"
                     value={relPathInput}
                     onChange={(e) => setRelPathInput(e.target.value)}
-                    placeholder="files/docs/abc/image.png"
+                    placeholder={
+                      createMode === "text" ? "files/scripts/my-script.solx" : "files/docs/abc/image.png"
+                    }
                     spellCheck={false}
                   />
-                  <button className="dialog__btn" onClick={() => fileInputRef.current?.click()}>
-                    Browse…
-                  </button>
+                  {createMode === "upload" && (
+                    <button className="dialog__btn" onClick={() => fileInputRef.current?.click()}>
+                      Browse…
+                    </button>
+                  )}
                 </div>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  style={{ display: "none" }}
-                  onChange={handlePickFile}
-                />
-                {pendingFile && (
-                  <div className="dialog__hint">
-                    {pendingFile.name} — {pendingFile.size.toLocaleString()} bytes
-                  </div>
-                )}
               </div>
+
+              {createMode === "upload" ? (
+                <div className="dialog__field">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    style={{ display: "none" }}
+                    onChange={handlePickFile}
+                  />
+                  {pendingFile && (
+                    <div className="dialog__hint">
+                      {pendingFile.name} — {pendingFile.size.toLocaleString()} bytes
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <div className="dialog__field">
+                    <label className="dialog__label">Language</label>
+                    <select
+                      className="form-input"
+                      value={langIdx}
+                      onChange={(e) => setLangIdx(Number(e.target.value))}
+                    >
+                      {LANGUAGE_OPTIONS.map((l, i) => (
+                        <option key={`${l.label}-${i}`} value={i}>
+                          {l.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="dialog__field">
+                    <label className="dialog__label">Content</label>
+                    <div
+                      style={{
+                        borderRadius: "var(--radius)",
+                        overflow: "hidden",
+                        border: "1px solid var(--border)",
+                      }}
+                    >
+                      <Editor
+                        height="320px"
+                        language={LANGUAGE_OPTIONS[langIdx].monaco}
+                        theme={monacoTheme}
+                        value={textContent}
+                        onChange={(v) => setTextContent(v ?? "")}
+                        options={{
+                          minimap: { enabled: false },
+                          fontSize: 13,
+                          scrollBeyondLastLine: false,
+                          tabSize: 2,
+                          wordWrap: "on",
+                        }}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
             </>
           )}
           {error && <div className="dialog__error">{error}</div>}
@@ -208,13 +345,21 @@ export function FileEditor({ open, onClose, relPath, defaultRelPath, onUploaded,
                 {deleteMutation.isPending ? "Deleting…" : "Delete"}
               </button>
             </>
-          ) : (
+          ) : createMode === "upload" ? (
             <button
               className="dialog__btn dialog__btn--primary"
               onClick={() => void handleUpload()}
               disabled={uploadMutation.isPending || !pendingFile}
             >
               {uploadMutation.isPending ? "Uploading…" : "Upload"}
+            </button>
+          ) : (
+            <button
+              className="dialog__btn dialog__btn--primary"
+              onClick={() => void handleCreateText()}
+              disabled={uploadMutation.isPending || !relPathInput.trim()}
+            >
+              {uploadMutation.isPending ? "Creating…" : "Create"}
             </button>
           )}
         </div>

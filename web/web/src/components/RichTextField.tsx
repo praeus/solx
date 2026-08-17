@@ -21,8 +21,7 @@
 
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import Image from "@tiptap/extension-image";
-import { fileRawUrl } from "../api/api";
+import { ResolvedImage } from "./richtext/ResolvedImage";
 import { useUploadFile } from "../api/hooks";
 import { useRef, useState } from "react";
 
@@ -57,11 +56,12 @@ export function RichTextField({
   const editor = useEditor({
     extensions: [
       StarterKit,
-      // Image extension — `<img src="…">` nodes. The src is whatever
-      // URL we hand it (we use the binary `/api/files/raw?relPath=…`
-      // route so the browser loads the file directly with the right
-      // Content-Type). Inline by default; CSS controls the rendered size.
-      Image.configure({
+      // Image extension — nodes whose `src` attribute is a solx-files
+      // relPath, resolved to a `blob:` URL at render time by a custom
+      // NodeView (see `richtext/ResolvedImage.tsx`) since solx-server has
+      // no directly-loadable, token-free image URL to hand the browser.
+      // Inline by default; CSS controls the rendered size.
+      ResolvedImage.configure({
         inline: true,
         allowBase64: false,
         HTMLAttributes: {
@@ -228,10 +228,11 @@ function RichTextToolbar({
 
 /**
  * InsertImageButton — picks an image file from disk, uploads it via
- * `useUploadFile`, and inserts an `<img>` node whose src points at the
- * binary `/api/files/raw?relPath=…` route. After upload the image is
- * hosted by the backend, so the rich-text doc round-trips correctly:
- * a reload of the document re-renders the same image.
+ * `useUploadFile`, and inserts an image node whose `src` is the uploaded
+ * file's relPath (resolved to a viewable `blob:` URL by `ResolvedImage`).
+ * After upload the file is stored in the solx-files store, so the
+ * rich-text doc round-trips correctly: a reload of the document
+ * re-resolves the same relPath and re-renders the same image.
  */
 function InsertImageButton({
   editor,
@@ -260,7 +261,7 @@ function InsertImageButton({
       editor
         .chain()
         .focus()
-        .setImage({ src: fileRawUrl(result.relPath), alt: file.name })
+        .setImage({ src: result.relPath, alt: file.name })
         .run();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

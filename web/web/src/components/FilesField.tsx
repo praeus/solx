@@ -18,9 +18,8 @@
  * shape and normalizes both into `FileRef[]`.
  */
 
-import { fileRawUrl } from "../api/api";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useFilesList, useUploadFile } from "../api/hooks";
+import { useFileObjectUrl, useFilesList, useUploadFile } from "../api/hooks";
 
 export interface FileRef {
   name: string;
@@ -64,6 +63,13 @@ function isImageType(contentType: string | undefined, name: string): boolean {
   if (contentType && contentType.startsWith("image/")) return true;
   const lower = name.toLowerCase();
   return /\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/.test(lower);
+}
+
+/** Resolves `relPath` to a `blob:` URL — split out so the hook isn't called inside `.map()`. */
+function FileThumbnail({ relPath, alt }: { relPath: string; alt: string }) {
+  const url = useFileObjectUrl(relPath);
+  if (!url) return <span className="files-field__entry-thumb files-field__entry-thumb--loading" />;
+  return <img className="files-field__entry-thumb" src={url} alt={alt} loading="lazy" />;
 }
 
 export function FilesField({
@@ -170,14 +176,7 @@ export function FilesField({
             const isImage = isImageType(entry.contentType, entry.name);
             return (
               <li key={entry.relPath} className="files-field__entry">
-                {isImage && (
-                  <img
-                    className="files-field__entry-thumb"
-                    src={fileRawUrl(entry.relPath)}
-                    alt={entry.name}
-                    loading="lazy"
-                  />
-                )}
+                {isImage && <FileThumbnail relPath={entry.relPath} alt={entry.name} />}
                 <div className="files-field__entry-main">
                   <span className="files-field__entry-name">{entry.name}</span>
                   <span className="files-field__entry-path">{entry.relPath}</span>

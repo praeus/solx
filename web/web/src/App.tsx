@@ -64,6 +64,7 @@ import {
   useSearchDocuments,
   useTypes,
 } from "./api/hooks";
+import { getStoredServerUrl, isConfigured } from "./api/connection";
 import "./App.css";
 
 const PAGE_SIZE = 20;
@@ -226,19 +227,19 @@ export function App() {
 
   return (
     <div className="app">
-      {healthQuery.isError && (
-        <div className="app-banner app-banner--error" role="alert">
-          <strong>Cannot reach backend.</strong>{" "}
-          <span>Is the Bun server running on port 3001?</span>
+      {!isConfigured() && (
+        <div className="app-banner app-banner--warning" role="alert">
+          <strong>Not connected.</strong>{" "}
+          <span>Enter your solx-server URL and token to get started.</span>
+          <button className="app-banner__btn" onClick={() => setSettingsOpen(true)}>
+            Open settings
+          </button>
         </div>
       )}
-      {healthQuery.data && !healthQuery.data.solxConnected && (
+      {isConfigured() && healthQuery.data && !healthQuery.data.reachable && (
         <div className="app-banner app-banner--warning" role="alert">
           <strong>solx-server unreachable.</strong>{" "}
-          <span>
-            Backend at {String(healthQuery.data.serverUrl ?? "")} could not be reached. Check
-            settings.
-          </span>
+          <span>{getStoredServerUrl()} could not be reached. Check settings.</span>
           <button className="app-banner__btn" onClick={() => setSettingsOpen(true)}>
             Open settings
           </button>

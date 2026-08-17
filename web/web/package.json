@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "//": "@solx/http and @solx/surface (from the sibling solx-js repo) are not npm deps here — they're aliased straight to their TS source via vite.config.ts's resolve.alias + tsconfig.json's compilerOptions.paths. Both packages are zero-dependency and browser-safe as-is, so there's nothing to install or build first.",
   "scripts": {
     "dev": "vite",
     "build": "bunx tsc --noEmit && bunx vite build",
@@ -31,6 +32,7 @@
   },
   "devDependencies": {
     "@types/ejs": "^3.1.5",
+    "@types/node": "^20.11.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",

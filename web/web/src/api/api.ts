@@ -1,16 +1,32 @@
 /**
- * Frontend API client — typed fetch wrappers for the Bun backend.
+ * Frontend API client — talks directly to `solx-server` via `@solx/http`,
+ * no backend hop in between (there used to be a Bun server here; see
+ * `d:\Projects\solx-core\docs\next-steps.md` item 3 for why it's gone).
  *
- * The Vite dev server proxies /api/* to http://localhost:3001.
- * All functions throw on non-2xx with a parsed error message.
+ * `wire.ts` is the snake_case(this file)⇄camelCase(`@solx/http`) boundary,
+ * moved client-side from the old Bun backend's `server/src/wire.ts`
+ * unchanged in spirit. Every function below keeps its original name,
+ * signature and snake_case-shaped return type so `hooks.ts` and every
+ * consuming component needed no changes for this migration — only the
+ * body of each function changed, from a `fetch('/api/...')` call to a
+ * `getConnection().<manager>.<method>(...)` call.
  */
+import { SolxError, type DocumentInput, type ActionInput, type TypeInput, type JsonValue } from "@solx/surface";
+import { getConnection, getStoredServerUrl, isConfigured } from "./connection";
+import {
+  actionExecResultToWire,
+  actionInputFromWire,
+  actionToWire,
+  documentInputFromWire,
+  documentToWire,
+  listOptionsFromSnake,
+  pageToWire,
+  searchQueryFromSnake,
+  searchResultsToWire,
+  typeInputFromWire,
+  typeToWire,
+} from "./wire";
 
-// We deliberately don't import @solx/surface types at the network layer because
-// the Bun backend serializes them as plain JSON; the frontend re-types the
-// responses locally. If we later want strict parity, we can import the DTOs.
-// Field casing note: the Bun backend translates the camelCase solx-js SDK
-// surface to/from snake_case at its edge (server/src/wire.ts), so everything
-// below matches the Rust wire format. Do not mix camelCase in here.
 export interface DocumentSummary {
   id?: string;
   path: string;
@@ -62,25 +78,8 @@ export interface TypeEntity {
   [key: string]: unknown;
 }
 
-export interface SolxConfig {
-  dataDirectory?: string;
-  filesDirectory?: string;
-  modelsDirectory?: string;
-  searchIndexDir?: string;
-  docsDb?: string;
-  actionsDb?: string;
-  typesDb?: string;
-  serverUrl?: string;
-  serverToken?: string;
-  serverPort?: number;
-  installedPackages?: Array<Record<string, unknown>>;
-  [key: string]: unknown;
-}
-
 export interface HealthResponse {
-  ok: boolean;
-  serverUrl: string;
-  solxConnected: boolean;
+  reachable: boolean;
 }
 
 export class ApiError extends Error {
@@ -94,44 +93,45 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
+const KIND_TO_SNAKE: Record<string, string> = {
+  NotFound: "not_found",
+  Invalid: "invalid",
+  Validation: "validation",
+  Conflict: "conflict",
+  Io: "io",
+  Db: "db",
+  Exec: "exec",
+  Config: "config",
+  Other: "other",
+};
 
-  if (!response.ok) {
-    let kind = "other";
-    let message = `HTTP ${response.status}`;
-    try {
-      const body = (await response.json()) as { error?: { kind?: string; message?: string } };
-      if (body.error) {
-        kind = body.error.kind ?? kind;
-        message = body.error.message ?? message;
-      }
-    } catch {
-      // Body wasn't JSON; keep the HTTP status message.
-    }
-    throw new ApiError(message, response.status, kind);
+/** Mirrors `solx-server::error::status_for` — cosmetic now (no real HTTP hop), kept for shape parity. */
+function statusForKind(kind: string): number {
+  switch (kind) {
+    case "not_found": return 404;
+    case "invalid": return 400;
+    case "validation": return 422;
+    case "conflict": return 409;
+    default: return 500;
   }
-
-  // 204 No Content
-  if (response.status === 204) return undefined as T;
-
-  return (await response.json()) as T;
 }
 
-function qs(params: Record<string, string | number | undefined>): string {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value === undefined || value === null || value === "") continue;
-    search.set(key, String(value));
+function toApiError(e: unknown): ApiError {
+  if (SolxError.is(e)) {
+    const err = e as SolxError;
+    const kind = KIND_TO_SNAKE[err.kind] ?? "other";
+    return new ApiError(err.detail, statusForKind(kind), kind);
   }
-  const str = search.toString();
-  return str ? `?${str}` : "";
+  const message = e instanceof Error ? e.message : String(e);
+  return new ApiError(message, 500, "other");
+}
+
+async function call<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    throw toApiError(e);
+  }
 }
 
 /** ── Documents ──────────────────────────────────────────────────────── */
@@ -145,7 +145,10 @@ export function fetchDocuments(opts: {
   filter_field?: string;
   filter_value?: string;
 } = {}): Promise<Page<DocumentSummary>> {
-  return request<Page<DocumentSummary>>(`/api/documents${qs(opts)}`);
+  return call(async () => {
+    const page = await getConnection().docs.list(listOptionsFromSnake(opts));
+    return pageToWire(page, documentToWire) as unknown as Page<DocumentSummary>;
+  });
 }
 
 export function searchDocuments(query: {
@@ -155,12 +158,17 @@ export function searchDocuments(query: {
   limit?: number;
   offset?: number;
 }): Promise<SearchResults> {
-  return request<SearchResults>(`/api/documents/search${qs(query)}`);
+  return call(async () => {
+    const results = await getConnection().docs.search(searchQueryFromSnake(query));
+    return searchResultsToWire(results) as unknown as SearchResults;
+  });
 }
 
 export function fetchDocument(path: string, name: string): Promise<DocumentSummary> {
-  const encoded = `${encodeURI(path)}/${encodeURIComponent(name)}`;
-  return request<DocumentSummary>(`/api/documents${encoded}`);
+  return call(async () => {
+    const doc = await getConnection().docs.get(path, name);
+    return documentToWire(doc) as unknown as DocumentSummary;
+  });
 }
 
 export function createDocument(input: {
@@ -180,15 +188,19 @@ export function createDocument(input: {
 }): Promise<DocumentSummary> {
   const { path, name, type_name, ...rest } = input;
   const wireInput: Record<string, unknown> = { ...rest };
-  // Map the bare type_name (e.g. "Post") into the wire-level typeRef. The
+  // Map the bare type_name (e.g. "Post") into the wire-level type_ref. The
   // /builtin/types namespace is where solx stores the core document types;
   // if the caller passes a full type_ref, prefer that.
-  if (type_name && !wireInput.typeRef && !wireInput.type_ref) {
-    wireInput.typeRef = `/builtin/types/${type_name}`;
+  if (type_name && !wireInput.type_ref) {
+    wireInput.type_ref = `/builtin/types/${type_name}`;
   }
-  return request<DocumentSummary>("/api/documents", {
-    method: "POST",
-    body: JSON.stringify({ path, name, input: wireInput }),
+  return call(async () => {
+    const doc = await getConnection().docs.save(
+      path,
+      name,
+      documentInputFromWire(wireInput) as unknown as DocumentInput,
+    );
+    return documentToWire(doc) as unknown as DocumentSummary;
   });
 }
 
@@ -206,15 +218,18 @@ export function updateDocument(
     [key: string]: unknown;
   },
 ): Promise<DocumentSummary> {
-  return request<DocumentSummary>(`/api/documents/${encodeURI(path)}/${encodeURIComponent(name)}`, {
-    method: "POST",
-    body: JSON.stringify({ path, name, input }),
+  return call(async () => {
+    const doc = await getConnection().docs.save(
+      path,
+      name,
+      documentInputFromWire(input) as unknown as DocumentInput,
+    );
+    return documentToWire(doc) as unknown as DocumentSummary;
   });
 }
 
 export function deleteDocument(path: string, name: string): Promise<void> {
-  const encoded = `${encodeURI(path)}/${encodeURIComponent(name)}`;
-  return request<void>(`/api/documents${encoded}`, { method: "DELETE" });
+  return call(() => getConnection().docs.delete(path, name));
 }
 
 /** ── Types ───────────────────────────────────────────────────────────── */
@@ -228,12 +243,17 @@ export function fetchTypes(opts: {
   filter_field?: string;
   filter_value?: string;
 } = {}): Promise<Page<TypeEntity>> {
-  return request<Page<TypeEntity>>(`/api/types${qs(opts)}`);
+  return call(async () => {
+    const page = await getConnection().types.list(listOptionsFromSnake(opts));
+    return pageToWire(page, typeToWire) as unknown as Page<TypeEntity>;
+  });
 }
 
 export function fetchType(path: string, name: string): Promise<TypeEntity> {
-  const encoded = `${encodeURI(path)}/${encodeURIComponent(name)}`;
-  return request<TypeEntity>(`/api/types${encoded}`);
+  return call(async () => {
+    const t = await getConnection().types.get(path, name);
+    return typeToWire(t) as unknown as TypeEntity;
+  });
 }
 
 export function createType(input: {
@@ -244,15 +264,18 @@ export function createType(input: {
   groups?: string[];
 }): Promise<TypeEntity> {
   const { path, name, ...rest } = input;
-  return request<TypeEntity>("/api/types", {
-    method: "POST",
-    body: JSON.stringify({ path, name, input: rest }),
+  return call(async () => {
+    const t = await getConnection().types.save(
+      path,
+      name,
+      typeInputFromWire(rest) as unknown as TypeInput,
+    );
+    return typeToWire(t) as unknown as TypeEntity;
   });
 }
 
 export function deleteType(path: string, name: string): Promise<void> {
-  const encoded = `${encodeURI(path)}/${encodeURIComponent(name)}`;
-  return request<void>(`/api/types${encoded}`, { method: "DELETE" });
+  return call(() => getConnection().types.delete(path, name));
 }
 
 /** ── Actions ────────────────────────────────────────────────────────── */
@@ -296,15 +319,20 @@ export function fetchActions(opts: {
   filter_field?: string;
   filter_value?: string;
 } = {}): Promise<Page<ActionSummary>> {
-  return request<Page<ActionSummary>>(`/api/actions${qs(opts)}`);
+  return call(async () => {
+    const page = await getConnection().actions.list(listOptionsFromSnake(opts));
+    return pageToWire(page, actionToWire) as unknown as Page<ActionSummary>;
+  });
 }
 
 // No searchActions(): solx-actions has no server-side filtering, so the
 // Actions tab scopes by path here and narrows in memory (lib/clientView.ts).
 
 export function fetchAction(path: string, name: string): Promise<ActionSummary> {
-  const encoded = `${encodeURI(path)}/${encodeURIComponent(name)}`;
-  return request<ActionSummary>(`/api/actions${encoded}`);
+  return call(async () => {
+    const a = await getConnection().actions.get(path, name);
+    return actionToWire(a) as unknown as ActionSummary;
+  });
 }
 
 export function createAction(input: {
@@ -321,6 +349,7 @@ export function createAction(input: {
   bin_name?: string;
   fn_name?: string;
   action_config?: Record<string, unknown>;
+  files?: Array<{ name: string; relPath: string; contentType?: string }>;
   trusted?: boolean;
 }): Promise<ActionSummary> {
   const { path, name, ...rest } = input;
@@ -329,15 +358,18 @@ export function createAction(input: {
   if (typeof wireInput.action_type === "string") {
     wireInput.action_type = wireInput.action_type.toLowerCase();
   }
-  return request<ActionSummary>("/api/actions", {
-    method: "POST",
-    body: JSON.stringify({ path, name, input: wireInput }),
+  return call(async () => {
+    const a = await getConnection().actions.save(
+      path,
+      name,
+      actionInputFromWire(wireInput) as ActionInput,
+    );
+    return actionToWire(a) as unknown as ActionSummary;
   });
 }
 
 export function deleteAction(path: string, name: string): Promise<void> {
-  const encoded = `${encodeURI(path)}/${encodeURIComponent(name)}`;
-  return request<void>(`/api/actions${encoded}`, { method: "DELETE" });
+  return call(() => getConnection().actions.delete(path, name));
 }
 
 export function execAction(
@@ -345,10 +377,117 @@ export function execAction(
   name: string,
   params: unknown = null,
 ): Promise<ActionExecResult> {
-  const encoded = `${encodeURI(path)}/${encodeURIComponent(name)}`;
-  return request<ActionExecResult>(`/api/actions${encoded}/exec`, {
-    method: "POST",
-    body: JSON.stringify({ params }),
+  return call(async () => {
+    const result = await getConnection().actions.exec(path, name, params as JsonValue);
+    return actionExecResultToWire(result) as unknown as ActionExecResult;
+  });
+}
+
+/**
+ * ── Async invocations (/builtin/action/*, /builtin/console/*) ─────────
+ *
+ * These are ordinary seeded Internal actions (solx-actions/src/seed.rs),
+ * reached through the exact same `ActionManager.exec` call as everything
+ * else — no dedicated routes exist or are needed. They exist for detached
+ * execution: `start` returns an `invocation_id` immediately while the
+ * action runs server-side, `poll`/`tail` long-poll for status/console
+ * updates, and `stop` requests cancellation. See
+ * `solx-actions/src/invocations.rs` and
+ * `solx-actions/src/internal/{invocation,console}.rs` for the source of
+ * truth on every field below.
+ *
+ * Note: unlike the old Bun-backend version of these helpers, cancellation
+ * is no longer threaded through an `AbortSignal` on the underlying
+ * `fetch` — `@solx/http`'s manager methods don't accept one. A caller
+ * that stops watching (e.g. a closed dialog) simply stops awaiting the
+ * result; the in-flight long-poll request against solx-server still
+ * completes server-side, same as it always did once detached.
+ */
+
+export interface Invocation {
+  invocation_id: string;
+  action_ref: string;
+  status: string;
+  result: unknown;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+  console_seq_start: number;
+}
+
+export interface ConsoleEntry {
+  seq: number;
+  ts: string;
+  level: string;
+  invocation_id: string | null;
+  run_id: string | null;
+  source: string;
+  message: string | null;
+  data: unknown;
+}
+
+export interface ConsoleTailResult {
+  entries: ConsoleEntry[];
+  next_cursor: number | null;
+  first_seq: number | null;
+  dropped: number;
+}
+
+/** `true` once a status can never change again — mirrors `invocations::is_terminal`. */
+export function isTerminalInvocationStatus(status: string): boolean {
+  return status !== "running" && status !== "cancelling";
+}
+
+async function execBuiltin<T>(
+  path: string,
+  name: string,
+  params: Record<string, unknown>,
+): Promise<T> {
+  return call(async () => {
+    const result = await getConnection().actions.exec(path, name, params as JsonValue);
+    return (result as unknown as { result: T }).result;
+  });
+}
+
+export function startInvocation(
+  path: string,
+  name: string,
+  params: unknown,
+): Promise<Invocation> {
+  return execBuiltin<Invocation>("/builtin/action", "start", { name, path, params: params ?? {} });
+}
+
+export function pollInvocation(
+  invocationId: string,
+  waitSecs?: number,
+): Promise<Invocation | null> {
+  return execBuiltin<Invocation | null>("/builtin/action", "poll", {
+    invocation_id: invocationId,
+    wait_secs: waitSecs,
+  });
+}
+
+export function stopInvocation(
+  invocationId: string,
+  opts: { force?: boolean; graceSecs?: number } = {},
+): Promise<Invocation | null> {
+  return execBuiltin<Invocation | null>("/builtin/action", "stop", {
+    invocation_id: invocationId,
+    force: opts.force,
+    grace_secs: opts.graceSecs,
+  });
+}
+
+export function tailConsole(
+  actionRef: string,
+  opts: { cursor?: number | null; limit?: number; waitSecs?: number } = {},
+): Promise<ConsoleTailResult> {
+  return execBuiltin<ConsoleTailResult>("/builtin/console", "tail", {
+    action_ref: actionRef,
+    cursor: opts.cursor ?? undefined,
+    limit: opts.limit,
+    wait_secs: opts.waitSecs,
   });
 }
 
@@ -372,41 +511,32 @@ export interface FileContentResponse {
 }
 
 export function listFiles(prefix: string): Promise<FileListResponse> {
-  return request<FileListResponse>(`/api/files/list${qs({ prefix })}`);
+  return call(async () => {
+    const paths = await getConnection().files.list(prefix);
+    return { paths, prefix };
+  });
 }
 
 export function fetchFileContent(relPath: string): Promise<FileContentResponse> {
-  return request<FileContentResponse>(`/api/files/content${qs({ relPath })}`);
-}
-
-/**
- * URL of the binary file endpoint. Use as `<img src>` or in Tiptap
- * `<img src>` so the browser loads the file directly with the right
- * Content-Type (vs. the base64-JSON `fetchFileContent`). Returns a
- * path-only URL so the Vite dev server proxy (which forwards `/api/*`
- * to the Bun backend) works in dev, and a relative URL works in prod.
- */
-export function fileRawUrl(relPath: string): string {
-  return `/api/files/raw${qs({ relPath })}`;
+  return call(async () => {
+    const bytes = await getConnection().files.get(relPath);
+    return { relPath, bytesB64: bytesToBase64(bytes), size: bytes.length };
+  });
 }
 
 export function uploadFile(relPath: string, bytes: Uint8Array): Promise<{ relPath: string }> {
-  const bytesB64 = bytesToBase64(bytes);
-  return request<{ relPath: string }>("/api/files", {
-    method: "PUT",
-    body: JSON.stringify({ relPath, bytesB64 }),
+  return call(async () => {
+    const normalized = await getConnection().files.put(relPath, bytes);
+    return { relPath: normalized };
   });
 }
 
 export function deleteFile(relPath: string): Promise<void> {
-  return request<void>("/api/files", {
-    method: "DELETE",
-    body: JSON.stringify({ relPath }),
-  });
+  return call(() => getConnection().files.delete(relPath));
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
-  // Browser-safe base64 encoding.  Chunked to avoid blowing native string
+  // Browser-safe base64 encoding. Chunked to avoid blowing native string
   // length limits on large buffers.
   let binary = "";
   const chunk = 0x8000;
@@ -416,21 +546,21 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/** ── Config ─────────────────────────────────────────────────────────── */
-
-export function fetchConfig(): Promise<SolxConfig> {
-  return request<SolxConfig>("/api/config");
-}
-
-export function patchConfig(patch: Record<string, unknown>): Promise<SolxConfig> {
-  return request<SolxConfig>("/api/config", {
-    method: "PATCH",
-    body: JSON.stringify(patch),
-  });
-}
-
 /** ── Health ─────────────────────────────────────────────────────────── */
 
-export function fetchHealth(): Promise<HealthResponse> {
-  return request<HealthResponse>("/api/health");
+/**
+ * `solx-server`'s `GET /health` is a plain unauthenticated `"ok"` string
+ * (no JSON body, no bearer check) — this just probes reachability. Unlike
+ * the old Bun backend's `/api/health`, there's no separate "backend up but
+ * solx-server down" state to report; there's only "solx-server reachable"
+ * or not.
+ */
+export async function fetchHealth(): Promise<HealthResponse> {
+  if (!isConfigured()) return { reachable: false };
+  try {
+    const res = await fetch(`${getStoredServerUrl()}/health`);
+    return { reachable: res.ok };
+  } catch {
+    return { reachable: false };
+  }
 }

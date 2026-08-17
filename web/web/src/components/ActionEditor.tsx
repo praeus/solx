@@ -5,16 +5,40 @@
  *   - Core fields: name, caption, description, category, phrases, capabilities,
  *     parameter type, result type, action_type, exec artifact, invoke resource,
  *     model instructions, raw action_config JSON.
- *   - Run panel: JSON params, Run button, result textarea, trace table.
+ *   - Typed overlays for the two most common action types: Webhook headers +
+ *     timeout_secs, Command cwd — layered onto action_config the same way
+ *     model_instructions is, so the raw-JSON box stays an escape hatch
+ *     instead of the only way to set them.
+ *   - Attached files (`Action.files: FileRef[]`) via the shared `FilesField`,
+ *     the same component/wire shape `DocumentEditor` uses.
+ *   - Run panel: JSON params, Run button, result textarea.
  *
- * NOT in scope (future work): artifact selector, link selector, project
- * scaffolding, schedule creation, raw action_config typed overlays.
+ * NOT in scope (no equivalent entity in solx): Permission/allowed-permission
+ * fields, Schedule creation, custom-action project scaffolding (superseded
+ * by the solx-quickjs package), run trace table.
  */
 
 import { useEffect, useMemo, useState } from "react";
 import type { ActionSummary } from "../api/api";
 import { useCreateAction, useDocumentTypes, useExecAction } from "../api/hooks";
+import { ActionRunner } from "./ActionRunner";
 import { ChipTagInput } from "./ChipTagInput";
+import { FilesField, coerceFilesField, type FileRef } from "./FilesField";
+import { TypeSelector } from "./TypeSelector";
+
+interface WebhookHeaderEntry {
+  key: string;
+  value: string;
+}
+
+function headersFromConfig(cfg: Record<string, unknown>): WebhookHeaderEntry[] {
+  const headers = cfg.headers;
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) return [];
+  return Object.entries(headers as Record<string, unknown>).map(([key, value]) => ({
+    key,
+    value: String(value ?? ""),
+  }));
+}
 
 const ACTION_TYPES = [
   { value: "", label: "WASM (default)" },
@@ -61,10 +85,21 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
   const [modelInstructions, setModelInstructions] = useState("");
   const [actionConfigJson, setActionConfigJson] = useState("");
 
+  // Typed overlays for the two most common action types — surfaced as real
+  // fields instead of forcing every edit through the raw action_config JSON.
+  const [webhookHeaders, setWebhookHeaders] = useState<WebhookHeaderEntry[]>([]);
+  const [webhookTimeoutSecs, setWebhookTimeoutSecs] = useState("");
+  const [commandCwd, setCommandCwd] = useState("");
+
+  // Files attached to this action (e.g. the wasm/script bin_name points at
+  // one of these). Same wire shape and component as DocumentEditor.
+  const [attachedFiles, setAttachedFiles] = useState<FileRef[]>([]);
+
   // Run panel
   const [runParamsText, setRunParamsText] = useState("{}");
   const [runResultText, setRunResultText] = useState("");
   const [runError, setRunError] = useState<string | null>(null);
+  const [runnerOpen, setRunnerOpen] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
 
@@ -74,6 +109,7 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
     setError(null);
     setRunResultText("");
     setRunError(null);
+    setRunnerOpen(false);
     if (existing && existingEntity) {
       // Edit mode — hydrate from the preloaded row.
       setPath(existingEntity.path);
@@ -94,10 +130,18 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
       const mi = cfg.model_instructions;
       setModelInstructions(typeof mi === "string" ? mi : "");
       setActionConfigJson("");
+      setWebhookHeaders(headersFromConfig(cfg));
+      setWebhookTimeoutSecs(cfg.timeout_secs != null ? String(cfg.timeout_secs) : "");
+      setCommandCwd(typeof cfg.cwd === "string" ? cfg.cwd : "");
+      setAttachedFiles(coerceFilesField(existingEntity.files));
     } else if (existing) {
       // Edit mode without a preloaded entity — fall back to id-only.
       setPath(existing.path);
       setName(existing.name);
+      setWebhookHeaders([]);
+      setWebhookTimeoutSecs("");
+      setCommandCwd("");
+      setAttachedFiles([]);
     } else {
       // Create mode.
       setPath(defaultPath ?? "/");
@@ -114,6 +158,10 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
       setFnName("");
       setModelInstructions("");
       setActionConfigJson("");
+      setWebhookHeaders([]);
+      setWebhookTimeoutSecs("");
+      setCommandCwd("");
+      setAttachedFiles([]);
     }
   }, [open, existing, existingEntity, defaultPath]);
 
@@ -157,6 +205,36 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
       actionConfig = { ...(actionConfig ?? {}), model_instructions: modelInstructions };
     }
 
+    // Typed Webhook/Command overlays win over whatever the raw JSON had for
+    // the same keys — the typed fields are what the user just edited.
+    if (actionType === "webhook") {
+      const headers: Record<string, string> = {};
+      for (const { key, value } of webhookHeaders) {
+        if (key.trim()) headers[key.trim()] = value;
+      }
+      const trimmedTimeout = webhookTimeoutSecs.trim();
+      const timeout = trimmedTimeout ? Number(trimmedTimeout) : NaN;
+      actionConfig = { ...(actionConfig ?? {}) };
+      if (Object.keys(headers).length > 0) actionConfig.headers = headers;
+      else delete actionConfig.headers;
+      if (trimmedTimeout && Number.isFinite(timeout) && timeout > 0) {
+        actionConfig.timeout_secs = timeout;
+      } else {
+        delete actionConfig.timeout_secs;
+      }
+    }
+    if (actionType === "command") {
+      const trimmedCwd = commandCwd.trim();
+      if (trimmedCwd) {
+        actionConfig = { ...(actionConfig ?? {}), cwd: trimmedCwd };
+      } else if (actionConfig) {
+        delete actionConfig.cwd;
+      }
+    }
+    if (actionConfig && Object.keys(actionConfig).length === 0) {
+      actionConfig = undefined;
+    }
+
     try {
       const result = await createMutation.mutateAsync({
         path: trimmedPath,
@@ -172,6 +250,7 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
         bin_name: binName.trim() || undefined,
         fn_name: fnName.trim() || undefined,
         action_config: actionConfig,
+        files: attachedFiles,
       });
       onSaved?.({ path: result.path, name: result.name });
       onClose();
@@ -311,37 +390,9 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
             />
           </div>
 
-          <div className="form-field">
-            <label className="form-label">Parameter Type</label>
-            <select
-              className="form-input"
-              value={paramTypeRef}
-              onChange={(e) => setParamTypeRef(e.target.value)}
-            >
-              <option value="">(none)</option>
-              {types.map((t) => (
-                <option key={`${t.path}/${t.name}`} value={`${t.path}/${t.name}`}>
-                  {String(t.name)}
-                </option>
-              ))}
-            </select>
-          </div>
+          <TypeSelector label="Parameter Type" value={paramTypeRef} onChange={setParamTypeRef} />
 
-          <div className="form-field">
-            <label className="form-label">Result Type</label>
-            <select
-              className="form-input"
-              value={resultTypeRef}
-              onChange={(e) => setResultTypeRef(e.target.value)}
-            >
-              <option value="">(none)</option>
-              {types.map((t) => (
-                <option key={`${t.path}/${t.name}`} value={`${t.path}/${t.name}`}>
-                  {String(t.name)}
-                </option>
-              ))}
-            </select>
-          </div>
+          <TypeSelector label="Result Type" value={resultTypeRef} onChange={setResultTypeRef} />
 
           <div className="form-field">
             <label className="form-label">Action Type</label>
@@ -358,6 +409,93 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
             </select>
           </div>
 
+          {actionType === "webhook" && (
+            <>
+              <div className="form-field">
+                <label className="form-label">Headers</label>
+                <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
+                  Sent with every request. Stored under <code>action_config.headers</code>.
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {webhookHeaders.map((row, idx) => (
+                    <div key={idx} style={{ display: "flex", gap: 6 }}>
+                      <input
+                        className="form-input"
+                        style={{ flex: 1 }}
+                        value={row.key}
+                        onChange={(e) =>
+                          setWebhookHeaders((prev) =>
+                            prev.map((r, i) => (i === idx ? { ...r, key: e.target.value } : r)),
+                          )
+                        }
+                        placeholder="Header-Name"
+                        spellCheck={false}
+                      />
+                      <input
+                        className="form-input"
+                        style={{ flex: 1 }}
+                        value={row.value}
+                        onChange={(e) =>
+                          setWebhookHeaders((prev) =>
+                            prev.map((r, i) => (i === idx ? { ...r, value: e.target.value } : r)),
+                          )
+                        }
+                        placeholder="value"
+                        spellCheck={false}
+                      />
+                      <button
+                        type="button"
+                        className="dialog__btn"
+                        onClick={() => setWebhookHeaders((prev) => prev.filter((_, i) => i !== idx))}
+                        aria-label="Remove header"
+                        title="Remove header"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    className="dialog__btn"
+                    style={{ alignSelf: "flex-start" }}
+                    onClick={() => setWebhookHeaders((prev) => [...prev, { key: "", value: "" }])}
+                  >
+                    + Add header
+                  </button>
+                </div>
+              </div>
+
+              <div className="form-field">
+                <label className="form-label">Timeout (seconds)</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  min={1}
+                  value={webhookTimeoutSecs}
+                  onChange={(e) => setWebhookTimeoutSecs(e.target.value)}
+                  placeholder="e.g. 30"
+                />
+              </div>
+            </>
+          )}
+
+          {actionType === "command" && (
+            <div className="form-field">
+              <label className="form-label">Working Directory (cwd)</label>
+              <input
+                className="form-input"
+                value={commandCwd}
+                onChange={(e) => setCommandCwd(e.target.value)}
+                placeholder="e.g. D:/Projects/solx-packages/my-package/bin"
+                spellCheck={false}
+              />
+              <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
+                Stored under <code>action_config.cwd</code>. Overridden by the allowlist's own
+                registered <code>cwd</code>, if one is set for this command's key.
+              </div>
+            </div>
+          )}
+
           <div className="form-field">
             <label className="form-label">Exec Artifact (bin name)</label>
             <input
@@ -366,6 +504,21 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
               onChange={(e) => setBinName(e.target.value)}
               placeholder="e.g. my-actions.wasm"
               spellCheck={false}
+              list="action-editor-bin-names"
+            />
+            <datalist id="action-editor-bin-names">
+              {attachedFiles.map((f) => (
+                <option key={f.relPath} value={f.name} />
+              ))}
+            </datalist>
+          </div>
+
+          <div className="form-field">
+            <FilesField
+              value={attachedFiles}
+              onChange={setAttachedFiles}
+              label="Attached files"
+              uploadPrefix={`files/actions/${name.trim() || "shared"}/`}
             />
           </div>
 
@@ -434,6 +587,13 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
                 >
                   {execMutation.isPending ? "Running…" : "Run Action"}
                 </button>
+                <button className="dialog__btn" onClick={() => setRunnerOpen(true)}>
+                  Run with console…
+                </button>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                "Run Action" is a synchronous request/response call. "Run with console…" runs it
+                detached, with live console output and cancellation.
               </div>
               {runError && <div className="dialog__error">{runError}</div>}
               {runResultText && (
@@ -467,6 +627,10 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
           </button>
         </div>
       </div>
+
+      {existing && (
+        <ActionRunner open={runnerOpen} onClose={() => setRunnerOpen(false)} action={existing} />
+      )}
     </>
   );
 }

@@ -22,8 +22,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fileRawUrl } from "../api/api";
-import { useUploadFile } from "../api/hooks";
+import { useFileObjectUrl, useUploadFile } from "../api/hooks";
 
 interface Props {
   value: string;
@@ -88,6 +87,7 @@ export function ImageField({
   // ── Upload-from-disk ─────────────────────────────────────────────────
   const upload = useUploadFile();
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const previewUrl = useFileObjectUrl(relPath || undefined);
 
   const handlePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     setError(null);
@@ -117,16 +117,20 @@ export function ImageField({
       <div className="image-field__row">
         <div className="image-field__preview">
           {relPath ? (
-            <img
-              src={fileRawUrl(relPath)}
-              alt={basename(relPath) || "image"}
-              loading="lazy"
-              onError={() =>
-                setError(
-                  `Could not load "${relPath}". Make sure the file exists in the files root.`,
-                )
-              }
-            />
+            previewUrl ? (
+              <img
+                src={previewUrl}
+                alt={basename(relPath) || "image"}
+                loading="lazy"
+                onError={() =>
+                  setError(
+                    `Could not load "${relPath}". Make sure the file exists in the files root.`,
+                  )
+                }
+              />
+            ) : (
+              <div className="image-field__preview-empty">Loading…</div>
+            )
           ) : (
             <div className="image-field__preview-empty">No image</div>
           )}

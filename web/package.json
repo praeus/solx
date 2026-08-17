@@ -4,16 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "vendor": "bun run scripts/vendor-solx.mjs",
-    "dev": "concurrently -n server,web -c blue,green \"cd server && bun run dev\" \"cd web && bun run dev\"",
-    "dev:server": "cd server && bun run dev",
-    "dev:web": "cd web && bun run dev",
+    "dev": "cd web && bun run dev",
     "build": "cd web && bun run build",
-    "lint": "cd server && bun run lint && cd ../web && bun run lint",
-    "typecheck": "cd server && bun run typecheck && cd ../web && bun run typecheck"
+    "lint": "cd web && bun run lint",
+    "typecheck": "cd web && bun run typecheck"
   },
   "devDependencies": {
-    "concurrently": "^9.1.0",
     "typescript": "^5.8.0"
   }
 }

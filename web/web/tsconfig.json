@@ -6,7 +6,12 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
     "noEmit": true,
-    "allowImportingTsExtensions": false
+    "allowImportingTsExtensions": false,
+    "baseUrl": ".",
+    "paths": {
+      "@solx/http": ["../../solx-js/packages/http/src/index.ts"],
+      "@solx/surface": ["../../solx-js/packages/surface/src/index.ts"]
+    }
   },
   "include": ["src/**/*", "vite.config.ts"]
 }

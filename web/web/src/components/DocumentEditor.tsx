@@ -36,7 +36,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import type { DocumentSummary } from "../api/api";
+import { searchDocuments, type DocumentSummary } from "../api/api";
 import {
   useActions,
   useCreateDocument,
@@ -255,9 +255,7 @@ export function DocumentEditor({
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch(`/api/documents/search?type_ref=DocRef&limit=50`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as {
+        const data = (await searchDocuments({ type_ref: "DocRef", limit: 50 })) as {
           hits?: Array<{
             name?: string;
             target_document_name?: string;

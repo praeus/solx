@@ -1,28 +1,29 @@
 /**
- * wire.ts — the single snake_case ⇄ camelCase translation boundary.
+ * wire.ts — the snake_case (this API + React) ⇄ camelCase (`@solx/http`,
+ * `@solx/surface`) translation boundary.
+ *
+ * Ported from the old Bun backend's `server/src/wire.ts` (same boundary,
+ * same reasoning — see that file's header comment, preserved below) now
+ * that the conversion happens client-side instead of server-side. The only
+ * structural change: the "inbound" helpers used to parse a `URL`'s query
+ * string; they now read a plain snake_case params object, since `api.ts`'s
+ * functions were never backed by real query strings to begin with once the
+ * Bun hop is gone — they're just JS function arguments.
  *
  * Three layers disagree about field casing:
  *
  *   Rust core / HTTP wire   snake_case   (`type_ref`, `path_prefix`)
- *   solx-js `@solx/surface` camelCase    (`typeRef`, `pathPrefix`)
- *   this HTTP API + React   snake_case   (matches Rust)
- *
- * solx-js already converts camelCase → the Rust snake_case wire internally
- * (see `listOptionsToJson` / `documentInputToSnake` in each package's
- * `native.ts`). Handing it snake_case directly therefore drops every
- * multi-word field **silently**: `listOptionsToJson` reads `opts.pathPrefix`,
- * finds `undefined`, and emits nothing. Only the fields whose two spellings
- * coincide — `q`, `limit`, `offset` — ever survived.
- *
- * Every SDK call is funnelled through the mappers below so the translation
- * happens exactly once in each direction, in one place.
+ *   `@solx/surface`         camelCase    (`typeRef`, `pathPrefix`)
+ *   this API + React        snake_case   (matches Rust)
  *
  * ── Opaque payloads ──────────────────────────────────────────────────────
- * `contents`, `schema`, `action_config` and exec `result` are arbitrary user
- * JSON and are passed through **verbatim**. A blanket recursive key rewrite
- * would corrupt user data — a document field genuinely named `my_field`, or
- * the property names inside a JSON Schema's `properties` map.
+ * `contents`, `schema`, `action_config` and exec `result` are arbitrary
+ * user JSON and are passed through **verbatim**. A blanket recursive key
+ * rewrite would corrupt user data — a document field genuinely named
+ * `my_field`, or the property names inside a JSON Schema's `properties`
+ * map.
  */
+import type { JsonValue } from "@solx/surface";
 
 /** Non-empty string, or undefined. Keeps `JSON.stringify` from emitting nulls. */
 function str(value: unknown): string | undefined {
@@ -48,7 +49,7 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-/* ── Inbound: query params → SDK options ─────────────────────────────── */
+/* ── Inbound: snake_case params → camelCase SDK options ─────────────── */
 
 export interface ListOptionsCamel {
   pathPrefix?: string;
@@ -63,46 +64,42 @@ export interface ListOptionsCamel {
 }
 
 /**
- * Parse the common entity-list query params into a camelCase `ListOptions`
- * the SDK will actually read.
- *
  * Note: only `solx-docs` implements `sort_by`/`sort_order`/`filter_field` on
  * the Rust side. `solx-actions` and `solx-types` accept the options but
  * hardcode `ORDER BY path,name` and ignore filters — passing them is
  * harmless, but callers should not present those controls for those tabs.
  */
-export function listOptionsFromUrl(url: URL): ListOptionsCamel {
-  const p = url.searchParams;
-  const opts: ListOptionsCamel = {};
+export function listOptionsFromSnake(opts: Record<string, unknown> = {}): ListOptionsCamel {
+  const out: ListOptionsCamel = {};
 
-  const pathPrefix = str(p.get("path_prefix"));
-  if (pathPrefix) opts.pathPrefix = pathPrefix;
+  const pathPrefix = str(opts.path_prefix);
+  if (pathPrefix) out.pathPrefix = pathPrefix;
 
-  const limit = num(p.get("limit"));
-  if (limit !== undefined) opts.limit = limit;
+  const limit = num(opts.limit);
+  if (limit !== undefined) out.limit = limit;
 
-  const offset = num(p.get("offset"));
-  if (offset !== undefined) opts.offset = offset;
+  const offset = num(opts.offset);
+  if (offset !== undefined) out.offset = offset;
 
-  const filterField = str(p.get("filter_field"));
-  if (filterField) opts.filterField = filterField;
+  const filterField = str(opts.filter_field);
+  if (filterField) out.filterField = filterField;
 
-  const filterValue = str(p.get("filter_value"));
-  if (filterValue) opts.filterValue = filterValue;
+  const filterValue = str(opts.filter_value);
+  if (filterValue) out.filterValue = filterValue;
 
-  const sortBy = str(p.get("sort_by"));
-  if (sortBy) opts.sortBy = sortBy;
+  const sortBy = str(opts.sort_by);
+  if (sortBy) out.sortBy = sortBy;
 
-  const sortOrder = str(p.get("sort_order"))?.toLowerCase();
-  if (sortOrder === "asc" || sortOrder === "desc") opts.sortOrder = sortOrder;
+  const sortOrder = str(opts.sort_order)?.toLowerCase();
+  if (sortOrder === "asc" || sortOrder === "desc") out.sortOrder = sortOrder;
 
-  const dateAfter = str(p.get("date_after"));
-  if (dateAfter) opts.dateAfter = dateAfter;
+  const dateAfter = str(opts.date_after);
+  if (dateAfter) out.dateAfter = dateAfter;
 
-  const dateBefore = str(p.get("date_before"));
-  if (dateBefore) opts.dateBefore = dateBefore;
+  const dateBefore = str(opts.date_before);
+  if (dateBefore) out.dateBefore = dateBefore;
 
-  return opts;
+  return out;
 }
 
 export interface SearchQueryCamel {
@@ -114,30 +111,28 @@ export interface SearchQueryCamel {
   offset?: number;
 }
 
-/** Parse the document-search query params into a camelCase `SearchQuery`. */
-export function searchQueryFromUrl(url: URL): SearchQueryCamel {
-  const p = url.searchParams;
-  const query: SearchQueryCamel = {};
+export function searchQueryFromSnake(query: Record<string, unknown> = {}): SearchQueryCamel {
+  const out: SearchQueryCamel = {};
 
-  const q = str(p.get("q"));
-  if (q) query.q = q;
+  const q = str(query.q);
+  if (q) out.q = q;
 
-  const pathPrefix = str(p.get("path_prefix"));
-  if (pathPrefix) query.pathPrefix = pathPrefix;
+  const pathPrefix = str(query.path_prefix);
+  if (pathPrefix) out.pathPrefix = pathPrefix;
 
-  const typeRef = str(p.get("type_ref"));
-  if (typeRef) query.typeRef = typeRef;
+  const typeRef = str(query.type_ref);
+  if (typeRef) out.typeRef = typeRef;
 
-  const linkedTo = str(p.get("linked_to"));
-  if (linkedTo) query.linkedTo = linkedTo;
+  const linkedTo = str(query.linked_to);
+  if (linkedTo) out.linkedTo = linkedTo;
 
-  const limit = num(p.get("limit"));
-  if (limit !== undefined) query.limit = limit;
+  const limit = num(query.limit);
+  if (limit !== undefined) out.limit = limit;
 
-  const offset = num(p.get("offset"));
-  if (offset !== undefined) query.offset = offset;
+  const offset = num(query.offset);
+  if (offset !== undefined) out.offset = offset;
 
-  return query;
+  return out;
 }
 
 /* ── Shared value objects ────────────────────────────────────────────── */
@@ -146,8 +141,8 @@ function fileRefToWire(raw: unknown): Record<string, unknown> {
   const f = asRecord(raw);
   return {
     name: str(f.name),
-    rel_path: str(f.relPath),
-    content_type: str(f.contentType),
+    relPath: str(f.relPath),
+    contentType: str(f.contentType),
   };
 }
 
@@ -155,8 +150,8 @@ function fileRefFromWire(raw: unknown): Record<string, unknown> {
   const f = asRecord(raw);
   return {
     name: str(f.name),
-    relPath: str(f.rel_path),
-    contentType: str(f.content_type),
+    relPath: str(f.relPath),
+    contentType: str(f.contentType),
   };
 }
 
@@ -174,7 +169,7 @@ function docLinkToWire(raw: unknown): Record<string, unknown> {
 
 const docLinkFromWire = docLinkToWire;
 
-/* ── Outbound: SDK entities → HTTP JSON ──────────────────────────────── */
+/* ── Outbound: `@solx/http` (camelCase) entities → snake_case JSON ────── */
 
 export function documentToWire(raw: unknown): Record<string, unknown> {
   const d = asRecord(raw);
@@ -282,7 +277,7 @@ export function searchResultsToWire(raw: unknown): Record<string, unknown> {
   };
 }
 
-/* ── Inbound: HTTP JSON → SDK inputs ─────────────────────────────────── */
+/* ── Inbound: snake_case JSON → `@solx/http` (camelCase) inputs ───────── */
 
 export function documentInputFromWire(raw: unknown): Record<string, unknown> {
   const i = asRecord(raw);
@@ -332,3 +327,5 @@ export function actionInputFromWire(raw: unknown): Record<string, unknown> {
 
   return out;
 }
+
+export type { JsonValue };

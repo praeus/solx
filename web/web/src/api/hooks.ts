@@ -9,6 +9,7 @@
  * so callers don't need to import useQuery/useMutation directly.
  */
 
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import {
   ApiError,
@@ -22,7 +23,6 @@ import {
   execAction,
   fetchAction,
   fetchActions,
-  fetchConfig,
   fetchDocument,
   fetchDocuments,
   fetchFileContent,
@@ -30,7 +30,6 @@ import {
   fetchType,
   fetchTypes,
   listFiles,
-  patchConfig,
   searchDocuments,
   updateDocument,
   uploadFile,
@@ -42,9 +41,9 @@ import {
   type HealthResponse,
   type Page,
   type SearchResults,
-  type SolxConfig,
   type TypeEntity,
 } from "./api";
+import { acquireObjectUrl, releaseObjectUrl } from "./objectUrlCache";
 
 /** ── Health ─────────────────────────────────────────────────────────── */
 
@@ -327,24 +326,34 @@ export function useDeleteFile() {
   });
 }
 
-/** ── Config ─────────────────────────────────────────────────────────── */
+/** ── Files: object URLs (blob: preview for images etc.) ────────────────
+ *
+ * Replaces the old Bun backend's `/api/files/raw?relPath=…` route, which
+ * served bytes directly with a `Content-Type` header — `solx-server` only
+ * exposes files as base64 JSON, and the token can't ride along on a plain
+ * `<img src>` URL. See `objectUrlCache.ts`.
+ */
 
-export function useConfig(): UseQueryResult<SolxConfig> {
-  return useQuery({
-    queryKey: ["config"],
-    queryFn: fetchConfig,
-    staleTime: 60_000,
-  });
-}
+export function useFileObjectUrl(relPath: string | undefined): string | undefined {
+  const [url, setUrl] = useState<string | undefined>(undefined);
 
-export function useMutateConfig() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (patch: Record<string, unknown>) => patchConfig(patch),
-    onSuccess: (data) => {
-      qc.setQueryData(["config"], data);
-    },
-  });
+  useEffect(() => {
+    if (!relPath) {
+      setUrl(undefined);
+      return;
+    }
+    let cancelled = false;
+    setUrl(undefined);
+    acquireObjectUrl(relPath).then((resolved) => {
+      if (!cancelled) setUrl(resolved);
+    });
+    return () => {
+      cancelled = true;
+      releaseObjectUrl(relPath);
+    };
+  }, [relPath]);
+
+  return url;
 }
 
 /** ── Re-exports ─────────────────────────────────────────────────────── */

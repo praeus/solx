@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import type { TypeEntity } from "../api/api";
 import { useCreateType } from "../api/hooks";
 import { ChipTagInput } from "./ChipTagInput";
@@ -101,7 +102,14 @@ export function TypeEditor({ open, onClose, existing, existingEntity, defaultPat
     }
   };
 
-  return (
+  // Portalled to `document.body` rather than rendered in place: TypeSelector
+  // (used inside ActionEditor/DocumentEditor's own modal) nests this dialog
+  // several components deep, and a transformed ancestor (`.dialog` uses
+  // `transform: translate(-50%, -50%)` to center itself) becomes the
+  // containing block for any `position: fixed` descendant per the CSS
+  // transforms spec — without the portal, a nested TypeEditor would center
+  // itself inside the *parent* dialog's box instead of the viewport.
+  return createPortal(
     <>
       <div className="dialog-backdrop" onClick={onClose} />
       <div className="dialog dialog--wide" role="dialog" aria-label="Type editor">
@@ -199,6 +207,7 @@ export function TypeEditor({ open, onClose, existing, existingEntity, defaultPat
           </button>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   );
 }
