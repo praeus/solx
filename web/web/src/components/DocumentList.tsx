@@ -131,9 +131,9 @@ function DocumentCard({ document: doc, onOpen }: CardProps) {
   const name = String(doc.name ?? "Unnamed");
   const title = (doc.title ?? "").toString().trim();
   const summary = (doc.summary ?? "").toString().trim();
-  // type_ref is a full reference ("/types/docs/Post") — badge shows the leaf.
-  const typeName = String(doc.type_ref ?? "").replace(/^.*\//, "");
-  const updatedAt = String(doc.updated_at ?? "");
+  // typeRef is a full reference ("/types/docs/Post") — badge shows the leaf.
+  const typeName = String(doc.typeRef ?? "").replace(/^.*\//, "");
+  const updatedAt = String(doc.updatedAt ?? "");
   const deleteMutation = useDeleteDocument();
 
   const handleDelete = (e: React.MouseEvent) => {

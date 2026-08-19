@@ -77,7 +77,7 @@ export function TypeEditor({ open, onClose, existing, existingEntity, defaultPat
       return;
     }
 
-    let schema: Record<string, unknown> | undefined;
+    let schema: Record<string, unknown> = {};
     if (schemaText.trim()) {
       try {
         schema = JSON.parse(schemaText);

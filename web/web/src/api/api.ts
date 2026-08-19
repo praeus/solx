@@ -3,80 +3,38 @@
  * no backend hop in between (there used to be a Bun server here; see
  * `d:\Projects\solx-core\docs\next-steps.md` item 3 for why it's gone).
  *
- * `wire.ts` is the snake_case(this file)⇄camelCase(`@solx/http`) boundary,
- * moved client-side from the old Bun backend's `server/src/wire.ts`
- * unchanged in spirit. Every function below keeps its original name,
- * signature and snake_case-shaped return type so `hooks.ts` and every
- * consuming component needed no changes for this migration — only the
- * body of each function changed, from a `fetch('/api/...')` call to a
- * `getConnection().<manager>.<method>(...)` call.
+ * `@solx/http`'s manager methods already return `@solx/surface`'s camelCase
+ * entities (`Document`, `TypeEntity`, `Action`, …) — there is no remaining
+ * wire hop to justify re-shaping them into snake_case, so this layer just
+ * re-exports those types and passes options straight through. The one
+ * exception is the async-invocation section below (`startInvocation` /
+ * `pollInvocation` / `stopInvocation` / `tailConsole`): those are opaque
+ * JSON payloads to/from a seeded Rust action
+ * (`solx-actions/src/internal/{invocation,console}.rs`), not mediated by
+ * `@solx/surface`, so they're genuinely snake_case on both sides and stay
+ * that way.
  */
-import { SolxError, type DocumentInput, type ActionInput, type TypeInput, type JsonValue } from "@solx/surface";
-import { getConnection, getStoredServerUrl, isConfigured } from "./connection";
 import {
-  actionExecResultToWire,
-  actionInputFromWire,
-  actionToWire,
-  documentInputFromWire,
-  documentToWire,
-  listOptionsFromSnake,
-  pageToWire,
-  searchQueryFromSnake,
-  searchResultsToWire,
-  typeInputFromWire,
-  typeToWire,
-} from "./wire";
+  SolxError,
+  type Action,
+  type ActionExecResult,
+  type ActionInput,
+  type Document,
+  type DocumentInput,
+  type JsonValue,
+  type ListOptions,
+  type Page,
+  type SearchHit,
+  type SearchQuery,
+  type SearchResults,
+  type TypeEntity,
+  type TypeInput,
+} from "@solx/surface";
+import { getConnection, getStoredServerUrl, isConfigured } from "./connection";
 
-export interface DocumentSummary {
-  id?: string;
-  path: string;
-  name: string;
-  title?: string | null;
-  summary?: string | null;
-  type_ref?: string | null;
-  author?: string | null;
-  pub_date?: string | null;
-  confidence?: number | null;
-  created_at?: string;
-  updated_at?: string;
-  [key: string]: unknown;
-}
-
-export interface Page<T> {
-  items: T[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-export interface SearchHit {
-  id: string;
-  path: string;
-  name: string;
-  title?: string;
-  summary?: string;
-  type_ref?: string;
-  score: number;
-}
-
-export interface SearchResults {
-  hits: SearchHit[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-export interface TypeEntity {
-  id?: string;
-  path: string;
-  name: string;
-  description?: string;
-  schema?: Record<string, unknown>;
-  groups?: string[];
-  created_at?: string;
-  updated_at?: string;
-  [key: string]: unknown;
-}
+export type DocumentSummary = Document;
+export type ActionSummary = Action;
+export type { TypeEntity, Page, SearchHit, SearchResults, ActionExecResult };
 
 export interface HealthResponse {
   reachable: boolean;
@@ -136,96 +94,53 @@ async function call<T>(fn: () => Promise<T>): Promise<T> {
 
 /** ── Documents ──────────────────────────────────────────────────────── */
 
-export function fetchDocuments(opts: {
-  path_prefix?: string;
-  limit?: number;
-  offset?: number;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
-  filter_field?: string;
-  filter_value?: string;
-} = {}): Promise<Page<DocumentSummary>> {
-  return call(async () => {
-    const page = await getConnection().docs.list(listOptionsFromSnake(opts));
-    return pageToWire(page, documentToWire) as unknown as Page<DocumentSummary>;
-  });
+export function fetchDocuments(opts: ListOptions = {}): Promise<Page<Document>> {
+  return call(() => getConnection().docs.list(opts));
 }
 
-export function searchDocuments(query: {
-  q?: string;
-  path_prefix?: string;
-  type_ref?: string;
-  limit?: number;
-  offset?: number;
-}): Promise<SearchResults> {
-  return call(async () => {
-    const results = await getConnection().docs.search(searchQueryFromSnake(query));
-    return searchResultsToWire(results) as unknown as SearchResults;
-  });
+export function searchDocuments(query: SearchQuery): Promise<SearchResults> {
+  return call(() => getConnection().docs.search(query));
 }
 
-export function fetchDocument(path: string, name: string): Promise<DocumentSummary> {
-  return call(async () => {
-    const doc = await getConnection().docs.get(path, name);
-    return documentToWire(doc) as unknown as DocumentSummary;
-  });
+export function fetchDocument(path: string, name: string): Promise<Document> {
+  return call(() => getConnection().docs.get(path, name));
 }
 
-export function createDocument(input: {
-  path: string;
-  name: string;
-  /** Full type reference, e.g. "/types/docs/BlogPostWithComments". */
-  type_ref?: string;
-  /** Bare type name (mapped to typeRef = "/builtin/types/<Name>"). */
-  type_name?: string;
-  title?: string;
-  summary?: string;
-  author?: string;
-  pub_date?: string;
-  confidence?: number;
-  contents?: Record<string, unknown>;
-  files?: Array<{ name: string; relPath: string; contentType?: string }>;
-}): Promise<DocumentSummary> {
-  const { path, name, type_name, ...rest } = input;
-  const wireInput: Record<string, unknown> = { ...rest };
-  // Map the bare type_name (e.g. "Post") into the wire-level type_ref. The
-  // /builtin/types namespace is where solx stores the core document types;
-  // if the caller passes a full type_ref, prefer that.
-  if (type_name && !wireInput.type_ref) {
-    wireInput.type_ref = `/builtin/types/${type_name}`;
+/**
+ * `contents` is arbitrary user JSON (whatever the selected Type's schema
+ * describes) — typed `unknown` here rather than `JsonValue` so callers
+ * building it from parsed/form state don't need to satisfy that shape
+ * exactly; it's passed through to `docs.save` verbatim.
+ */
+export interface DocumentInputApp extends Omit<DocumentInput, "contents"> {
+  contents: unknown;
+}
+
+export function createDocument(
+  input: DocumentInputApp & {
+    path: string;
+    name: string;
+    /** Bare type name (mapped to typeRef = "/builtin/types/<Name>"). */
+    typeName?: string;
+  },
+): Promise<Document> {
+  const { path, name, typeName, ...rest } = input;
+  // Map the bare typeName (e.g. "Post") into typeRef. The /builtin/types
+  // namespace is where solx stores the core document types; if the caller
+  // passes a full typeRef, prefer that.
+  const docInput = { ...rest } as DocumentInput;
+  if (typeName && !docInput.typeRef) {
+    docInput.typeRef = `/builtin/types/${typeName}`;
   }
-  return call(async () => {
-    const doc = await getConnection().docs.save(
-      path,
-      name,
-      documentInputFromWire(wireInput) as unknown as DocumentInput,
-    );
-    return documentToWire(doc) as unknown as DocumentSummary;
-  });
+  return call(() => getConnection().docs.save(path, name, docInput));
 }
 
 export function updateDocument(
   path: string,
   name: string,
-  input: {
-    /** Full type reference, e.g. "/types/docs/Post". */
-    type_ref?: string;
-    title?: string;
-    summary?: string;
-    contents?: Record<string, unknown>;
-    /** Legacy / future-friendly alias accepted alongside type_ref. */
-    type_name?: string;
-    [key: string]: unknown;
-  },
-): Promise<DocumentSummary> {
-  return call(async () => {
-    const doc = await getConnection().docs.save(
-      path,
-      name,
-      documentInputFromWire(input) as unknown as DocumentInput,
-    );
-    return documentToWire(doc) as unknown as DocumentSummary;
-  });
+  input: DocumentInputApp,
+): Promise<Document> {
+  return call(() => getConnection().docs.save(path, name, input as DocumentInput));
 }
 
 export function deleteDocument(path: string, name: string): Promise<void> {
@@ -234,44 +149,24 @@ export function deleteDocument(path: string, name: string): Promise<void> {
 
 /** ── Types ───────────────────────────────────────────────────────────── */
 
-export function fetchTypes(opts: {
-  path_prefix?: string;
-  limit?: number;
-  offset?: number;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
-  filter_field?: string;
-  filter_value?: string;
-} = {}): Promise<Page<TypeEntity>> {
-  return call(async () => {
-    const page = await getConnection().types.list(listOptionsFromSnake(opts));
-    return pageToWire(page, typeToWire) as unknown as Page<TypeEntity>;
-  });
+export function fetchTypes(opts: ListOptions = {}): Promise<Page<TypeEntity>> {
+  return call(() => getConnection().types.list(opts));
 }
 
 export function fetchType(path: string, name: string): Promise<TypeEntity> {
-  return call(async () => {
-    const t = await getConnection().types.get(path, name);
-    return typeToWire(t) as unknown as TypeEntity;
-  });
+  return call(() => getConnection().types.get(path, name));
 }
 
-export function createType(input: {
-  path: string;
-  name: string;
-  description?: string;
-  schema?: Record<string, unknown>;
-  groups?: string[];
-}): Promise<TypeEntity> {
+/** `schema` is an arbitrary JSON Schema object — see `DocumentInputApp`. */
+export interface TypeInputApp extends Omit<TypeInput, "schema"> {
+  schema: unknown;
+}
+
+export function createType(
+  input: TypeInputApp & { path: string; name: string },
+): Promise<TypeEntity> {
   const { path, name, ...rest } = input;
-  return call(async () => {
-    const t = await getConnection().types.save(
-      path,
-      name,
-      typeInputFromWire(rest) as unknown as TypeInput,
-    );
-    return typeToWire(t) as unknown as TypeEntity;
-  });
+  return call(() => getConnection().types.save(path, name, rest as TypeInput));
 }
 
 export function deleteType(path: string, name: string): Promise<void> {
@@ -280,92 +175,32 @@ export function deleteType(path: string, name: string): Promise<void> {
 
 /** ── Actions ────────────────────────────────────────────────────────── */
 
-export interface ActionSummary {
-  id?: string;
-  path: string;
-  name: string;
-  caption?: string | null;
-  description?: string | null;
-  category?: string | null;
-  action_type?: string | null;
-  /** Full type reference for the action's parameter, e.g. "/types/core/Null". */
-  param_type_ref?: string | null;
-  /** Full type reference for the action's result. */
-  result_type_ref?: string | null;
-  capabilities?: string[];
-  phrases?: string[];
-  bin_name?: string | null;
-  fn_name?: string | null;
-  action_config?: Record<string, unknown> | null;
-  trusted?: boolean;
-  created_at?: string;
-  updated_at?: string;
-  [key: string]: unknown;
-}
-
-export interface ActionExecResult {
-  action: string;
-  result: unknown;
-  success: boolean;
-  message?: string | null;
-}
-
-export function fetchActions(opts: {
-  path_prefix?: string;
-  limit?: number;
-  offset?: number;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
-  filter_field?: string;
-  filter_value?: string;
-} = {}): Promise<Page<ActionSummary>> {
-  return call(async () => {
-    const page = await getConnection().actions.list(listOptionsFromSnake(opts));
-    return pageToWire(page, actionToWire) as unknown as Page<ActionSummary>;
-  });
+export function fetchActions(opts: ListOptions = {}): Promise<Page<Action>> {
+  return call(() => getConnection().actions.list(opts));
 }
 
 // No searchActions(): solx-actions has no server-side filtering, so the
 // Actions tab scopes by path here and narrows in memory (lib/clientView.ts).
 
-export function fetchAction(path: string, name: string): Promise<ActionSummary> {
-  return call(async () => {
-    const a = await getConnection().actions.get(path, name);
-    return actionToWire(a) as unknown as ActionSummary;
-  });
+export function fetchAction(path: string, name: string): Promise<Action> {
+  return call(() => getConnection().actions.get(path, name));
 }
 
-export function createAction(input: {
-  path: string;
-  name: string;
-  description?: string;
-  caption?: string;
-  category?: string;
-  capabilities?: string[];
-  phrases?: string[];
-  param_type_ref?: string;
-  result_type_ref?: string;
-  action_type?: string;
-  bin_name?: string;
-  fn_name?: string;
-  action_config?: Record<string, unknown>;
-  files?: Array<{ name: string; relPath: string; contentType?: string }>;
-  trusted?: boolean;
-}): Promise<ActionSummary> {
+/** `actionConfig` is an arbitrary free-form blob — see `DocumentInputApp`. */
+export interface ActionInputApp extends Omit<ActionInput, "actionConfig"> {
+  actionConfig?: unknown;
+}
+
+export function createAction(
+  input: ActionInputApp & { path: string; name: string },
+): Promise<Action> {
   const { path, name, ...rest } = input;
+  const actionInput = { ...rest } as ActionInput;
   // ActionType is a lowercase enum on the Rust side ("wasm", "webhook", …).
-  const wireInput: Record<string, unknown> = { ...rest };
-  if (typeof wireInput.action_type === "string") {
-    wireInput.action_type = wireInput.action_type.toLowerCase();
+  if (typeof actionInput.actionType === "string") {
+    actionInput.actionType = actionInput.actionType.toLowerCase() as ActionInput["actionType"];
   }
-  return call(async () => {
-    const a = await getConnection().actions.save(
-      path,
-      name,
-      actionInputFromWire(wireInput) as ActionInput,
-    );
-    return actionToWire(a) as unknown as ActionSummary;
-  });
+  return call(() => getConnection().actions.save(path, name, actionInput));
 }
 
 export function deleteAction(path: string, name: string): Promise<void> {
@@ -377,10 +212,7 @@ export function execAction(
   name: string,
   params: unknown = null,
 ): Promise<ActionExecResult> {
-  return call(async () => {
-    const result = await getConnection().actions.exec(path, name, params as JsonValue);
-    return actionExecResultToWire(result) as unknown as ActionExecResult;
-  });
+  return call(() => getConnection().actions.exec(path, name, params as JsonValue));
 }
 
 /**

@@ -115,7 +115,7 @@ function TypeCard({
   const path = String(type.path ?? "/");
   const name = String(type.name ?? "Unnamed");
   const description = String(type.description ?? "").trim();
-  const updatedAt = String(type.updated_at ?? "");
+  const updatedAt = String(type.updatedAt ?? "");
   const props = (type.schema as Record<string, unknown> | undefined)?.properties as
     | Record<string, unknown>
     | undefined;

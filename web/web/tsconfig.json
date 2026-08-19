@@ -7,7 +7,6 @@
     "jsx": "react-jsx",
     "noEmit": true,
     "allowImportingTsExtensions": false,
-    "baseUrl": ".",
     "paths": {
       "@solx/http": ["../../solx-js/packages/http/src/index.ts"],
       "@solx/surface": ["../../solx-js/packages/surface/src/index.ts"]

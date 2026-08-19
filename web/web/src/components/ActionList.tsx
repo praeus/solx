@@ -118,9 +118,9 @@ function ActionCard({
   const name = String(action.name ?? "Unnamed");
   const caption = String(action.caption ?? "").trim();
   const category = String(action.category ?? "").trim();
-  const actionType = String(action.action_type ?? "").trim().toLowerCase() || "wasm";
+  const actionType = String(action.actionType ?? "").trim().toLowerCase() || "wasm";
   const trusted = Boolean(action.trusted);
-  const updatedAt = String(action.updated_at ?? "");
+  const updatedAt = String(action.updatedAt ?? "");
   const deleteMutation = useDeleteAction();
 
   const handleDelete = (e: React.MouseEvent) => {

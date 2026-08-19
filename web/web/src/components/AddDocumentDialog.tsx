@@ -27,7 +27,7 @@ export function AddDocumentDialog({ open, onClose, defaultPath, onCreated }: Pro
   const [typeRef, setTypeRef] = useState("");
   const [summary, setSummary] = useState("");
 
-  const typesQuery = useDocumentTypes();
+  const typesQuery = useDocumentTypes(500, { groups: "document-type" });
   const createMutation = useCreateDocument();
 
   // Sync default path when the dialog opens
@@ -65,9 +65,10 @@ export function AddDocumentDialog({ open, onClose, defaultPath, onCreated }: Pro
       await createMutation.mutateAsync({
         path: trimmedPath,
         name: trimmedName,
-        type_ref: typeRef || undefined,
+        typeRef,
         title: title.trim() || undefined,
         summary: summary.trim() || undefined,
+        contents: {},
       });
       onCreated?.();
       onClose();

@@ -19,7 +19,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import type { ActionSummary } from "../api/api";
+import type { ActionInputApp, ActionSummary } from "../api/api";
 import { useCreateAction, useDocumentTypes, useExecAction } from "../api/hooks";
 import { ActionRunner } from "./ActionRunner";
 import { ChipTagInput } from "./ChipTagInput";
@@ -121,12 +121,12 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
       setCapabilities(
         Array.isArray(existingEntity.capabilities) ? existingEntity.capabilities.map(String) : [],
       );
-      setParamTypeRef(String(existingEntity.param_type_ref ?? ""));
-      setResultTypeRef(String(existingEntity.result_type_ref ?? ""));
-      setActionType(String(existingEntity.action_type ?? "").toLowerCase());
-      setBinName(String(existingEntity.bin_name ?? ""));
-      setFnName(String(existingEntity.fn_name ?? ""));
-      const cfg = (existingEntity.action_config ?? {}) as Record<string, unknown>;
+      setParamTypeRef(String(existingEntity.paramTypeRef ?? ""));
+      setResultTypeRef(String(existingEntity.resultTypeRef ?? ""));
+      setActionType(String(existingEntity.actionType ?? "").toLowerCase());
+      setBinName(String(existingEntity.binName ?? ""));
+      setFnName(String(existingEntity.fnName ?? ""));
+      const cfg = (existingEntity.actionConfig ?? {}) as Record<string, unknown>;
       const mi = cfg.model_instructions;
       setModelInstructions(typeof mi === "string" ? mi : "");
       setActionConfigJson("");
@@ -244,12 +244,12 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
         category: category.trim() || undefined,
         phrases: phrases.length ? phrases : undefined,
         capabilities: capabilities.length ? capabilities : undefined,
-        param_type_ref: paramTypeRef || undefined,
-        result_type_ref: resultTypeRef || undefined,
-        action_type: actionType || undefined,
-        bin_name: binName.trim() || undefined,
-        fn_name: fnName.trim() || undefined,
-        action_config: actionConfig,
+        paramTypeRef: paramTypeRef || undefined,
+        resultTypeRef: resultTypeRef || undefined,
+        actionType: (actionType || undefined) as ActionInputApp["actionType"],
+        binName: binName.trim() || undefined,
+        fnName: fnName.trim() || undefined,
+        actionConfig: actionConfig,
         files: attachedFiles,
       });
       onSaved?.({ path: result.path, name: result.name });

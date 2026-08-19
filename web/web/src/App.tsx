@@ -54,6 +54,7 @@ import { DocumentEditorSkeleton } from "./components/DocumentEditorSkeleton";
 import type {
   ActionSummary,
   DocumentSummary,
+  SearchHit,
   TypeEntity,
 } from "./api/api";
 import {
@@ -139,19 +140,22 @@ export function App() {
   // Documents: full-text when there's a query (relevance-ranked, no sort
   // axis), plain list otherwise (sortable). Path and type narrow both.
   const docsListQuery = useDocuments({
-    path_prefix: pathPrefix || undefined,
-    filter_field: browse.typeRef ? "type_ref" : undefined,
-    filter_value: browse.typeRef || undefined,
-    sort_by: browse.sortBy,
-    sort_order: browse.sortOrder,
+    pathPrefix: pathPrefix || undefined,
+    // "type_ref" here names the solx-docs DB column filterField matches
+    // against (see solx-docs::LIST_SCHEMA) — a data value, not a wire key,
+    // so it stays snake_case regardless of this object's own casing.
+    filterField: browse.typeRef ? "type_ref" : undefined,
+    filterValue: browse.typeRef || undefined,
+    sortBy: browse.sortBy,
+    sortOrder: browse.sortOrder,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
     enabled: activeTab === "documents" && !hasQuery,
   });
   const docsSearchQuery = useSearchDocuments({
     q: query || undefined,
-    path_prefix: pathPrefix || undefined,
-    type_ref: browse.typeRef || undefined,
+    pathPrefix: pathPrefix || undefined,
+    typeRef: browse.typeRef || undefined,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
     enabled: activeTab === "documents" && hasQuery,
@@ -160,21 +164,21 @@ export function App() {
   // Actions / Types: substring filter on the column the tab declares, plus
   // path scope and sort — all pushed down to libsql.
   const actionsQuery = useActions({
-    path_prefix: pathPrefix || undefined,
-    filter_field: hasQuery ? TAB_CAPABILITIES.actions.filterField : undefined,
-    filter_value: hasQuery ? query : undefined,
-    sort_by: browse.sortBy,
-    sort_order: browse.sortOrder,
+    pathPrefix: pathPrefix || undefined,
+    filterField: hasQuery ? TAB_CAPABILITIES.actions.filterField : undefined,
+    filterValue: hasQuery ? query : undefined,
+    sortBy: browse.sortBy,
+    sortOrder: browse.sortOrder,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
     enabled: activeTab === "actions",
   });
   const typesListQuery = useTypes({
-    path_prefix: pathPrefix || undefined,
-    filter_field: hasQuery ? TAB_CAPABILITIES.types.filterField : undefined,
-    filter_value: hasQuery ? query : undefined,
-    sort_by: browse.sortBy,
-    sort_order: browse.sortOrder,
+    pathPrefix: pathPrefix || undefined,
+    filterField: hasQuery ? TAB_CAPABILITIES.types.filterField : undefined,
+    filterValue: hasQuery ? query : undefined,
+    sortBy: browse.sortBy,
+    sortOrder: browse.sortOrder,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
     enabled: activeTab === "types",
@@ -451,21 +455,13 @@ export function App() {
   );
 }
 
-function toDocumentSummary(hit: {
-  id: string;
-  path: string;
-  name: string;
-  title?: string;
-  summary?: string;
-  type_ref?: string;
-  score: number;
-}): DocumentSummary {
+function toDocumentSummary(hit: SearchHit): DocumentSummary {
   return {
     id: hit.id,
     path: hit.path,
     name: hit.name,
     title: hit.title,
     summary: hit.summary,
-    type_ref: hit.type_ref,
-  };
+    typeRef: hit.typeRef,
+  } as unknown as DocumentSummary;
 }

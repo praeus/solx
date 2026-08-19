@@ -2,8 +2,8 @@
  * React Query hooks wrapping the api.ts fetchers.
  *
  * Hook naming convention:
- *   useFoo()        — query hook
- *   useFooMutation  — mutation hook
+ *   useFoo()                          — query hook
+ *   useCreateFoo / useUpdateFoo / …   — mutation hook, named after the verb
  *
  * Each hook exposes React Query's full surface (data, isLoading, error, refetch…)
  * so callers don't need to import useQuery/useMutation directly.
@@ -59,40 +59,42 @@ export function useHealth(): UseQueryResult<HealthResponse> {
 /** ── Documents ──────────────────────────────────────────────────────── */
 
 export interface UseDocumentsOptions {
-  path_prefix?: string;
+  pathPrefix?: string;
   limit?: number;
   offset?: number;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
-  /** LIKE filter on a column — type_ref | author | title | summary | name. */
-  filter_field?: string;
-  filter_value?: string;
+  sortBy?: string;
+  sortOrder?: "asc" | "desc";
+  /** LIKE filter on a column — typeRef | author | title | summary | name. */
+  filterField?: string;
+  filterValue?: string;
   enabled?: boolean;
 }
 
 export function useDocuments(opts: UseDocumentsOptions = {}): UseQueryResult<Page<DocumentSummary>> {
+  const { enabled, ...params } = opts;
   return useQuery({
-    queryKey: ["documents", "list", opts],
-    queryFn: () => fetchDocuments(opts),
-    enabled: opts.enabled !== false,
+    queryKey: ["documents", "list", params],
+    queryFn: () => fetchDocuments(params),
+    enabled: enabled !== false,
     placeholderData: (previous) => previous,
   });
 }
 
 export interface UseSearchOptions {
   q?: string;
-  path_prefix?: string;
-  type_ref?: string;
+  pathPrefix?: string;
+  typeRef?: string;
   limit?: number;
   offset?: number;
   enabled?: boolean;
 }
 
 export function useSearchDocuments(opts: UseSearchOptions): UseQueryResult<SearchResults> {
+  const { enabled, ...params } = opts;
   return useQuery({
-    queryKey: ["documents", "search", opts],
-    queryFn: () => searchDocuments(opts),
-    enabled: opts.enabled !== false && Boolean(opts.q?.trim()),
+    queryKey: ["documents", "search", params],
+    queryFn: () => searchDocuments(params),
+    enabled: enabled !== false && Boolean(params.q?.trim()),
     placeholderData: (previous) => previous,
   });
 }
@@ -146,10 +148,17 @@ export function useDeleteDocument() {
 
 /** ── Types ──────────────────────────────────────────────────────────── */
 
-export function useDocumentTypes(limit = 200): UseQueryResult<Page<TypeEntity>> {
+export function useDocumentTypes(
+  limit = 200,
+  opts: { groups?: string } = {},
+): UseQueryResult<Page<TypeEntity>> {
+  const { groups } = opts;
   return useQuery({
-    queryKey: ["types", "list", { limit }],
-    queryFn: () => fetchTypes({ limit }),
+    queryKey: ["types", "list", { limit, groups }],
+    queryFn: () =>
+      fetchTypes(
+        groups ? { limit, filterField: "groups", filterValue: groups } : { limit },
+      ),
     staleTime: 5 * 60 * 1000,
   });
 }
@@ -181,14 +190,14 @@ export function useCreateType() {
 }
 
 export interface UseTypesBrowseOptions {
-  path_prefix?: string;
+  pathPrefix?: string;
   limit?: number;
   offset?: number;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
+  sortBy?: string;
+  sortOrder?: "asc" | "desc";
   /** LIKE filter on a column — name | description | groups. */
-  filter_field?: string;
-  filter_value?: string;
+  filterField?: string;
+  filterValue?: string;
   enabled?: boolean;
 }
 
@@ -217,26 +226,27 @@ export function useDeleteType() {
 /** ── Actions ────────────────────────────────────────────────────────── */
 
 export interface UseActionsOptions {
-  path_prefix?: string;
+  pathPrefix?: string;
   limit?: number;
   offset?: number;
-  sort_by?: string;
-  sort_order?: "asc" | "desc";
+  sortBy?: string;
+  sortOrder?: "asc" | "desc";
   /**
    * LIKE filter on a column — name | caption | description | category |
    * capabilities | phrases | action_type | param_type_ref | result_type_ref |
    * fn_name | bin_name. `action_config` is intentionally not filterable.
    */
-  filter_field?: string;
-  filter_value?: string;
+  filterField?: string;
+  filterValue?: string;
   enabled?: boolean;
 }
 
 export function useActions(opts: UseActionsOptions = {}): UseQueryResult<Page<ActionSummary>> {
+  const { enabled, ...params } = opts;
   return useQuery({
-    queryKey: ["actions", "list", opts],
-    queryFn: () => fetchActions(opts),
-    enabled: opts.enabled !== false,
+    queryKey: ["actions", "list", params],
+    queryFn: () => fetchActions(params),
+    enabled: enabled !== false,
     placeholderData: (previous) => previous,
   });
 }

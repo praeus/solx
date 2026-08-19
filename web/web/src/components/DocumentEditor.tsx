@@ -18,11 +18,11 @@
  *   - DocRef / ActionRef (matched via `$ref`, `allOf[*].$ref`, or
  *     `anyOf[*].$ref`) → name-or-id input + datalist of entity names
  *
+ * Field labels: when the schema provides a `title` annotation, that's used
+ * as the human-readable label; otherwise the JSON field name is shown.
+ *
  * Modes: Fields ↔ JSON (whole document), plus "Show helper fields"
  * which reveals `x-sol-hidden: true` fields or {chapters, metadata}.
- *
- * CompoundDocument sections: when type is `CompoundDocument` and the
- * document is persisted, list DocRef rows as clickable buttons.
  *
  * Files: instead of legacy `artifact_names`, the editor maintains a
  * `FileRef[]` (name, relPath, contentType) attached via `<FilesField>`
@@ -36,7 +36,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { searchDocuments, type DocumentSummary } from "../api/api";
+import { type DocumentSummary } from "../api/api";
 import {
   useActions,
   useCreateDocument,
@@ -51,18 +51,6 @@ import { ImageField } from "./ImageField";
 import { JsonEditField } from "./JsonEditField";
 import { RichTextField } from "./RichTextField";
 
-const DOC_BUILTIN_TYPES = new Set([
-  "Action",
-  "Document",
-  "Artifact",
-  "Type",
-  "DocRef",
-  "ActionRef",
-  "Model",
-  "ModelRole",
-  "Permission",
-  "Schedule",
-]);
 
 const FALLBACK_DOC_SCHEMA = {
   type: "object",
@@ -78,12 +66,6 @@ interface RefFieldValue {
   kind: RefKind;
   mode: "name" | "id";
   value: string;
-}
-
-interface CompoundSection {
-  name: string;
-  targetDocName: string;
-  fieldName: string;
 }
 
 interface Props {
@@ -107,9 +89,9 @@ export function DocumentEditor({
   onSaved,
 }: Props) {
   const isEdit = existing !== null;
-  const typesQuery = useDocumentTypes();
-  const documentsListQuery = useDocuments({ limit: 500, sort_by: "name", sort_order: "asc" });
-  const actionsListQuery = useActions({ limit: 500, sort_by: "name", sort_order: "asc" });
+  const typesQuery = useDocumentTypes(500, { groups: "document-type" });
+  const documentsListQuery = useDocuments({ limit: 500, sortBy: "name", sortOrder: "asc" });
+  const actionsListQuery = useActions({ limit: 500, sortBy: "name", sortOrder: "asc" });
   const createMutation = useCreateDocument();
   const updateMutation = useUpdateDocument();
 
@@ -132,7 +114,6 @@ export function DocumentEditor({
   const [docFieldValues, setDocFieldValues] = useState<Record<string, string>>({});
   const [docRefValues, setDocRefValues] = useState<Record<string, RefFieldValue>>({});
   const [attachedFiles, setAttachedFiles] = useState<FileRef[]>([]);
-  const [compoundSections, setCompoundSections] = useState<CompoundSection[]>([]);
   const [previewTab, setPreviewTab] = useState<"preview" | "json">("preview");
 
   const [error, setError] = useState<string | null>(null);
@@ -161,18 +142,13 @@ export function DocumentEditor({
       setTitle(String(existingEntity.title ?? ""));
       setSummary(String(existingEntity.summary ?? ""));
       setAuthor(String(existingEntity.author ?? ""));
-      setPubDate(String(existingEntity.pub_date ?? ""));
+      setPubDate(String(existingEntity.pubDate ?? ""));
       setConfidence(
         existingEntity.confidence != null ? String(existingEntity.confidence) : "",
       );
-      // Backend returns `typeRef` (camelCase). Strip the leading path so
-      // the type selector matches the bare name (e.g. "/types/docs/Post"
-      // → "Post"). Falls back to the raw value if the slash isn't there.
-      const rawTypeRef = String(
-        (existingEntity as Record<string, unknown>).typeRef ??
-          (existingEntity as Record<string, unknown>).type_ref ??
-          "Post",
-      );
+      // Strip the leading path so the type selector matches the bare name
+      // (e.g. "/types/docs/Post" → "Post"). Falls back to "Post" if unset.
+      const rawTypeRef = String(existingEntity.typeRef ?? "Post");
       setTypeName(rawTypeRef.replace(/^.*\//, "") || "Post");
 
       const doc = (existingEntity.contents ?? {}) as Record<string, unknown>;
@@ -245,40 +221,6 @@ export function DocumentEditor({
     () => docPropertySchema(currentDocSchema),
     [currentDocSchema],
   );
-
-  // ── CompoundDocument sections ──
-  useEffect(() => {
-    if (typeName !== "CompoundDocument" || !existing?.name) {
-      setCompoundSections([]);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const data = (await searchDocuments({ type_ref: "DocRef", limit: 50 })) as {
-          hits?: Array<{
-            name?: string;
-            target_document_name?: string;
-            field_name?: string;
-          }>;
-        };
-        if (cancelled) return;
-        const sections: CompoundSection[] = (data.hits ?? [])
-          .map((row) => ({
-            name: String(row.name ?? ""),
-            targetDocName: String(row.target_document_name ?? ""),
-            fieldName: String(row.field_name ?? ""),
-          }))
-          .filter((s) => s.targetDocName);
-        setCompoundSections(sections);
-      } catch {
-        if (!cancelled) setCompoundSections([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [typeName, existing?.name, existing?.path]);
 
   // ── Hydrate field/ref values when schema changes ──
   useEffect(() => {
@@ -409,7 +351,13 @@ export function DocumentEditor({
     setError(null);
     const trimmedPath = path.trim();
     const trimmedName = name.trim();
-    const trimmedType = typeName.trim() || "Post";
+    // Resolve the full type reference from the list entry (path + name),
+    // so types under `/types/docs/...`, `/packages/...`, etc. all round-trip
+    // correctly instead of being hard-mapped to `/builtin/types/<name>`.
+    const fullTypeRef =
+      currentTypeListEntry && currentTypeListEntry.path && currentTypeListEntry.name
+        ? `${currentTypeListEntry.path}/${currentTypeListEntry.name}`
+        : "";
     if (!trimmedPath || !trimmedName) {
       setError("Name and path are required.");
       return;
@@ -424,11 +372,11 @@ export function DocumentEditor({
           path: existing.path,
           name: existing.name,
           input: {
-            type_name: trimmedType,
+            typeRef: fullTypeRef,
             title: title.trim() || undefined,
             summary: summary.trim() || undefined,
             author: author.trim() || undefined,
-            pub_date: pubDate.trim() || undefined,
+            pubDate: pubDate.trim() || undefined,
             confidence: confidence.trim() ? Number(confidence.trim()) : undefined,
             contents: builtContents,
             files: attachedFiles,
@@ -439,11 +387,11 @@ export function DocumentEditor({
         const result = await createMutation.mutateAsync({
           path: trimmedPath,
           name: trimmedName,
-          type_name: trimmedType,
+          typeRef: fullTypeRef,
           title: title.trim() || undefined,
           summary: summary.trim() || undefined,
           author: author.trim() || undefined,
-          pub_date: pubDate.trim() || undefined,
+          pubDate: pubDate.trim() || undefined,
           confidence: confidence.trim() ? Number(confidence.trim()) : undefined,
           contents: builtContents,
           files: attachedFiles,
@@ -467,7 +415,7 @@ export function DocumentEditor({
       summary,
       contents: builtContents,
       files: attachedFiles,
-    } as DocumentSummary;
+    } as unknown as DocumentSummary;
   }, [existingEntity, path, name, title, summary, builtContents, attachedFiles]);
 
   if (!open) return null;
@@ -571,11 +519,6 @@ export function DocumentEditor({
                     </option>
                   ))}
                 </select>
-                {DOC_BUILTIN_TYPES.has(typeName) && (
-                  <div className="dialog__hint">
-                    Type "{typeName}" is a built-in entity type and may not include a document schema.
-                  </div>
-                )}
               </div>
 
               <div className="form-field">
@@ -605,31 +548,6 @@ export function DocumentEditor({
               </div>
 
               <div className="doc-editor-section-sep">Contents</div>
-
-              {typeName === "CompoundDocument" && compoundSections.length > 0 && (
-                <div className="form-field">
-                  <label className="form-label">
-                    Sections ({compoundSections.length})
-                  </label>
-                  <div className="doc-editor-compound-list">
-                    {compoundSections.map((section, index) => (
-                      <button
-                        key={`${section.name}-${index}`}
-                        type="button"
-                        className="doc-editor-compound-item"
-                        title={`Open ${section.targetDocName}`}
-                      >
-                        <span className="doc-editor-compound-item__label">
-                          {section.fieldName || `Section ${index + 1}`}
-                        </span>
-                        <span className="doc-editor-compound-item__target">
-                          {section.targetDocName}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
 
               <div className="doc-editor-mode-toggle">
                 <button
@@ -939,7 +857,7 @@ function renderDocField(ctx: FieldRenderContext) {
     return (
       <div key={fieldName} className="form-field">
         <label className="form-label" style={{ textTransform: "none", letterSpacing: 0 }}>
-          {label} <span className="dialog__hint">rich_text</span>
+          {label}
         </label>
         <RichTextField
           value={docFieldValues[fieldName] ?? ""}
@@ -996,7 +914,7 @@ function renderDocField(ctx: FieldRenderContext) {
     return (
       <div key={fieldName} className="form-field">
         <label className="form-label" style={{ textTransform: "none", letterSpacing: 0 }}>
-          {label} <span className="dialog__hint">{fieldType}</span>
+          {label}
         </label>
         <JsonEditField
           value={docFieldValues[fieldName] ?? ""}
@@ -1019,7 +937,7 @@ function renderDocField(ctx: FieldRenderContext) {
   return (
     <div key={fieldName} className="form-field">
       <label className="form-label" style={{ textTransform: "none", letterSpacing: 0 }}>
-        {label} <span className="dialog__hint">{fieldType}</span>
+        {label}
       </label>
       <textarea
         className="form-textarea"

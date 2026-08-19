@@ -1,8 +1,10 @@
 /**
  * TabBar — entity type tabs across the top.
  *
- * For now, only Documents is active. The other tabs are rendered as
- * disabled placeholders with a "Coming soon" tooltip.
+ * All four tabs (Documents, Actions, Types, Files) are live. `enabled` is
+ * kept on `TabDefinition` so a caller can pass a custom tab set with some
+ * entries disabled — a disabled tab renders dimmed and unclickable with a
+ * "Coming soon" tooltip.
  */
 
 import type { CSSProperties } from "react";
