@@ -146,3 +146,15 @@ export interface ActionExecResult {
   success: boolean;
   message?: string;
 }
+
+// ---------- WidgetDescriptor ----------
+
+/** Returned by `widget_open` / `loopback::widget::open` (solx-actions). */
+export interface WidgetDescriptor {
+  widgetId: string;
+  tagName: string;
+  entryUrl: string;
+  wsUrl: string;
+  token: string;
+  fields?: JsonValue;
+}
