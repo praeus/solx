@@ -15,7 +15,7 @@ import type {
   ListOptions,
   Page,
 } from '@solx/surface';
-import { postJson } from './fetch.js';
+import { entityPath, requestJson, type QueryValue } from './fetch.js';
 
 interface FileRefSnake {
   name: string;
@@ -120,9 +120,9 @@ function pageFromSnake<T, S>(s: PageSnake<S>, fromSnake: (x: S) => T): Page<T> {
   return { items: s.items.map(fromSnake), total: s.total, limit: s.limit, offset: s.offset };
 }
 
-function listOptionsToSnake(opts?: ListOptions): Record<string, JsonValue> {
+function listOptionsToSnake(opts?: ListOptions): Record<string, QueryValue> {
   if (!opts) return {};
-  const out: Record<string, JsonValue> = {};
+  const out: Record<string, QueryValue> = {};
   if (opts.pathPrefix !== undefined) out['path_prefix'] = opts.pathPrefix;
   if (opts.limit !== undefined) out['limit'] = opts.limit;
   if (opts.offset !== undefined) out['offset'] = opts.offset;
@@ -147,43 +147,55 @@ export class HttpActionManager implements ActionManagerIface {
   ) {}
 
   async save(path: string, name: string, input: ActionInput): Promise<Action> {
-    const s = await postJson<unknown, ActionSnake>(this.baseUrl, this.token, '/actions/save', {
-      path,
-      name,
-      input: actionInputToSnake(input),
-    });
+    const s = await requestJson<ActionSnake>(
+      this.baseUrl,
+      this.token,
+      'PUT',
+      entityPath('actions', path, name),
+      { body: actionInputToSnake(input) },
+    );
     return actionFromSnake(s);
   }
 
   async get(path: string, name: string): Promise<Action> {
-    const s = await postJson<unknown, ActionSnake>(this.baseUrl, this.token, '/actions/get', {
-      path,
-      name,
-    });
+    const s = await requestJson<ActionSnake>(
+      this.baseUrl,
+      this.token,
+      'GET',
+      entityPath('actions', path, name),
+    );
     return actionFromSnake(s);
   }
 
   async delete(path: string, name: string): Promise<void> {
-    await postJson<unknown, unknown>(this.baseUrl, this.token, '/actions/delete', { path, name });
+    await requestJson<void>(this.baseUrl, this.token, 'DELETE', entityPath('actions', path, name));
   }
 
   async list(opts?: ListOptions): Promise<Page<Action>> {
-    const s = await postJson<unknown, PageSnake<ActionSnake>>(
+    const s = await requestJson<PageSnake<ActionSnake>>(
       this.baseUrl,
       this.token,
-      '/actions/list',
-      listOptionsToSnake(opts),
+      'GET',
+      '/actions',
+      { query: listOptionsToSnake(opts) },
     );
     return pageFromSnake(s, actionFromSnake);
   }
 
+  /**
+   * `POST` on the action's own URL, with the params as the body — the same
+   * path pattern as the CRUD routes, distinguished only by method.
+   *
+   * `action`/`result`/`success`/`message` are all single-word field names,
+   * so no snake_case<->camelCase conversion is needed on the result.
+   */
   async exec(path: string, name: string, params: JsonValue = {}): Promise<ActionExecResult> {
-    // `action`/`result`/`success`/`message` are all single-word field
-    // names — no snake_case<->camelCase conversion needed.
-    return postJson<unknown, ActionExecResult>(this.baseUrl, this.token, '/actions/exec', {
-      path,
-      name,
-      params,
-    });
+    return requestJson<ActionExecResult>(
+      this.baseUrl,
+      this.token,
+      'POST',
+      entityPath('actions', path, name),
+      { body: params },
+    );
   }
 }

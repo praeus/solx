@@ -149,12 +149,20 @@ export interface ActionExecResult {
 
 // ---------- WidgetDescriptor ----------
 
-/** Returned by `widget_open` / `loopback::widget::open` (solx-actions). */
+/**
+ * Result shape of an action that renders a UI. An action marks itself as a
+ * widget by setting `resultTypeRef` to `/builtin/types/WidgetDescriptor`;
+ * there is no widget runtime on the backend. The frontend fetches the bundle
+ * with `files.get(bin_name)`, mounts `<tag_name>`, and hands it `fields`; the
+ * widget then talks back by invoking actions over the ordinary HTTP API.
+ *
+ * snake_case, unlike the entity types above, and deliberately so: this rides
+ * inside `ActionExecResult.result`, which `@solx/http` passes through
+ * verbatim with no case conversion (see the `exec` doc comment in
+ * `packages/http/src/actions.ts`).
+ */
 export interface WidgetDescriptor {
-  widgetId: string;
-  tagName: string;
-  entryUrl: string;
-  wsUrl: string;
-  token: string;
+  tag_name: string;
+  bin_name: string;
   fields?: JsonValue;
 }

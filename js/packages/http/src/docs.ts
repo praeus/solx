@@ -17,7 +17,7 @@ import type {
   SearchQuery,
   SearchResults,
 } from '@solx/surface';
-import { postJson } from './fetch.js';
+import { entityPath, requestJson, type QueryValue } from './fetch.js';
 
 interface FileRefSnake {
   name: string;
@@ -141,8 +141,8 @@ function searchResultsFromSnake(s: SearchResultsSnake): SearchResults {
   return { hits: s.hits.map(searchHitFromSnake), total: s.total, limit: s.limit, offset: s.offset };
 }
 
-function searchQueryToSnake(query: SearchQuery): Record<string, JsonValue> {
-  const out: Record<string, JsonValue> = {};
+function searchQueryToSnake(query: SearchQuery): Record<string, QueryValue> {
+  const out: Record<string, QueryValue> = {};
   if (query.q !== undefined) out['q'] = query.q;
   if (query.pathPrefix !== undefined) out['path_prefix'] = query.pathPrefix;
   if (query.typeRef !== undefined) out['type_ref'] = query.typeRef;
@@ -156,9 +156,9 @@ function pageFromSnake<T, S>(s: PageSnake<S>, fromSnake: (x: S) => T): Page<T> {
   return { items: s.items.map(fromSnake), total: s.total, limit: s.limit, offset: s.offset };
 }
 
-function listOptionsToSnake(opts?: ListOptions): Record<string, JsonValue> {
+function listOptionsToSnake(opts?: ListOptions): Record<string, QueryValue> {
   if (!opts) return {};
-  const out: Record<string, JsonValue> = {};
+  const out: Record<string, QueryValue> = {};
   if (opts.pathPrefix !== undefined) out['path_prefix'] = opts.pathPrefix;
   if (opts.limit !== undefined) out['limit'] = opts.limit;
   if (opts.offset !== undefined) out['offset'] = opts.offset;
@@ -183,42 +183,53 @@ export class HttpDocManager implements DocManagerIface {
   ) {}
 
   async save(path: string, name: string, input: DocumentInput): Promise<Document> {
-    const s = await postJson<unknown, DocumentSnake>(this.baseUrl, this.token, '/docs/save', {
-      path,
-      name,
-      input: documentInputToSnake(input),
-    });
+    const s = await requestJson<DocumentSnake>(
+      this.baseUrl,
+      this.token,
+      'PUT',
+      entityPath('docs', path, name),
+      { body: documentInputToSnake(input) },
+    );
     return documentFromSnake(s);
   }
 
   async get(path: string, name: string): Promise<Document> {
-    const s = await postJson<unknown, DocumentSnake>(this.baseUrl, this.token, '/docs/get', {
-      path,
-      name,
-    });
+    const s = await requestJson<DocumentSnake>(
+      this.baseUrl,
+      this.token,
+      'GET',
+      entityPath('docs', path, name),
+    );
     return documentFromSnake(s);
   }
 
   async delete(path: string, name: string): Promise<void> {
-    await postJson<unknown, unknown>(this.baseUrl, this.token, '/docs/delete', { path, name });
+    await requestJson<void>(this.baseUrl, this.token, 'DELETE', entityPath('docs', path, name));
   }
 
   async list(opts?: ListOptions): Promise<Page<Document>> {
-    const s = await postJson<unknown, PageSnake<DocumentSnake>>(
+    const s = await requestJson<PageSnake<DocumentSnake>>(
       this.baseUrl,
       this.token,
-      '/docs/list',
-      listOptionsToSnake(opts),
+      'GET',
+      '/docs',
+      { query: listOptionsToSnake(opts) },
     );
     return pageFromSnake(s, documentFromSnake);
   }
 
+  /**
+   * `GET /search` — a top-level route rather than `/docs/search`, which as a
+   * static sibling of the `/docs/{*ref}` catch-all would shadow any document
+   * named `search` at the root.
+   */
   async search(query: SearchQuery): Promise<SearchResults> {
-    const s = await postJson<unknown, SearchResultsSnake>(
+    const s = await requestJson<SearchResultsSnake>(
       this.baseUrl,
       this.token,
-      '/docs/search',
-      searchQueryToSnake(query),
+      'GET',
+      '/search',
+      { query: searchQueryToSnake(query) },
     );
     return searchResultsFromSnake(s);
   }

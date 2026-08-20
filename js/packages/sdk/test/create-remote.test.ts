@@ -2,8 +2,8 @@
  * Round-trip test for `createSolx` in **client (remote) mode**.
  *
  * Spins up a minimal in-process HTTP server that speaks the same wire
- * contract as `solx-server` (bearer-token auth; `POST /<module>/<verb>`
- * with the request/response DTOs from `solx-surface::wire`) and points
+ * contract as `solx-server` (bearer-token auth; REST routes keyed on
+ * method + `/<resource>/<ref>`, with raw bytes for file content) and points
  * `createSolx({ serverUrl, serverToken })` at it. This exercises the
  * Rust `solx_client::Remote*` path end-to-end through Neon — construct
  * via `.connect()`, dispatch a real HTTP round trip — without needing
@@ -67,23 +67,34 @@ interface DocumentSnake {
   updated_at: string;
 }
 
-function readJsonBody(req: Parameters<Parameters<typeof createServer>[0]>[0]): Promise<any> {
+function readBody(req: Parameters<Parameters<typeof createServer>[0]>[0]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
-    req.on('end', () => {
-      const raw = Buffer.concat(chunks).toString('utf8');
-      resolve(raw ? JSON.parse(raw) : {});
-    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
 }
 
-/** Minimal stand-in for solx-server: bearer auth + a handful of routes. */
+/**
+ * Split a request path into its resource and the `(path, name)` the entity
+ * routes carry in the URL — the client side of `solx_surface::path::split_ref`.
+ * `/docs/notes/remote-note` -> `('docs', '/notes', 'remote-note')`;
+ * `/docs/note` -> `('docs', '/', 'note')`.
+ */
+function splitUrl(url: string): { resource: string; path: string; name: string; rest: string } {
+  const segments = url.split('?')[0]!.split('/').filter((s) => s.length > 0).map(decodeURIComponent);
+  const resource = segments.shift() ?? '';
+  const name = segments.pop() ?? '';
+  const path = segments.length > 0 ? `/${segments.join('/')}` : '/';
+  return { resource, path, name, rest: [...segments, name].join('/') };
+}
+
+/** Minimal stand-in for solx-server: bearer auth + a handful of REST routes. */
 function startMockServer(): Promise<{ server: Server; url: string }> {
   const types = new Map<string, TypeEntitySnake>();
   const docs = new Map<string, DocumentSnake>();
-  const files = new Map<string, string>();
+  const files = new Map<string, Buffer>();
 
   return new Promise((resolve) => {
     const server = createServer((req, res) => {
@@ -95,99 +106,101 @@ function startMockServer(): Promise<{ server: Server; url: string }> {
           return;
         }
 
-        const body = await readJsonBody(req);
+        const raw = await readBody(req);
+        const { resource, path, name, rest } = splitUrl(req.url ?? '');
+        const method = req.method ?? 'GET';
+        const json = () => JSON.parse(raw.toString('utf8') || '{}');
+        const notFound = (what: string) => {
+          res.writeHead(404, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ kind: 'not_found', message: `${what} not found` }));
+        };
         res.setHeader('content-type', 'application/json');
 
-        switch (req.url) {
-          case '/types/save': {
-            const key = `${body.path}/${body.name}`;
-            const entity: TypeEntitySnake = {
-              id: types.get(key)?.id ?? randomUUID(),
-              path: body.path,
-              name: body.name,
-              description: body.input.description,
-              schema: body.input.schema,
-              groups: body.input.groups ?? [],
-              created_at: NOW_ISO,
-              updated_at: NOW_ISO,
-            };
-            types.set(key, entity);
-            res.end(JSON.stringify(entity));
+        // Files carry raw bytes rather than JSON, so they come first.
+        if (resource === 'files') {
+          if (method === 'PUT') {
+            files.set(rest, raw);
+            res.end(JSON.stringify({ rel_path: rest }));
             return;
           }
-          case '/types/get': {
-            const entity = types.get(`${body.path}/${body.name}`);
-            if (!entity) {
-              res.writeHead(404);
-              res.end(JSON.stringify({ kind: 'not_found', message: 'type not found' }));
-              return;
-            }
-            res.end(JSON.stringify(entity));
+          if (method === 'GET') {
+            const bytes = files.get(rest);
+            if (bytes === undefined) return notFound('file');
+            res.setHeader('content-type', 'application/octet-stream');
+            res.end(bytes);
             return;
-          }
-          case '/docs/save': {
-            const key = `${body.path}/${body.name}`;
-            const doc: DocumentSnake = {
-              id: docs.get(key)?.id ?? randomUUID(),
-              path: body.path,
-              name: body.name,
-              title: body.input.title,
-              summary: body.input.summary,
-              type_ref: body.input.type_ref,
-              contents: body.input.contents,
-              author: body.input.author,
-              pub_date: body.input.pub_date,
-              confidence: body.input.confidence,
-              links: body.input.links ?? [],
-              files: body.input.files ?? [],
-              created_at: NOW_ISO,
-              updated_at: NOW_ISO,
-            };
-            docs.set(key, doc);
-            res.end(JSON.stringify(doc));
-            return;
-          }
-          case '/docs/get': {
-            const doc = docs.get(`${body.path}/${body.name}`);
-            if (!doc) {
-              res.writeHead(404);
-              res.end(JSON.stringify({ kind: 'not_found', message: 'doc not found' }));
-              return;
-            }
-            res.end(JSON.stringify(doc));
-            return;
-          }
-          case '/files/put': {
-            files.set(body.rel_path, body.bytes_b64);
-            res.end(JSON.stringify({ rel_path: body.rel_path }));
-            return;
-          }
-          case '/files/get': {
-            const bytes_b64 = files.get(body.rel_path);
-            if (bytes_b64 === undefined) {
-              res.writeHead(404);
-              res.end(JSON.stringify({ kind: 'not_found', message: 'file not found' }));
-              return;
-            }
-            res.end(JSON.stringify({ bytes_b64 }));
-            return;
-          }
-          case '/actions/exec': {
-            res.end(
-              JSON.stringify({
-                action: `${body.path}/${body.name}`,
-                result: { echoedParams: body.params },
-                success: true,
-                message: null,
-              }),
-            );
-            return;
-          }
-          default: {
-            res.writeHead(404);
-            res.end(JSON.stringify({ kind: 'not_found', message: `no mock route for ${req.url}` }));
           }
         }
+
+        const key = `${path === '/' ? '' : path}/${name}`;
+
+        if (resource === 'types' && method === 'PUT') {
+          const input = json();
+          const entity: TypeEntitySnake = {
+            id: types.get(key)?.id ?? randomUUID(),
+            path,
+            name,
+            description: input.description,
+            schema: input.schema,
+            groups: input.groups ?? [],
+            created_at: NOW_ISO,
+            updated_at: NOW_ISO,
+          };
+          types.set(key, entity);
+          res.end(JSON.stringify(entity));
+          return;
+        }
+        if (resource === 'types' && method === 'GET') {
+          const entity = types.get(key);
+          if (!entity) return notFound('type');
+          res.end(JSON.stringify(entity));
+          return;
+        }
+        if (resource === 'docs' && method === 'PUT') {
+          const input = json();
+          const doc: DocumentSnake = {
+            id: docs.get(key)?.id ?? randomUUID(),
+            path,
+            name,
+            title: input.title,
+            summary: input.summary,
+            type_ref: input.type_ref,
+            contents: input.contents,
+            author: input.author,
+            pub_date: input.pub_date,
+            confidence: input.confidence,
+            links: input.links ?? [],
+            files: input.files ?? [],
+            created_at: NOW_ISO,
+            updated_at: NOW_ISO,
+          };
+          docs.set(key, doc);
+          res.end(JSON.stringify(doc));
+          return;
+        }
+        if (resource === 'docs' && method === 'GET') {
+          const doc = docs.get(key);
+          if (!doc) return notFound('doc');
+          res.end(JSON.stringify(doc));
+          return;
+        }
+        // POST on an action's own URL executes it, with the params as body.
+        if (resource === 'actions' && method === 'POST') {
+          res.end(
+            JSON.stringify({
+              action: key,
+              result: { echoedParams: json() },
+              success: true,
+              message: null,
+            }),
+          );
+          return;
+        }
+
+        res.writeHead(404);
+        res.end(
+          JSON.stringify({ kind: 'not_found', message: `no mock route for ${method} ${req.url}` }),
+        );
       })();
     });
     server.listen(0, '127.0.0.1', () => {

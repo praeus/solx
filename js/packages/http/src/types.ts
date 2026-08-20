@@ -13,7 +13,8 @@ import type {
   TypeInput,
   TypeManager as TypeManagerIface,
 } from '@solx/surface';
-import { postJson } from './fetch.js';
+import { Ref } from '@solx/surface';
+import { entityPath, requestJson, type QueryValue } from './fetch.js';
 
 interface TypeEntitySnake {
   id: string;
@@ -63,9 +64,9 @@ function pageFromSnake<T, S>(s: PageSnake<S>, fromSnake: (x: S) => T): Page<T> {
   return { items: s.items.map(fromSnake), total: s.total, limit: s.limit, offset: s.offset };
 }
 
-function listOptionsToSnake(opts?: ListOptions): Record<string, JsonValue> {
+function listOptionsToSnake(opts?: ListOptions): Record<string, QueryValue> {
   if (!opts) return {};
-  const out: Record<string, JsonValue> = {};
+  const out: Record<string, QueryValue> = {};
   if (opts.pathPrefix !== undefined) out['path_prefix'] = opts.pathPrefix;
   if (opts.limit !== undefined) out['limit'] = opts.limit;
   if (opts.offset !== undefined) out['offset'] = opts.offset;
@@ -91,50 +92,57 @@ export class HttpTypeManager implements TypeManagerIface {
   ) {}
 
   async save(path: string, name: string, input: TypeInput): Promise<TypeEntity> {
-    const s = await postJson<unknown, TypeEntitySnake>(this.baseUrl, this.token, '/types/save', {
-      path,
-      name,
-      input: inputToSnake(input),
-    });
+    const s = await requestJson<TypeEntitySnake>(
+      this.baseUrl,
+      this.token,
+      'PUT',
+      entityPath('types', path, name),
+      { body: inputToSnake(input) },
+    );
     return entityFromSnake(s);
   }
 
   async get(path: string, name: string): Promise<TypeEntity> {
-    const s = await postJson<unknown, TypeEntitySnake>(this.baseUrl, this.token, '/types/get', {
-      path,
-      name,
-    });
+    const s = await requestJson<TypeEntitySnake>(
+      this.baseUrl,
+      this.token,
+      'GET',
+      entityPath('types', path, name),
+    );
     return entityFromSnake(s);
   }
 
   async delete(path: string, name: string): Promise<void> {
-    await postJson<unknown, unknown>(this.baseUrl, this.token, '/types/delete', { path, name });
+    await requestJson<void>(this.baseUrl, this.token, 'DELETE', entityPath('types', path, name));
   }
 
   async list(opts?: ListOptions): Promise<Page<TypeEntity>> {
-    const s = await postJson<unknown, PageSnake<TypeEntitySnake>>(
+    const s = await requestJson<PageSnake<TypeEntitySnake>>(
       this.baseUrl,
       this.token,
-      '/types/list',
-      listOptionsToSnake(opts),
+      'GET',
+      '/types',
+      { query: listOptionsToSnake(opts) },
     );
     return pageFromSnake(s, entityFromSnake);
   }
 
+  /**
+   * Resolved client-side: `resolve` is defined as a ref split plus a `get`,
+   * which `GET /types/{*ref}` already is — so there's no route for it.
+   */
   async resolve(typeRef: string): Promise<TypeEntity> {
-    const s = await postJson<unknown, TypeEntitySnake>(
-      this.baseUrl,
-      this.token,
-      '/types/resolve',
-      { type_ref: typeRef },
-    );
-    return entityFromSnake(s);
+    const { path, name } = Ref.split(typeRef);
+    return this.get(path, name);
   }
 
+  /**
+   * `POST /validate` — top-level for the same reason document search is; see
+   * `HttpDocManager.search`. Answers `204` on success, `422` on failure.
+   */
   async validate(value: JsonValue, typeRef: string): Promise<void> {
-    await postJson<unknown, unknown>(this.baseUrl, this.token, '/types/validate', {
-      value,
-      type_ref: typeRef,
+    await requestJson<void>(this.baseUrl, this.token, 'POST', '/validate', {
+      body: { value, type_ref: typeRef },
     });
   }
 }
