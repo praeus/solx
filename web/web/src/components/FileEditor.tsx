@@ -7,32 +7,19 @@
  *   - Create mode (no path), which itself offers two ways to produce
  *     content:
  *       - "From disk" — a file picker + relPath field + Upload button.
- *       - "New text file" — relPath field + language picker + a Monaco
- *         editor, for authoring a `.solx` script, note, or JSON fixture
- *         directly without leaving the browser (mirrors old sol-browser's
- *         `TextArtifactDialog`).
+ *       - "New text file" — relPath field + language picker + a
+ *         CodeMirror editor, for authoring a `.solx` script, note, or JSON
+ *         fixture directly without leaving the browser (mirrors old
+ *         sol-browser's `TextArtifactDialog`).
  *
  * Both create-mode paths end in the same `uploadFile` call and close the
  * dialog on success. Open mode is download-only.
  */
 
-import Editor from "@monaco-editor/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeleteFile, useFileContent, useUploadFile } from "../api/hooks";
-
-const LANGUAGE_OPTIONS = [
-  { label: "Plain Text", monaco: "plaintext" },
-  { label: "Markdown", monaco: "markdown" },
-  { label: "JSON", monaco: "json" },
-  { label: "solx script", monaco: "plaintext" },
-  { label: "HTML", monaco: "html" },
-  { label: "CSS", monaco: "css" },
-  { label: "JavaScript", monaco: "javascript" },
-  { label: "TypeScript", monaco: "typescript" },
-  { label: "Python", monaco: "python" },
-  { label: "YAML", monaco: "yaml" },
-  { label: "XML", monaco: "xml" },
-] as const;
+import { CodeEditField } from "./CodeEditField";
+import { LANGUAGE_OPTIONS, type LanguageId } from "./codemirror/languages";
 
 interface Props {
   open: boolean;
@@ -58,17 +45,7 @@ export function FileEditor({ open, onClose, relPath, defaultRelPath, onUploaded,
   // Create-mode source picker: disk upload vs. authoring text inline.
   const [createMode, setCreateMode] = useState<"upload" | "text">("upload");
   const [textContent, setTextContent] = useState("");
-  const [langIdx, setLangIdx] = useState(0);
-  const [monacoTheme, setMonacoTheme] = useState<"vs" | "vs-dark">("vs");
-
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return;
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    setMonacoTheme(mq.matches ? "vs-dark" : "vs");
-    const listener = (e: MediaQueryListEvent) => setMonacoTheme(e.matches ? "vs-dark" : "vs");
-    mq.addEventListener("change", listener);
-    return () => mq.removeEventListener("change", listener);
-  }, []);
+  const [language, setLanguage] = useState<LanguageId>("plaintext");
 
   // Reset when the dialog opens.
   useEffect(() => {
@@ -79,7 +56,7 @@ export function FileEditor({ open, onClose, relPath, defaultRelPath, onUploaded,
       setRelPathInput(defaultRelPath ?? "files/shared/");
       setCreateMode("upload");
       setTextContent("");
-      setLangIdx(0);
+      setLanguage("plaintext");
     }
   }, [open, isOpen, defaultRelPath]);
 
@@ -286,11 +263,11 @@ export function FileEditor({ open, onClose, relPath, defaultRelPath, onUploaded,
                     <label className="dialog__label">Language</label>
                     <select
                       className="form-input"
-                      value={langIdx}
-                      onChange={(e) => setLangIdx(Number(e.target.value))}
+                      value={language}
+                      onChange={(e) => setLanguage(e.target.value as LanguageId)}
                     >
-                      {LANGUAGE_OPTIONS.map((l, i) => (
-                        <option key={`${l.label}-${i}`} value={i}>
+                      {LANGUAGE_OPTIONS.map((l) => (
+                        <option key={l.id} value={l.id}>
                           {l.label}
                         </option>
                       ))}
@@ -298,26 +275,14 @@ export function FileEditor({ open, onClose, relPath, defaultRelPath, onUploaded,
                   </div>
                   <div className="dialog__field">
                     <label className="dialog__label">Content</label>
-                    <div
-                      style={{
-                        borderRadius: "var(--radius)",
-                        overflow: "hidden",
-                        border: "1px solid var(--border)",
-                      }}
-                    >
-                      <Editor
-                        height="320px"
-                        language={LANGUAGE_OPTIONS[langIdx].monaco}
-                        theme={monacoTheme}
+                    <div className="file-editor__code">
+                      <CodeEditField
                         value={textContent}
-                        onChange={(v) => setTextContent(v ?? "")}
-                        options={{
-                          minimap: { enabled: false },
-                          fontSize: 13,
-                          scrollBeyondLastLine: false,
-                          tabSize: 2,
-                          wordWrap: "on",
-                        }}
+                        onChange={setTextContent}
+                        language={language}
+                        height="clamp(180px, 42vh, 320px)"
+                        placeholder="File contents…"
+                        ariaLabel="File contents"
                       />
                     </div>
                   </div>

@@ -5,7 +5,11 @@
 .app {
   display: flex;
   flex-direction: column;
+  /* `dvh` tracks the *visible* viewport as mobile browser chrome shows and
+     hides. `100vh` on a phone is the tall, static value, which pushes the
+     footer and the FABs below the fold. `vh` first as the fallback. */
   height: 100vh;
+  height: 100dvh;
   background: var(--bg);
   color: var(--text);
   position: relative;
@@ -14,7 +18,10 @@
 .app-main {
   flex: 1;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   padding: 0 16px 96px;
+  /* Clear the FABs *and* the iPhone home indicator. */
+  padding-bottom: calc(96px + env(safe-area-inset-bottom));
 }
 
 .app-empty-tab {
@@ -450,7 +457,7 @@
 
 .app-fab {
   position: fixed;
-  bottom: 20px;
+  bottom: calc(20px + env(safe-area-inset-bottom));
   width: 52px;
   height: 52px;
   border-radius: 50%;
@@ -471,11 +478,11 @@
 }
 
 .app-fab--left {
-  left: 20px;
+  left: calc(20px + env(safe-area-inset-left));
 }
 
 .app-fab--right {
-  right: 20px;
+  right: calc(20px + env(safe-area-inset-right));
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -1198,9 +1205,75 @@
   min-height: 0;
 }
 
+/* Narrow-viewport pane switch — hidden wherever both panes fit. */
+.doc-editor-pane-switch {
+  display: none;
+}
+
+/* Below 880px the two panes no longer fit side by side. Stacking them is
+   the obvious move and the wrong one: it buries the preview twenty-odd
+   fields below the form and breaks the edit-and-watch loop the split view
+   exists for. Instead show one pane at a time behind a segmented control.
+   Both panes stay mounted — this only toggles `display` — so switching
+   never costs an editor its cursor, selection or undo history. */
 @media (max-width: 880px) {
   .doc-editor-layout {
     grid-template-columns: 1fr;
+  }
+
+  .doc-editor-layout[data-mobile-pane="form"] .doc-editor-pane--preview,
+  .doc-editor-layout[data-mobile-pane="preview"] .doc-editor-pane:not(.doc-editor-pane--preview) {
+    display: none;
+  }
+
+  .doc-editor-layout {
+    /* Drop the 100% height: the switch above now shares this column, and a
+       fixed-height child plus a sibling overflows the body. */
+    height: auto;
+  }
+
+  .doc-editor-pane {
+    /* Sole pane now, so it owns the full width rather than half a grid.
+       Crucially it also stops scrolling itself — `.dialog__body` becomes
+       the single scroller. Two nested vertical scrollers is how touch
+       scrolling ends up trapped in the inner one. */
+    padding-right: 0;
+    overflow-y: visible;
+  }
+
+  /* The skeleton mirrors the real editor, which is single-pane from here. */
+  .dialog-skeleton__body {
+    grid-template-columns: 1fr;
+  }
+
+  .dialog-skeleton__pane--right {
+    display: none;
+  }
+
+  .doc-editor-pane-switch {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    margin-bottom: 12px;
+    background: var(--bg-sunken);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+
+  .doc-editor-pane-switch__btn {
+    flex: 1;
+    min-height: 44px;
+    border-radius: calc(var(--radius) - 2px);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-muted);
+    transition: background 120ms ease, color 120ms ease;
+  }
+
+  .doc-editor-pane-switch__btn--active {
+    background: var(--bg);
+    color: var(--text);
+    box-shadow: var(--shadow-sm);
   }
 }
 
@@ -1209,7 +1282,11 @@
   flex-direction: column;
   gap: 14px;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   padding-right: 8px;
+  /* Without this a grid child refuses to shrink below its content width,
+     which is how a long path or a wide preview drags the dialog sideways. */
+  min-width: 0;
 }
 
 .doc-editor-pane--preview {
@@ -1217,6 +1294,11 @@
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 16px;
+  /* Previews run the type's own EJS template, so the markup inside is
+     arbitrary and cannot be made responsive from here. Containing it is
+     the next best thing: a wide table scrolls within the pane instead of
+     putting the whole page into horizontal scroll. */
+  overflow-x: auto;
 }
 
 .doc-editor-pane--preview h1,
@@ -1417,6 +1499,30 @@
 }
 
 /* ──────────────────────────────────────────────────────────────────────
+ * CodeEditField (shared CodeMirror 6 surface)
+ *
+ * Colours, sizing and the focus ring come from `codemirror/theme.ts` so
+ * they can follow `prefers-color-scheme` at runtime; only box model and
+ * containment live here.
+ * ────────────────────────────────────────────────────────────────────── */
+
+.code-edit-field {
+  display: block;
+  min-width: 0;
+}
+
+.code-edit-field .cm-editor {
+  /* The theme paints its own focus ring inside the editor bounds. */
+  outline: none;
+}
+
+.file-editor__code {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
  * JsonEditField (CodeMirror)
  * ────────────────────────────────────────────────────────────────────── */
 
@@ -1436,17 +1542,6 @@
 
 .json-edit-field__editor .cm-editor {
   outline: none;
-}
-
-.json-edit-field__placeholder {
-  position: absolute;
-  top: 8px;
-  left: 60px;
-  color: var(--text-faint);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  pointer-events: none;
-  font-style: italic;
 }
 
 .json-edit-field__status {
@@ -1905,8 +2000,15 @@
 .blog-preview__comment-meta {
   display: flex;
   gap: 8px;
-  align-items: baseline;
+  align-items: center;
   font-size: 12px;
+}
+
+.blog-preview__comment-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius);
+  object-fit: cover;
 }
 
 .blog-preview__comment-date {
@@ -2016,4 +2118,228 @@
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Touch and small-screen adaptations
+ *
+ * Three concerns, deliberately keyed off three different queries rather
+ * than one breakpoint, because they are not the same population:
+ *
+ *   (hover: none)     — no hover, so nothing may appear *only* on hover.
+ *   (pointer: coarse) — finger-sized hit targets.
+ *   (max-width: …)    — layout that has genuinely run out of room.
+ *
+ * A touch laptop matches the first two but not the third; a narrow
+ * desktop window matches only the third. Collapsing them into one query
+ * would get both cases wrong.
+ * ────────────────────────────────────────────────────────────────────── */
+
+/* ── Hover-revealed controls ──
+   These sit at `opacity: 0` until their row is hovered. Without hover
+   they would stay invisible while remaining fully tappable — an invisible
+   live delete button, which is worse than no button at all. */
+@media (hover: none) {
+  .doc-card__delete,
+  .file-list-row__delete {
+    opacity: 1;
+  }
+}
+
+/* ── Touch targets ──
+   Under ~44px a control is unreliable beneath a fingertip. Expressed as
+   min-width/min-height so only the hit area grows; the visual weight of
+   the chrome is unchanged. */
+@media (pointer: coarse) {
+  .dialog__close,
+  .doc-list-pagination__btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .doc-card__delete,
+  .file-list-row__delete,
+  .search-bar__clear,
+  .search-bar__facet-clear,
+  .type-selector__clear,
+  .type-selector__chevron {
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* The combobox affordances are absolutely positioned over the input, so
+     widening them means re-spacing the pair and the text beneath them. */
+  .type-selector__input {
+    padding-right: 92px;
+  }
+
+  .type-selector__clear {
+    right: 44px;
+  }
+
+  .tab-bar__tab,
+  .doc-editor-tab,
+  .doc-editor-toggle-btn,
+  .dialog__btn,
+  .doc-list-state__btn,
+  .file-list-toolbar__upload,
+  .search-bar__sort-btn,
+  .search-bar__reset,
+  .type-selector__btn {
+    min-height: 44px;
+  }
+
+  /* Whole-row click surfaces. */
+  .doc-card,
+  .file-list-row,
+  .type-selector__dropdown-item,
+  .doc-editor-compound-item {
+    min-height: 48px;
+  }
+}
+
+/* ── Small screens ──
+   700px rather than the editor's 880px: this is the point at which the
+   chrome itself stops fitting, not just the two-pane layout. */
+@media (max-width: 700px) {
+  /* iOS Safari force-zooms the page whenever a focused field's font is
+     under 16px, and does not zoom back out afterwards. Every field that
+     can take focus on a phone therefore goes to 16px. CodeMirror's
+     contenteditable is handled in `codemirror/theme.ts`, which has the
+     same rule for the same reason. */
+  .form-input,
+  .form-textarea,
+  .form-json,
+  .dialog__input,
+  .dialog__textarea,
+  .search-bar__input,
+  .search-bar__facet-input,
+  .search-bar__facet-select,
+  .file-list-toolbar__prefix,
+  .chip-tag-input__input {
+    font-size: 16px;
+  }
+
+  /* Dialogs become full-bleed sheets. A centred card wastes the little
+     width there is, and the translate(-50%, -50%) centring fights the
+     on-screen keyboard as the viewport shrinks under it. */
+  .dialog,
+  .dialog--wide,
+  .dialog--xxl {
+    top: 0;
+    left: 0;
+    transform: none;
+    width: 100%;
+    max-width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    border: none;
+    border-radius: 0;
+    animation: dialog-in-sheet 180ms ease;
+  }
+
+  .dialog__body {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+
+  .dialog__footer {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+
+  /* Stretch the footer buttons: two full-width targets are easier to hit
+     than two small right-aligned ones, and there is room for nothing else. */
+  .dialog__footer .dialog__btn {
+    flex: 1;
+  }
+
+  /* Read-only previews are sized in rows for a desktop pane; cap them
+     against the viewport instead so the buttons stay reachable. */
+  .dialog__textarea,
+  .form-textarea {
+    max-height: 45vh;
+  }
+
+  /* Facets go full-width. Two 160px inputs plus their labels do not fit on
+     a 390px screen, and a half-wrapped row reads worse than a stacked one. */
+  .search-bar {
+    padding: 10px 12px;
+  }
+
+  .search-bar__facet {
+    width: 100%;
+  }
+
+  .search-bar__facet-input,
+  .search-bar__facet-select,
+  .search-bar__facet-with-clear {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .search-bar__reset {
+    margin-left: 0;
+  }
+
+  /* Combobox + Edit + New is three controls on one line; the buttons drop
+     to a line of their own rather than crushing the input. */
+  .type-selector__row {
+    flex-wrap: wrap;
+  }
+
+  .type-selector__combo {
+    flex-basis: 100%;
+  }
+
+  /* A `max-content` key column overflows the viewport the moment one field
+     name is long — and these are unwrapped monospace — taking the whole
+     page into horizontal scroll with it. */
+  .doc-preview__fields {
+    grid-template-columns: 1fr;
+    gap: 2px 0;
+  }
+
+  .doc-preview__fields dd {
+    margin-bottom: 10px;
+  }
+
+  .doc-editor-ref-field {
+    flex-wrap: wrap;
+  }
+
+  .doc-editor-ref-field__mode {
+    max-width: none;
+    flex-basis: 100%;
+  }
+
+  /* Tabs scroll rather than wrap, so the row stays one line tall. */
+  .tab-bar {
+    padding: 0 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .tab-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tab-bar__tab {
+    padding: 12px;
+    white-space: nowrap;
+  }
+
+  .app-main {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+}
+
+/* Sheet entry — the default `dialog-in` animates around the centring
+   transform, which the sheet layout above removes. */
+@keyframes dialog-in-sheet {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }

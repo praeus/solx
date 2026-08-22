@@ -64,6 +64,18 @@ body {
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Stop iOS inflating text when the device is rotated to landscape —
+     the app sizes its own type and the inflation breaks the rhythm. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Long paths, URLs and type names are unbroken monospace strings; without
+   this one of them eventually decides the width of its container. */
+code,
+pre,
+.doc-card__path {
+  overflow-wrap: anywhere;
 }
 
 button {

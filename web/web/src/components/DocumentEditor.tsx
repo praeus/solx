@@ -115,6 +115,9 @@ export function DocumentEditor({
   const [docRefValues, setDocRefValues] = useState<Record<string, RefFieldValue>>({});
   const [attachedFiles, setAttachedFiles] = useState<FileRef[]>([]);
   const [previewTab, setPreviewTab] = useState<"preview" | "json">("preview");
+  // Which pane is showing on a narrow viewport. Above 880px both panes are
+  // side by side and this is inert — see `.doc-editor-pane-switch` in App.css.
+  const [mobilePane, setMobilePane] = useState<"form" | "preview">("form");
 
   const [error, setError] = useState<string | null>(null);
 
@@ -438,7 +441,32 @@ export function DocumentEditor({
         </div>
 
         <div className="dialog__body">
-          <div className="doc-editor-layout">
+          {/* Narrow-viewport pane switch. CSS hides it above 880px, where
+              both panes sit side by side. Switching only toggles
+              `display`, so both panes stay mounted and no editor loses its
+              cursor, selection or undo history. */}
+          <div className="doc-editor-pane-switch" role="tablist" aria-label="Editor pane">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mobilePane === "form"}
+              className={`doc-editor-pane-switch__btn${mobilePane === "form" ? " doc-editor-pane-switch__btn--active" : ""}`}
+              onClick={() => setMobilePane("form")}
+            >
+              Form
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mobilePane === "preview"}
+              className={`doc-editor-pane-switch__btn${mobilePane === "preview" ? " doc-editor-pane-switch__btn--active" : ""}`}
+              onClick={() => setMobilePane("preview")}
+            >
+              Preview
+            </button>
+          </div>
+
+          <div className="doc-editor-layout" data-mobile-pane={mobilePane}>
             {/* ── LEFT: form pane ── */}
             <div className="doc-editor-pane">
               <div className="form-field">

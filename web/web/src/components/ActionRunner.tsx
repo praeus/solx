@@ -1,11 +1,26 @@
 /**
  * ActionRunner — run an action detached, watch its console live, cancel it.
  *
+ * Two-pane layout (mirrors DocumentEditor's side-by-side panes):
+ *
+ *   LEFT  — Params (top) + Result (bottom) + Start/Stop.
+ *           Params has two tabs:
+ *             • JSON   — a CodeMirror JSON editor pre-filled from the
+ *               action's parameter type schema.
+ *             • Fields — a schema-driven form (`FieldsEditorPanel`) built
+ *               from the same parameter type.
+ *           Result is a read-only CodeMirror JSON editor showing the
+ *           invocation's result once it reaches a terminal state.
+ *   RIGHT — Console (always shown) + a conditional Widget tab that appears
+ *           when the action's `resultTypeRef` is
+ *           `/builtin/types/WidgetDescriptor`. The Widget tab is currently a
+ *           stub: it renders the descriptor's `tag_name` / `bin_name` /
+ *           `fields`; mounting the bundle is not yet implemented.
+ *
  * Unlike ActionEditor's plain "Run Action" (a single synchronous `exec`
  * request/response round trip), this drives the async invocation primitives
  * (`solx-actions/src/invocations.rs`, dispatched as ordinary Internal
- * actions under `/builtin/action/*` and `/builtin/console/*` — see
- * `api.ts`'s doc comment on that section):
+ * actions under `/builtin/action/*` and `/builtin/console/*`):
  *
  *   1. `start`  → returns an `invocation_id` immediately; the action keeps
  *      running server-side.
@@ -21,48 +36,65 @@
  * Closing the dialog only stops *watching* — it does not call `stop`. A
  * detached invocation is exactly that: it keeps running whether or not
  * anything is still polling it.
- *
- * Note: `@solx/http`'s manager methods (mirroring `solx-surface`'s
- * `ActionManager` trait 1:1) take no cancellation token, so unlike the old
- * Bun-backend version of this component, closing the dialog no longer
- * aborts the in-flight long-poll `fetch` itself — it just stops the loop
- * from acting on the response once it lands (`stoppedRef`). The request
- * against `solx-server` still runs to completion (up to `POLL_WAIT_SECS`/
- * `TAIL_WAIT_SECS`), same as it always did once detached; only the local
- * JS-side bookkeeping is skipped.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   isTerminalInvocationStatus,
   pollInvocation,
+  splitTypeRef,
   startInvocation,
   stopInvocation,
   tailConsole,
+  type ActionSummary,
   type ConsoleEntry,
   type Invocation,
 } from "../api/api";
+import { useActions, useDocuments, useType } from "../api/hooks";
+import { FieldsEditorPanel } from "./FieldsEditorPanel";
+import { JsonEditField } from "./JsonEditField";
+import { defaultValueFromSchema } from "./schemaDefaults";
+import {
+  propertySchema,
+  refKindFromSchema,
+  schemaValueType,
+  valueFromUnknown,
+  type RefFieldValue,
+} from "./schemaFields";
 
 interface Props {
   open: boolean;
   onClose: () => void;
-  action: { path: string; name: string };
+  /** The full action entity — carries paramTypeRef/resultTypeRef for the
+   *  params editor and widget detection, plus path/name for invocation. */
+  action: ActionSummary;
 }
 
 const POLL_WAIT_SECS = 20;
 const TAIL_WAIT_SECS = 20;
+
+const WIDGET_DESCRIPTOR_REF = "/builtin/types/WidgetDescriptor";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function ActionRunner({ open, onClose, action }: Props) {
-  const [paramsText, setParamsText] = useState("{}");
+  // ── Params state (JSON tab + Fields tab) ──
+  const [paramsMode, setParamsMode] = useState<"json" | "fields">("json");
+  const [paramsJsonText, setParamsJsonText] = useState("{}");
+  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+  const [refValues, setRefValues] = useState<Record<string, RefFieldValue>>({});
+
+  // ── Invocation state ──
   const [invocation, setInvocation] = useState<Invocation | null>(null);
   const [consoleEntries, setConsoleEntries] = useState<ConsoleEntry[]>([]);
   const [startError, setStartError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
+
+  // ── Right-pane tab state ──
+  const [rightTab, setRightTab] = useState<"console" | "widget">("console");
 
   // `stoppedRef` tears down both watch loops (dialog closed / unmounted).
   // `runningRef` tracks just the invocation's own liveness so the console
@@ -71,17 +103,137 @@ export function ActionRunner({ open, onClose, action }: Props) {
   const runningRef = useRef(false);
   const consoleBoxRef = useRef<HTMLDivElement | null>(null);
 
-  // Reset for a fresh run whenever the dialog opens (or the target action
-  // changes while it's open).
+  // ── Resolve the parameter type (for the params editor) ──
+  const paramRef = action.paramTypeRef;
+  const paramSplit = useMemo(
+    () => (paramRef ? splitTypeRef(paramRef) : null),
+    [paramRef],
+  );
+  const paramTypeQuery = useType(
+    paramSplit?.path,
+    paramSplit?.name,
+    { enabled: Boolean(paramSplit) },
+  );
+  const paramSchema = paramTypeQuery.data?.schema ?? null;
+
+  // ── Entity names for DocRef/ActionRef datalists in the Fields tab ──
+  const documentsListQuery = useDocuments({ limit: 500, sortBy: "name", sortOrder: "asc" });
+  const actionsListQuery = useActions({ limit: 500, sortBy: "name", sortOrder: "asc" });
+  const documentNames = useMemo(
+    () =>
+      (documentsListQuery.data?.items ?? []).map((d) => String(d.name ?? "")).filter(Boolean),
+    [documentsListQuery.data],
+  );
+  const actionNames = useMemo(
+    () =>
+      (actionsListQuery.data?.items ?? []).map((a) => String(a.name ?? "")).filter(Boolean),
+    [actionsListQuery.data],
+  );
+
+  // ── Reset for a fresh run whenever the dialog opens (or the target action
+  //    changes while it's open). ──
   useEffect(() => {
     if (!open) return;
-    setParamsText("{}");
+    setParamsMode("json");
+    setParamsJsonText("{}");
+    setFieldValues({});
+    setRefValues({});
     setInvocation(null);
     setConsoleEntries([]);
     setStartError(null);
     setStarting(false);
     setStopping(false);
+    setRightTab("console");
   }, [open, action.path, action.name]);
+
+  // ── Pre-fill params from the parameter type schema once it loads ──
+  useEffect(() => {
+    if (!open || !paramSchema) return;
+    const def = defaultValueFromSchema(paramSchema);
+    const text = JSON.stringify(def, null, 2);
+    setParamsJsonText(text);
+    // Hydrate the Fields tab from the same default.
+    const props = propertySchema(paramSchema);
+    const nextFieldValues: Record<string, string> = {};
+    const nextRefValues: Record<string, RefFieldValue> = {};
+    for (const [fieldName, fieldSchema] of Object.entries(props)) {
+      const refKind = refKindFromSchema(fieldSchema);
+      if (refKind) {
+        nextRefValues[fieldName] = { kind: refKind, mode: "name", value: "" };
+        continue;
+      }
+      const fieldType = schemaValueType(fieldSchema);
+      const source = (def as Record<string, unknown>)[fieldName];
+      nextFieldValues[fieldName] = valueFromUnknown(source, fieldType);
+    }
+    setFieldValues(nextFieldValues);
+    setRefValues(nextRefValues);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, paramSchema]);
+
+  // ── Build the params object from whichever tab is active ──
+  const builtParams = useMemo<unknown>(() => {
+    if (paramsMode === "json") {
+      try {
+        return JSON.parse(paramsJsonText);
+      } catch {
+        return null;
+      }
+    }
+    if (!paramSchema) return null;
+    const props = propertySchema(paramSchema);
+    const contents: Record<string, unknown> = {};
+    for (const [fieldName, fieldSchema] of Object.entries(props)) {
+      const refKind = refKindFromSchema(fieldSchema);
+      if (refKind) {
+        const refValue = refValues[fieldName];
+        if (!refValue || !refValue.value.trim()) {
+          contents[fieldName] = null;
+        } else {
+          contents[fieldName] = { [refValue.mode]: refValue.value.trim() };
+        }
+        continue;
+      }
+      const raw = (fieldValues[fieldName] ?? "").trim();
+      const fieldType = schemaValueType(fieldSchema);
+      if (!raw) {
+        contents[fieldName] = fieldType === "boolean" ? false : null;
+        continue;
+      }
+      if (fieldType === "number" || fieldType === "integer") {
+        const n = Number(raw);
+        contents[fieldName] = Number.isFinite(n)
+          ? fieldType === "integer"
+            ? Math.trunc(n)
+            : n
+          : null;
+      } else if (fieldType === "boolean") {
+        contents[fieldName] = raw.toLowerCase() === "true";
+      } else if (fieldType === "array" || fieldType === "object" || fieldType === "rich_text") {
+        try {
+          contents[fieldName] = JSON.parse(raw);
+        } catch {
+          contents[fieldName] = null;
+        }
+      } else {
+        contents[fieldName] = raw;
+      }
+    }
+    return contents;
+  }, [paramsMode, paramsJsonText, paramSchema, fieldValues, refValues]);
+
+  const paramsIsValidJson = useMemo(() => {
+    if (paramsMode !== "json") return true;
+    try {
+      JSON.parse(paramsJsonText);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [paramsMode, paramsJsonText]);
+
+  // ── Widget detection ──
+  const isWidgetAction = action.resultTypeRef === WIDGET_DESCRIPTOR_REF;
 
   // Stop watching (the loops check `stoppedRef` after each await) on close
   // or unmount.
@@ -113,7 +265,7 @@ export function ActionRunner({ open, onClose, action }: Props) {
           runningRef.current = false;
           return;
         }
-      } catch (err) {
+      } catch {
         if (stoppedRef.current) return;
         // Transient network hiccup — back off briefly and keep polling.
         await sleep(1500);
@@ -135,7 +287,7 @@ export function ActionRunner({ open, onClose, action }: Props) {
         // Once the invocation is terminal, a zero-wait read that comes back
         // empty means we've drained everything — stop polling.
         if (!runningRef.current && res.entries.length === 0) return;
-      } catch (err) {
+      } catch {
         if (stoppedRef.current) return;
         await sleep(1500);
       }
@@ -144,14 +296,9 @@ export function ActionRunner({ open, onClose, action }: Props) {
 
   const handleStart = async () => {
     setStartError(null);
-    let params: unknown = {};
-    if (paramsText.trim()) {
-      try {
-        params = JSON.parse(paramsText);
-      } catch (e) {
-        setStartError(`Params JSON is invalid: ${(e as Error).message}`);
-        return;
-      }
+    if (!paramsIsValidJson) {
+      setStartError("Params JSON is invalid.");
+      return;
     }
     setStarting(true);
     setInvocation(null);
@@ -159,7 +306,7 @@ export function ActionRunner({ open, onClose, action }: Props) {
     stoppedRef.current = false;
     runningRef.current = true;
     try {
-      const inv = await startInvocation(action.path, action.name, params);
+      const inv = await startInvocation(action.path, action.name, builtParams);
       setInvocation(inv);
       void runPollLoop(inv.invocation_id);
       void runConsoleLoop(inv.action_ref, inv.console_seq_start);
@@ -185,17 +332,23 @@ export function ActionRunner({ open, onClose, action }: Props) {
     }
   };
 
-  if (!open) return null;
-
   const status = invocation?.status ?? null;
   const terminal = status ? isTerminalInvocationStatus(status) : false;
   const canStart = starting || !invocation || terminal;
   const canStop = !!invocation && !terminal;
 
+  const resultText = useMemo(() => {
+    if (!invocation || !terminal) return "";
+    if (invocation.error) return invocation.error;
+    return JSON.stringify(invocation.result ?? null, null, 2);
+  }, [invocation, terminal]);
+
+  if (!open) return null;
+
   return (
     <>
       <div className="dialog-backdrop" onClick={onClose} />
-      <div className="dialog dialog--wide" role="dialog" aria-label="Run action">
+      <div className="dialog dialog--xxl" role="dialog" aria-label="Run action">
         <div className="dialog__header">
           <h2 className="dialog__title">
             Run: {action.path}/{action.name}
@@ -206,87 +359,142 @@ export function ActionRunner({ open, onClose, action }: Props) {
         </div>
 
         <div className="dialog__body">
-          <div className="form-field">
-            <label className="form-label">Params (JSON)</label>
-            <textarea
-              className="form-textarea form-json"
-              rows={4}
-              value={paramsText}
-              onChange={(e) => setParamsText(e.target.value)}
-              disabled={!canStart}
-              spellCheck={false}
-            />
-          </div>
+          <div className="doc-editor-layout">
+            {/* ── LEFT: params + result + start/stop ── */}
+            <div className="doc-editor-pane">
+              <div className="doc-editor-tabs">
+                <button
+                  type="button"
+                  className={`doc-editor-tab${paramsMode === "json" ? " doc-editor-tab--active" : ""}`}
+                  onClick={() => setParamsMode("json")}
+                >
+                  JSON
+                </button>
+                <button
+                  type="button"
+                  className={`doc-editor-tab${paramsMode === "fields" ? " doc-editor-tab--active" : ""}`}
+                  onClick={() => setParamsMode("fields")}
+                >
+                  Fields
+                </button>
+              </div>
 
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button
-              className="dialog__btn dialog__btn--primary"
-              onClick={() => void handleStart()}
-              disabled={!canStart}
-            >
-              {starting ? "Starting…" : invocation ? "Run again" : "Start"}
-            </button>
-            <button
-              className="dialog__btn dialog__btn--danger"
-              onClick={() => void handleStop()}
-              disabled={!canStop || stopping}
-            >
-              {stopping ? "…" : status === "cancelling" ? "Force stop" : "Cancel"}
-            </button>
-            {status && <StatusBadge status={status} />}
-          </div>
+              {paramsMode === "json" ? (
+                <JsonEditField
+                  value={paramsJsonText}
+                  onChange={setParamsJsonText}
+                  placeholder={`{\n  "field": "value"\n}`}
+                  ariaLabel="Action params as JSON"
+                  minLines={10}
+                />
+              ) : (
+                <FieldsEditorPanel
+                  schema={paramSchema}
+                  values={fieldValues}
+                  refValues={refValues}
+                  onValuesChange={setFieldValues}
+                  onRefValuesChange={setRefValues}
+                  documentNames={documentNames}
+                  actionNames={actionNames}
+                  emptyMessage={
+                    paramSchema
+                      ? "No fields for this parameter type."
+                      : "No parameter type set — use JSON mode."
+                  }
+                />
+              )}
 
-          {startError && <div className="dialog__error">{startError}</div>}
+              <div className="doc-editor-section-sep">Result</div>
 
-          {invocation && (
-            <div className="form-field" style={{ marginTop: 8 }}>
-              <label className="form-label">Console</label>
-              <div
-                ref={consoleBoxRef}
-                style={{
-                  height: 220,
-                  overflowY: "auto",
-                  background: "var(--bg-sunken)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius)",
-                  padding: 8,
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 12,
-                }}
-              >
-                {consoleEntries.length === 0 ? (
-                  <div style={{ color: "var(--text-muted)" }}>No console output yet.</div>
-                ) : (
-                  consoleEntries.map((entry) => (
-                    <div key={entry.seq} style={{ display: "flex", gap: 6, whiteSpace: "pre-wrap" }}>
-                      <span style={{ color: "var(--text-faint)", flexShrink: 0 }}>
-                        {formatTime(entry.ts)}
-                      </span>
-                      <span style={{ color: levelColor(entry.level), flexShrink: 0 }}>
-                        [{entry.level}]
-                      </span>
-                      <span>{entry.message ?? (entry.data != null ? JSON.stringify(entry.data) : "")}</span>
-                    </div>
-                  ))
+              <JsonEditField
+                value={resultText}
+                onChange={() => {}}
+                readOnly
+                placeholder="Run the action to see its result."
+                ariaLabel="Action result"
+                minLines={8}
+              />
+
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
+                <button
+                  className="dialog__btn dialog__btn--primary"
+                  onClick={() => void handleStart()}
+                  disabled={!canStart}
+                >
+                  {starting ? "Starting…" : invocation ? "Run again" : "Start"}
+                </button>
+                <button
+                  className="dialog__btn dialog__btn--danger"
+                  onClick={() => void handleStop()}
+                  disabled={!canStop || stopping}
+                >
+                  {stopping ? "…" : status === "cancelling" ? "Force stop" : "Stop"}
+                </button>
+                {status && <StatusBadge status={status} />}
+              </div>
+
+              {startError && <div className="dialog__error">{startError}</div>}
+            </div>
+
+            {/* ── RIGHT: console + widget ── */}
+            <div className="doc-editor-pane doc-editor-pane--preview">
+              <div className="doc-editor-tabs">
+                <button
+                  type="button"
+                  className={`doc-editor-tab${rightTab === "console" ? " doc-editor-tab--active" : ""}`}
+                  onClick={() => setRightTab("console")}
+                >
+                  Console
+                </button>
+                {isWidgetAction && (
+                  <button
+                    type="button"
+                    className={`doc-editor-tab${rightTab === "widget" ? " doc-editor-tab--active" : ""}`}
+                    onClick={() => setRightTab("widget")}
+                  >
+                    Widget
+                  </button>
                 )}
               </div>
-            </div>
-          )}
 
-          {invocation && terminal && (
-            <div className="form-field" style={{ marginTop: 8 }}>
-              <label className="form-label">{invocation.error ? "Error" : "Result"}</label>
-              <textarea
-                className="form-textarea form-json"
-                rows={6}
-                readOnly
-                value={
-                  invocation.error ? invocation.error : JSON.stringify(invocation.result ?? null, null, 2)
-                }
-                spellCheck={false}
-              />
+              {rightTab === "console" ? (
+                <div
+                  ref={consoleBoxRef}
+                  style={{
+                    height: 360,
+                    overflowY: "auto",
+                    background: "var(--bg-sunken)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius)",
+                    padding: 8,
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 12,
+                  }}
+                >
+                  {consoleEntries.length === 0 ? (
+                    <div style={{ color: "var(--text-muted)" }}>No console output yet.</div>
+                  ) : (
+                    consoleEntries.map((entry) => (
+                      <div key={entry.seq} style={{ display: "flex", gap: 6, whiteSpace: "pre-wrap" }}>
+                        <span style={{ color: "var(--text-faint)", flexShrink: 0 }}>
+                          {formatTime(entry.ts)}
+                        </span>
+                        <span style={{ color: levelColor(entry.level), flexShrink: 0 }}>
+                          [{entry.level}]
+                        </span>
+                        <span>
+                          {entry.message ??
+                            (entry.data != null ? JSON.stringify(entry.data) : "")}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              ) : (
+                <WidgetPanel result={invocation?.result ?? null} />
+              )}
             </div>
-          )}
+          </div>
         </div>
 
         <div className="dialog__footer">
@@ -296,6 +504,52 @@ export function ActionRunner({ open, onClose, action }: Props) {
         </div>
       </div>
     </>
+  );
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// Widget stub — renders the descriptor; mounting is not yet implemented.
+// ───────────────────────────────────────────────────────────────────────
+
+function WidgetPanel({ result }: { result: unknown }) {
+  const descriptor = result as { tag_name?: string; bin_name?: string; fields?: unknown } | null;
+  if (!descriptor || typeof descriptor !== "object") {
+    return (
+      <div className="dialog__hint">
+        No widget result yet — run the action to produce a widget descriptor.
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div className="form-field">
+        <label className="form-label">Tag name</label>
+        <input className="form-input" value={String(descriptor.tag_name ?? "")} readOnly />
+      </div>
+      <div className="form-field">
+        <label className="form-label">Bundle (bin name)</label>
+        <input className="form-input" value={String(descriptor.bin_name ?? "")} readOnly />
+      </div>
+      <div className="form-field">
+        <label className="form-label">Fields</label>
+        <pre
+          style={{
+            margin: 0,
+            padding: 8,
+            background: "var(--bg-sunken)",
+            borderRadius: "var(--radius)",
+            fontSize: 12,
+            fontFamily: "var(--font-mono)",
+            overflowX: "auto",
+          }}
+        >
+          {JSON.stringify(descriptor.fields ?? null, null, 2)}
+        </pre>
+      </div>
+      <div className="dialog__hint">
+        Widget mounting is not yet implemented — this is a descriptor preview.
+      </div>
+    </div>
   );
 }
 

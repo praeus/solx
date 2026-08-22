@@ -20,7 +20,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ActionInputApp, ActionSummary } from "../api/api";
-import { useCreateAction, useDocumentTypes, useExecAction } from "../api/hooks";
+import { useCreateAction, useDocumentTypes } from "../api/hooks";
 import { ActionRunner } from "./ActionRunner";
 import { ChipTagInput } from "./ChipTagInput";
 import { FilesField, coerceFilesField, type FileRef } from "./FilesField";
@@ -67,7 +67,6 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
   const isEdit = existing !== null;
   const typesQuery = useDocumentTypes();
   const createMutation = useCreateAction();
-  const execMutation = useExecAction();
 
   const [path, setPath] = useState(defaultPath ?? "/");
   const [name, setName] = useState("");
@@ -95,10 +94,7 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
   // one of these). Same wire shape and component as DocumentEditor.
   const [attachedFiles, setAttachedFiles] = useState<FileRef[]>([]);
 
-  // Run panel
-  const [runParamsText, setRunParamsText] = useState("{}");
-  const [runResultText, setRunResultText] = useState("");
-  const [runError, setRunError] = useState<string | null>(null);
+  // Run panel — a single button that opens the detached ActionRunner.
   const [runnerOpen, setRunnerOpen] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
@@ -107,8 +103,6 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
   useEffect(() => {
     if (!open) return;
     setError(null);
-    setRunResultText("");
-    setRunError(null);
     setRunnerOpen(false);
     if (existing && existingEntity) {
       // Edit mode — hydrate from the preloaded row.
@@ -261,33 +255,10 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
 
   const handleRun = async () => {
     if (!existing) {
-      setRunError("Save the action first.");
+      setError("Save the action first.");
       return;
     }
-    setRunError(null);
-    setRunResultText("");
-    let params: unknown = null;
-    if (runParamsText.trim()) {
-      try {
-        params = JSON.parse(runParamsText);
-      } catch (e) {
-        setRunError(`Params JSON is invalid: ${(e as Error).message}`);
-        return;
-      }
-    }
-    try {
-      const result = await execMutation.mutateAsync({
-        path: existing.path,
-        name: existing.name,
-        params,
-      });
-      setRunResultText(JSON.stringify(result, null, 2));
-      if (!result.success) {
-        setRunError(result.message ?? "Action reported failure (no message).");
-      }
-    } catch (err) {
-      setRunError(err instanceof Error ? err.message : String(err));
-    }
+    setRunnerOpen(true);
   };
 
   return (
@@ -302,97 +273,7 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
         </div>
 
         <div className="dialog__body">
-          <div className="form-field">
-            <label className="form-label">
-              Name <span className="required-star">*</span>
-            </label>
-            <input
-              className="form-input"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="my-action"
-              spellCheck={false}
-              autoFocus
-            />
-          </div>
-
-          <div className="form-field">
-            <label className="form-label">
-              Path <span className="required-star">*</span>
-            </label>
-            <input
-              className="form-input"
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              placeholder="/tools"
-              spellCheck={false}
-            />
-          </div>
-
-          <div className="form-field">
-            <label className="form-label">Caption</label>
-            <input
-              className="form-input"
-              value={caption}
-              onChange={(e) => setCaption(e.target.value)}
-              placeholder="Short display label"
-            />
-          </div>
-
-          <div className="form-field">
-            <label className="form-label">Description</label>
-            <textarea
-              className="form-textarea"
-              rows={3}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Describe what this action does"
-            />
-          </div>
-
-          <div className="form-field">
-            <label className="form-label">Category</label>
-            <input
-              className="form-input"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              placeholder="e.g. extraction, search, filesystem"
-              list="action-editor-categories"
-            />
-            <datalist id="action-editor-categories">
-              {types.flatMap((t) => [String(t.name)]).map((c) => (
-                <option key={c} value={c} />
-              ))}
-            </datalist>
-          </div>
-
-          <div className="form-field">
-            <label className="form-label">Phrases</label>
-            <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
-              Alternative names used for search matching
-            </div>
-            <ChipTagInput
-              chips={phrases}
-              onChange={setPhrases}
-              placeholder="Type a phrase and press Enter"
-            />
-          </div>
-
-          <div className="form-field">
-            <label className="form-label">Capabilities</label>
-            <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
-              Tags used for search and filtering
-            </div>
-            <ChipTagInput
-              chips={capabilities}
-              onChange={setCapabilities}
-              placeholder="search, wasm, extraction, hidden…"
-            />
-          </div>
-
-          <TypeSelector label="Parameter Type" value={paramTypeRef} onChange={setParamTypeRef} />
-
-          <TypeSelector label="Result Type" value={resultTypeRef} onChange={setResultTypeRef} />
+          <div className="doc-editor-section-sep">Execution</div>
 
           <div className="form-field">
             <label className="form-label">Action Type</label>
@@ -514,15 +395,6 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
           </div>
 
           <div className="form-field">
-            <FilesField
-              value={attachedFiles}
-              onChange={setAttachedFiles}
-              label="Attached files"
-              uploadPrefix={`files/actions/${name.trim() || "shared"}/`}
-            />
-          </div>
-
-          <div className="form-field">
             <label className="form-label">Invoke Resource (fn name / URL / command)</label>
             <input
               className="form-input"
@@ -530,6 +402,115 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
               onChange={(e) => setFnName(e.target.value)}
               placeholder="e.g. run, https://..., python3 my_script.py"
               spellCheck={false}
+            />
+          </div>
+
+          <div className="doc-editor-section-sep">Types</div>
+
+          <TypeSelector label="Parameter Type" value={paramTypeRef} onChange={setParamTypeRef} />
+
+          <TypeSelector label="Result Type" value={resultTypeRef} onChange={setResultTypeRef} />
+
+          <div className="doc-editor-section-sep">Identity</div>
+
+          <div className="form-field">
+            <label className="form-label">
+              Name <span className="required-star">*</span>
+            </label>
+            <input
+              className="form-input"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="my-action"
+              spellCheck={false}
+              autoFocus
+            />
+          </div>
+
+          <div className="form-field">
+            <label className="form-label">
+              Path <span className="required-star">*</span>
+            </label>
+            <input
+              className="form-input"
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+              placeholder="/tools"
+              spellCheck={false}
+            />
+          </div>
+
+          <div className="form-field">
+            <label className="form-label">Caption</label>
+            <input
+              className="form-input"
+              value={caption}
+              onChange={(e) => setCaption(e.target.value)}
+              placeholder="Short display label"
+            />
+          </div>
+
+          <div className="form-field">
+            <label className="form-label">Description</label>
+            <textarea
+              className="form-textarea"
+              rows={3}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Describe what this action does"
+            />
+          </div>
+
+          <div className="form-field">
+            <label className="form-label">Category</label>
+            <input
+              className="form-input"
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              placeholder="e.g. extraction, search, filesystem"
+              list="action-editor-categories"
+            />
+            <datalist id="action-editor-categories">
+              {Array.from(new Set(types.map((t) => String(t.name)))).map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
+          </div>
+
+          <div className="doc-editor-section-sep">Metadata</div>
+
+          <div className="form-field">
+            <label className="form-label">Phrases</label>
+            <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
+              Alternative names used for search matching
+            </div>
+            <ChipTagInput
+              chips={phrases}
+              onChange={setPhrases}
+              placeholder="Type a phrase and press Enter"
+            />
+          </div>
+
+          <div className="form-field">
+            <label className="form-label">Capabilities</label>
+            <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
+              Tags used for search and filtering
+            </div>
+            <ChipTagInput
+              chips={capabilities}
+              onChange={setCapabilities}
+              placeholder="search, wasm, extraction, hidden…"
+            />
+          </div>
+
+          <div className="doc-editor-section-sep">Files &amp; Data</div>
+
+          <div className="form-field">
+            <FilesField
+              value={attachedFiles}
+              onChange={setAttachedFiles}
+              label="Attached files"
+              uploadPrefix={`files/actions/${name.trim() || "shared"}/`}
             />
           </div>
 
@@ -565,50 +546,16 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
             </div>
           </details>
 
-          {/* Run panel — only in edit mode */}
+          {/* Run — only in edit mode; opens the detached ActionRunner. */}
           {isEdit && (
-            <>
-              <h3 className="entity-editor-section-sep">Run</h3>
-              <div className="form-field">
-                <label className="form-label">Run Params (JSON)</label>
-                <textarea
-                  className="form-textarea form-json"
-                  rows={4}
-                  value={runParamsText}
-                  onChange={(e) => setRunParamsText(e.target.value)}
-                  spellCheck={false}
-                />
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button
-                  className="dialog__btn dialog__btn--primary"
-                  onClick={() => void handleRun()}
-                  disabled={execMutation.isPending}
-                >
-                  {execMutation.isPending ? "Running…" : "Run Action"}
-                </button>
-                <button className="dialog__btn" onClick={() => setRunnerOpen(true)}>
-                  Run with console…
-                </button>
-              </div>
-              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                "Run Action" is a synchronous request/response call. "Run with console…" runs it
-                detached, with live console output and cancellation.
-              </div>
-              {runError && <div className="dialog__error">{runError}</div>}
-              {runResultText && (
-                <div className="form-field" style={{ marginTop: 8 }}>
-                  <label className="form-label">Result</label>
-                  <textarea
-                    className="form-textarea form-json"
-                    rows={6}
-                    value={runResultText}
-                    readOnly
-                    spellCheck={false}
-                  />
-                </div>
-              )}
-            </>
+            <div style={{ marginTop: 12 }}>
+              <button
+                className="dialog__btn dialog__btn--primary"
+                onClick={() => void handleRun()}
+              >
+                Run Action
+              </button>
+            </div>
           )}
 
           {error && <div className="dialog__error">{error}</div>}
@@ -628,8 +575,12 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
         </div>
       </div>
 
-      {existing && (
-        <ActionRunner open={runnerOpen} onClose={() => setRunnerOpen(false)} action={existing} />
+      {existing && existingEntity && (
+        <ActionRunner
+          open={runnerOpen}
+          onClose={() => setRunnerOpen(false)}
+          action={existingEntity}
+        />
       )}
     </>
   );

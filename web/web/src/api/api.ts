@@ -36,6 +36,18 @@ export type DocumentSummary = Document;
 export type ActionSummary = Action;
 export type { TypeEntity, Page, SearchHit, SearchResults, ActionExecResult };
 
+/**
+ * Split a full type reference (`${path}/${name}`, e.g.
+ * `/builtin/types/WidgetDescriptor`) into its `path` and `name` parts so it
+ * can be fed to `useType(path, name)`. Falls back to `{ path: "/", name: ref }`
+ * when the ref has no slash.
+ */
+export function splitTypeRef(ref: string): { path: string; name: string } {
+  const idx = ref.lastIndexOf("/");
+  if (idx <= 0) return { path: "/", name: ref };
+  return { path: ref.slice(0, idx), name: ref.slice(idx + 1) };
+}
+
 export interface HealthResponse {
   reachable: boolean;
 }
