@@ -3502,6 +3502,7 @@ dependencies = [
  "serde",
  "serde_json",
  "solx-config",
+ "solx-console",
  "solx-files",
  "solx-scripts",
  "solx-surface",
@@ -3557,6 +3558,24 @@ dependencies = [
  "serde",
  "serde_json",
  "solx-surface",
+]
+
+[[package]]
+name = "solx-console"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum 0.7.9",
+ "chrono",
+ "libsql",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "solx-config",
+ "solx-surface",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

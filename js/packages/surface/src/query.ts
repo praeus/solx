@@ -72,3 +72,18 @@ export interface SearchResults {
   limit: number;
   offset: number;
 }
+
+// ---------- ActionSearchQuery ----------
+
+/**
+ * Full-text query over the action catalogue (path/name/caption/description/
+ * category/phrases, via FTS5). Wire-flat extension of {@link ListOptions} —
+ * mirrors `solx_surface::query::ActionSearchQuery`'s `#[serde(flatten)]`
+ * shape, so every `ListOptions` field composes with `q` (path scope, sort,
+ * date range, …). Unlike {@link SearchQuery}, results are `Page<Action>`
+ * (same shape as `list`), not a separate hit/score envelope.
+ */
+export interface ActionSearchQuery extends ListOptions {
+  /** Free-text query string. */
+  q?: string;
+}

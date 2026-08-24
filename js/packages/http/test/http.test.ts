@@ -189,6 +189,18 @@ describe('collection routes', () => {
 });
 
 describe('actions', () => {
+  test('search is top-level, not a sibling of the actions catch-all', async () => {
+    nextResponse = (res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ items: [], total: 0, limit: 10, offset: 0 }));
+    };
+    await solx.actions.search({ q: 'livejournal', pathPrefix: '/tools' });
+    const url = new URL(`http://x${last().url}`);
+    expect(url.pathname).toBe('/actions-search');
+    expect(url.searchParams.get('q')).toBe('livejournal');
+    expect(url.searchParams.get('path_prefix')).toBe('/tools');
+  });
+
   test('exec POSTs the params to the action own URL', async () => {
     nextResponse = (res) => {
       res.writeHead(200, { 'content-type': 'application/json' });

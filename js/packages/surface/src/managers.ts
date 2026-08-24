@@ -18,7 +18,7 @@ import type {
   TypeEntity,
   TypeInput,
 } from './entities.js';
-import type { ListOptions, Page, SearchQuery, SearchResults } from './query.js';
+import type { ActionSearchQuery, ListOptions, Page, SearchQuery, SearchResults } from './query.js';
 import type { JsonValue } from './json.js';
 
 // ---------- TypeManager ----------
@@ -61,6 +61,7 @@ export interface ActionManager {
   get(path: string, name: string): Promise<Action>;
   delete(path: string, name: string): Promise<void>;
   list(opts?: ListOptions): Promise<Page<Action>>;
+  search(query: ActionSearchQuery): Promise<Page<Action>>;
   exec(path: string, name: string, params: JsonValue): Promise<ActionExecResult>;
 }
 

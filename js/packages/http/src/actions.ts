@@ -9,6 +9,7 @@ import type {
   ActionExecResult,
   ActionInput,
   ActionManager as ActionManagerIface,
+  ActionSearchQuery,
   ActionType,
   FileRef,
   JsonValue,
@@ -135,6 +136,14 @@ function listOptionsToSnake(opts?: ListOptions): Record<string, QueryValue> {
   return out;
 }
 
+// `ActionSearchQuery` is a wire-flat extension of `ListOptions` (mirrors the
+// Rust side's `#[serde(flatten)]`), so this is `listOptionsToSnake` plus `q`.
+function actionSearchQueryToSnake(query: ActionSearchQuery): Record<string, QueryValue> {
+  const out = listOptionsToSnake(query);
+  if (query.q !== undefined) out['q'] = query.q;
+  return out;
+}
+
 /**
  * HTTP-proxy `ActionManager` talking to a `solx-server`. Public name
  * matches `@solx/actions`'s `ActionManager` and the
@@ -178,6 +187,22 @@ export class HttpActionManager implements ActionManagerIface {
       'GET',
       '/actions',
       { query: listOptionsToSnake(opts) },
+    );
+    return pageFromSnake(s, actionFromSnake);
+  }
+
+  /**
+   * `GET /actions-search` — a top-level route rather than `/actions/search`,
+   * for the same reason document search lives at `/search` rather than
+   * `/docs/search`; see `HttpDocManager.search`.
+   */
+  async search(query: ActionSearchQuery): Promise<Page<Action>> {
+    const s = await requestJson<PageSnake<ActionSnake>>(
+      this.baseUrl,
+      this.token,
+      'GET',
+      '/actions-search',
+      { query: actionSearchQueryToSnake(query) },
     );
     return pageFromSnake(s, actionFromSnake);
   }
