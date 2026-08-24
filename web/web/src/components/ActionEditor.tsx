@@ -2,20 +2,21 @@
  * ActionEditor — modal editor for solx Actions.
  *
  * Mirrors the sol-browser ActionEditor at a reduced scope:
- *   - Core fields: name, caption, description, category, phrases, capabilities,
- *     parameter type, result type, action_type, exec artifact, invoke resource,
- *     model instructions, raw action_config JSON.
+ *   - Core fields: name, path, caption, description, category, phrases,
+ *     capabilities, parameter type, result type, action_type, exec artifact,
+ *     invoke resource, raw action_config JSON.
  *   - Typed overlays for the two most common action types: Webhook headers +
- *     timeout_secs, Command cwd — layered onto action_config the same way
- *     model_instructions is, so the raw-JSON box stays an escape hatch
- *     instead of the only way to set them.
+ *     timeout_secs, Command cwd — layered onto action_config so the raw-JSON
+ *     box stays an escape hatch instead of the only way to set them.
  *   - Attached files (`Action.files: FileRef[]`) via the shared `FilesField`,
  *     the same component/wire shape `DocumentEditor` uses.
- *   - Run panel: JSON params, Run button, result textarea.
+ *   - Run: a single "Run Action" button (edit mode) that opens the detached
+ *     `ActionRunner`.
  *
  * NOT in scope (no equivalent entity in solx): Permission/allowed-permission
  * fields, Schedule creation, custom-action project scaffolding (superseded
- * by the solx-quickjs package), run trace table.
+ * by the solx-quickjs package), run trace table, model instructions (legacy
+ * sol-browser concept, not carried over).
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -81,7 +82,6 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
   const [actionType, setActionType] = useState("");
   const [binName, setBinName] = useState("");
   const [fnName, setFnName] = useState("");
-  const [modelInstructions, setModelInstructions] = useState("");
   const [actionConfigJson, setActionConfigJson] = useState("");
 
   // Typed overlays for the two most common action types — surfaced as real
@@ -121,8 +121,6 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
       setBinName(String(existingEntity.binName ?? ""));
       setFnName(String(existingEntity.fnName ?? ""));
       const cfg = (existingEntity.actionConfig ?? {}) as Record<string, unknown>;
-      const mi = cfg.model_instructions;
-      setModelInstructions(typeof mi === "string" ? mi : "");
       setActionConfigJson("");
       setWebhookHeaders(headersFromConfig(cfg));
       setWebhookTimeoutSecs(cfg.timeout_secs != null ? String(cfg.timeout_secs) : "");
@@ -150,7 +148,6 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
       setActionType("");
       setBinName("");
       setFnName("");
-      setModelInstructions("");
       setActionConfigJson("");
       setWebhookHeaders([]);
       setWebhookTimeoutSecs("");
@@ -192,11 +189,6 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
         setError(`Raw action_config JSON is invalid: ${(e as Error).message}`);
         return;
       }
-    }
-    // `model_instructions` is not a field on the Rust `Action` entity — it
-    // lives in the free-form config blob so it round-trips on save.
-    if (modelInstructions.trim()) {
-      actionConfig = { ...(actionConfig ?? {}), model_instructions: modelInstructions };
     }
 
     // Typed Webhook/Command overlays win over whatever the raw JSON had for
@@ -273,6 +265,45 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
         </div>
 
         <div className="dialog__body">
+          <div className="form-field">
+            <label className="form-label">
+              Name <span className="required-star">*</span>
+            </label>
+            <input
+              className="form-input"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="my-action"
+              spellCheck={false}
+              autoFocus
+            />
+          </div>
+
+          <div className="form-field">
+            <label className="form-label">
+              Path <span className="required-star">*</span>
+            </label>
+            <input
+              className="form-input"
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+              placeholder="/tools"
+              spellCheck={false}
+            />
+          </div>
+
+          {/* Run — only in edit mode; opens the detached ActionRunner. */}
+          {isEdit && (
+            <div style={{ marginTop: 12 }}>
+              <button
+                className="dialog__btn dialog__btn--primary"
+                onClick={() => void handleRun()}
+              >
+                Run Action
+              </button>
+            </div>
+          )}
+
           <div className="doc-editor-section-sep">Execution</div>
 
           <div className="form-field">
@@ -411,34 +442,7 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
 
           <TypeSelector label="Result Type" value={resultTypeRef} onChange={setResultTypeRef} />
 
-          <div className="doc-editor-section-sep">Identity</div>
-
-          <div className="form-field">
-            <label className="form-label">
-              Name <span className="required-star">*</span>
-            </label>
-            <input
-              className="form-input"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="my-action"
-              spellCheck={false}
-              autoFocus
-            />
-          </div>
-
-          <div className="form-field">
-            <label className="form-label">
-              Path <span className="required-star">*</span>
-            </label>
-            <input
-              className="form-input"
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              placeholder="/tools"
-              spellCheck={false}
-            />
-          </div>
+          <div className="doc-editor-section-sep">Metadata</div>
 
           <div className="form-field">
             <label className="form-label">Caption</label>
@@ -477,8 +481,6 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
             </datalist>
           </div>
 
-          <div className="doc-editor-section-sep">Metadata</div>
-
           <div className="form-field">
             <label className="form-label">Phrases</label>
             <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
@@ -503,37 +505,18 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
             />
           </div>
 
-          <div className="doc-editor-section-sep">Files &amp; Data</div>
-
-          <div className="form-field">
-            <FilesField
-              value={attachedFiles}
-              onChange={setAttachedFiles}
-              label="Attached files"
-              uploadPrefix={`files/actions/${name.trim() || "shared"}/`}
-            />
-          </div>
-
-          <div className="form-field">
-            <label className="form-label">Model Instructions</label>
-            <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
-              Free-form notes for the LLM planner. Stored under
-              <code> action_config.model_instructions</code>.
-            </div>
-            <textarea
-              className="form-textarea"
-              rows={4}
-              value={modelInstructions}
-              onChange={(e) => setModelInstructions(e.target.value)}
-              placeholder="e.g. Params MUST include model_name and messages: [...]"
-              spellCheck={false}
-            />
-          </div>
-
           <details style={{ marginTop: 8 }}>
             <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--text-muted)" }}>
-              Advanced — raw action_config JSON
+              Advanced — attached files &amp; raw action_config JSON
             </summary>
+            <div className="form-field" style={{ marginTop: 6 }}>
+              <FilesField
+                value={attachedFiles}
+                onChange={setAttachedFiles}
+                label="Attached files"
+                uploadPrefix={`files/actions/${name.trim() || "shared"}/`}
+              />
+            </div>
             <div className="form-field" style={{ marginTop: 6 }}>
               <textarea
                 className="form-textarea form-json"
@@ -545,18 +528,6 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
               />
             </div>
           </details>
-
-          {/* Run — only in edit mode; opens the detached ActionRunner. */}
-          {isEdit && (
-            <div style={{ marginTop: 12 }}>
-              <button
-                className="dialog__btn dialog__btn--primary"
-                onClick={() => void handleRun()}
-              >
-                Run Action
-              </button>
-            </div>
-          )}
 
           {error && <div className="dialog__error">{error}</div>}
         </div>

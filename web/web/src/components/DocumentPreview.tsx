@@ -24,11 +24,30 @@
  * NOTE: EJS templates come from the user's local type schema. They are
  * trusted (the user wrote the type themselves), so `dangerouslySetInnerHTML`
  * is acceptable here.
+ *
+ * Files-store images: `solx-server` requires a bearer token on every route
+ * (`/files/*rel_path` included), so a template can't just point `<img src>`
+ * at a relPath the way the old Bun backend allowed. Instead, a template
+ * marks such an image with `data-relpath="<encodeURIComponent(relPath)>"`
+ * (no `src`), and the effect below resolves each one to a `blob:` URL via
+ * `objectUrlCache` after render — the same mechanism `ResolvedImage.tsx`
+ * uses for rich-text images.
+ *
+ * `dangerouslySetInnerHTML`'s value must stay referentially stable across
+ * renders that don't actually change `html` — React's prop diffing for it
+ * is a shallow `!==` on the `{ __html }` object itself, not on the string
+ * inside. An inline `{ __html: html }` literal is a new object every
+ * render, so React would call `innerHTML =` again on every unrelated
+ * re-render (parent state changes, query refetches, …), silently
+ * discarding the `img.src` the effect below had just set. `useMemo`
+ * keyed on `html` keeps that object's identity stable when the string
+ * hasn't changed.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import ejs from "ejs";
 import type { DocumentSummary, TypeEntity } from "../api/api";
+import { acquireObjectUrl, releaseObjectUrl } from "../api/objectUrlCache";
 
 interface Props {
   /** The document being previewed (provides `contents`, `path`, etc.). */
@@ -77,12 +96,45 @@ export function DocumentPreview({ document, type }: Props) {
     }
   }, [template, document, source]);
 
+  // Stable identity across renders where `html` hasn't changed — see the
+  // file docblock for why this matters.
+  const innerHtml = useMemo(() => ({ __html: html }), [html]);
+
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Resolve any `data-relpath` images the template emitted into `blob:`
+  // URLs, since a plain `src` can't carry the bearer token `solx-server`
+  // requires. Re-runs whenever the rendered HTML changes.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const imgs = Array.from(
+      container.querySelectorAll<HTMLImageElement>("img[data-relpath]"),
+    );
+    const relPaths = imgs.map((img) => decodeURIComponent(img.dataset.relpath ?? ""));
+    let cancelled = false;
+    imgs.forEach((img, i) => {
+      const relPath = relPaths[i];
+      if (!relPath) return;
+      acquireObjectUrl(relPath).then((url) => {
+        if (!cancelled) img.src = url;
+      });
+    });
+    return () => {
+      cancelled = true;
+      relPaths.forEach((relPath) => {
+        if (relPath) releaseObjectUrl(relPath);
+      });
+    };
+  }, [html]);
+
   return (
     <div
+      ref={containerRef}
       className="doc-preview"
       // `document` and `template` are both from the user's local solx
       // data. Trust boundary is the type schema, written by the user.
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={innerHtml}
     />
   );
 }

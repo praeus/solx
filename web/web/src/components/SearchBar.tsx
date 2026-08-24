@@ -49,24 +49,26 @@ export const EMPTY_BROWSE_STATE: BrowseState = {
 /**
  * What each tab's backing store can actually do.
  *
- *   textQuery "fulltext"  — relevance-ranked Tantivy index (/documents/search)
+ *   textQuery "fulltext"  — relevance-ranked index: Tantivy for documents
+ *                           (/search), FTS5 for actions (/actions-search)
  *   textQuery "substring" — case-insensitive LIKE over the store's filterable
  *                           columns, via `filter_field`/`filter_value`
  *
- * Every tab now filters, sorts and paginates in the database: `solx-actions`
- * and `solx-types` gained `filter_field`/`sort_by` support, so the in-memory
- * fallback that used to back these two tabs is gone.
+ * Every tab filters, sorts and paginates in the database — nothing narrows
+ * in memory.
  */
 export interface TabCapabilities {
   textQuery: "fulltext" | "substring";
   /** Which column a substring query targets. Unused for "fulltext". */
   filterField?: string;
+  /** Search-box placeholder detail for "fulltext" — the fields `q` matches. */
+  searchFields?: string;
   typeFacet: boolean;
 }
 
 export const TAB_CAPABILITIES: Record<TabId, TabCapabilities> = {
-  documents: { textQuery: "fulltext", typeFacet: true },
-  actions: { textQuery: "substring", filterField: "name", typeFacet: false },
+  documents: { textQuery: "fulltext", searchFields: "title, summary, contents", typeFacet: true },
+  actions: { textQuery: "fulltext", searchFields: "path, name, caption, description, category", typeFacet: false },
   types: { textQuery: "substring", filterField: "name", typeFacet: false },
 };
 
@@ -162,7 +164,7 @@ export function SearchBar({
           onChange={(e) => setDraftQuery(e.target.value)}
           placeholder={
             caps.textQuery === "fulltext"
-              ? `Search ${nounPlural} by title, summary, contents…`
+              ? `Search ${nounPlural} by ${caps.searchFields ?? "title, summary, contents"}…`
               : `Filter ${nounPlural} by ${caps.filterField ?? "name"}…`
           }
           spellCheck={false}

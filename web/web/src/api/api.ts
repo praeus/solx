@@ -19,6 +19,7 @@ import {
   type Action,
   type ActionExecResult,
   type ActionInput,
+  type ActionSearchQuery,
   type Document,
   type DocumentInput,
   type JsonValue,
@@ -191,8 +192,9 @@ export function fetchActions(opts: ListOptions = {}): Promise<Page<Action>> {
   return call(() => getConnection().actions.list(opts));
 }
 
-// No searchActions(): solx-actions has no server-side filtering, so the
-// Actions tab scopes by path here and narrows in memory (lib/clientView.ts).
+export function searchActions(query: ActionSearchQuery): Promise<Page<Action>> {
+  return call(() => getConnection().actions.search(query));
+}
 
 export function fetchAction(path: string, name: string): Promise<Action> {
   return call(() => getConnection().actions.get(path, name));

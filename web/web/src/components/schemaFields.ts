@@ -33,6 +33,14 @@ export function propertySchema(
   return props as Record<string, Record<string, unknown>>;
 }
 
+/** Extract the `required` field names from a type schema (or `[]` if absent). */
+export function requiredFieldNames(typeSchema: unknown): Set<string> {
+  if (!typeSchema || typeof typeSchema !== "object") return new Set();
+  const required = (typeSchema as Record<string, unknown>).required;
+  if (!Array.isArray(required)) return new Set();
+  return new Set(required.filter((name): name is string => typeof name === "string"));
+}
+
 /** Resolve the first `$ref` target on a schema node (direct, allOf, anyOf). */
 export function schemaRefTarget(schema: Record<string, unknown>): string {
   const direct = typeof schema.$ref === "string" ? schema.$ref : "";
@@ -115,13 +123,43 @@ export function isHiddenDocField(
  *   - "rich_text" / "image" (annotation-driven)
  *   - "string" | "number" | "integer" | "boolean" | "array" | "object"
  *   - "object" for any `$ref` target without an explicit `type`
+ *
+ * For a `type` that's an array (e.g. `["integer", "null"]`), the first
+ * non-`null` entry wins — JSON Schema type unions are nullable markers, not
+ * independent alternatives.
  */
 export function schemaValueType(schema: Record<string, unknown>): string {
   if (isRichTextSchema(schema)) return "rich_text";
   if (isImageSchema(schema)) return "image";
   if (typeof schema.type === "string") return schema.type;
+  if (Array.isArray(schema.type)) {
+    for (const entry of schema.type) {
+      if (typeof entry === "string" && entry !== "null") return entry;
+    }
+  }
   if (schemaRefTarget(schema)) return "object";
   return "string";
+}
+
+/**
+ * Whether a schema node explicitly allows `null` — via a `type` union
+ * (`["string", "null"]`), a bare `type: "null"`, an OpenAPI-style
+ * `nullable: true`, or a `null` branch inside `anyOf`/`oneOf`.
+ */
+export function isNullableSchema(schema: Record<string, unknown>): boolean {
+  if (schema.type === "null") return true;
+  if (Array.isArray(schema.type) && schema.type.includes("null")) return true;
+  if (schema.nullable === true) return true;
+  const branches = [
+    ...(Array.isArray(schema.anyOf) ? schema.anyOf : []),
+    ...(Array.isArray(schema.oneOf) ? schema.oneOf : []),
+  ];
+  for (const item of branches) {
+    if (item && typeof item === "object" && (item as Record<string, unknown>).type === "null") {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function emptyRichTextValue(): string {

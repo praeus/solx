@@ -696,6 +696,71 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+ * FieldsEditorPanel — table layout
+ *
+ * Used by both `ActionRunner` (params editor) and `DocumentEditor`.
+ * Renders each schema property as a row with the label on the left and
+ * the control on the right. The label column auto-sizes to its widest
+ * content so short labels don't waste horizontal space.
+ *
+ * Rows are a CSS grid rather than a flex row so the control column can
+ * span the full remaining width with `min-width: 0`, which is what
+ * stops long inputs / descriptions from pushing the table past the
+ * dialog's 1080px width and clipping the active field. `.form-field`
+ * itself is `flex-direction: column`, so we explicitly switch back to a
+ * grid inside the table — that's the "fields-editor-table__row" class
+ * on the row element.
+ * ────────────────────────────────────────────────────────────────────── */
+
+.fields-editor-table {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fields-editor-table__row {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
+  column-gap: 16px;
+  row-gap: 4px;
+  align-items: start;
+}
+
+.fields-editor-table__label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding-top: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fields-editor-table__control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fields-editor-table__description {
+  font-size: 12px;
+  color: var(--text-faint);
+  line-height: 1.4;
+}
+
+.fields-editor-table__inline-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 14px;
+  color: var(--text);
 }
 
 .dialog__label,
@@ -1405,10 +1470,17 @@
 .doc-editor-ref-field {
   display: flex;
   gap: 8px;
+  min-width: 0;
 }
 
 .doc-editor-ref-field__mode {
   max-width: 100px;
+  flex-shrink: 0;
+}
+
+.doc-editor-ref-field > input {
+  flex: 1;
+  min-width: 0;
 }
 
 .doc-editor-artifact-row {
@@ -1509,11 +1581,13 @@
 .code-edit-field {
   display: block;
   min-width: 0;
+  max-width: 100%;
 }
 
 .code-edit-field .cm-editor {
   /* The theme paints its own focus ring inside the editor bounds. */
   outline: none;
+  max-width: 100%;
 }
 
 .file-editor__code {
@@ -1534,14 +1608,19 @@
   border-radius: var(--radius);
   background: var(--bg);
   position: relative;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .json-edit-field__editor {
   position: relative;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .json-edit-field__editor .cm-editor {
   outline: none;
+  max-width: 100%;
 }
 
 .json-edit-field__status {

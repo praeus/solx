@@ -55,8 +55,10 @@ import { FieldsEditorPanel } from "./FieldsEditorPanel";
 import { JsonEditField } from "./JsonEditField";
 import { defaultValueFromSchema } from "./schemaDefaults";
 import {
+  isNullableSchema,
   propertySchema,
   refKindFromSchema,
+  requiredFieldNames,
   schemaValueType,
   valueFromUnknown,
   type RefFieldValue,
@@ -79,9 +81,54 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ───────────────────────────────────────────────────────────────────────
+// Last-used params persistence (localStorage, keyed per action).
+// ───────────────────────────────────────────────────────────────────────
+
+const STORAGE_PREFIX = "solx:action-runner:";
+
+interface SavedParams {
+  paramsMode: "json" | "fields";
+  paramsJsonText: string;
+  fieldValues: Record<string, string>;
+  refValues: Record<string, RefFieldValue>;
+}
+
+function loadSavedParams(key: string): SavedParams | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<SavedParams>;
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      paramsMode: parsed.paramsMode === "json" ? "json" : "fields",
+      paramsJsonText:
+        typeof parsed.paramsJsonText === "string" ? parsed.paramsJsonText : "{}",
+      fieldValues:
+        parsed.fieldValues && typeof parsed.fieldValues === "object"
+          ? parsed.fieldValues
+          : {},
+      refValues:
+        parsed.refValues && typeof parsed.refValues === "object"
+          ? parsed.refValues
+          : {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveParams(key: string, value: SavedParams): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore quota / privacy-mode errors.
+  }
+}
+
 export function ActionRunner({ open, onClose, action }: Props) {
   // ── Params state (JSON tab + Fields tab) ──
-  const [paramsMode, setParamsMode] = useState<"json" | "fields">("json");
+  const [paramsMode, setParamsMode] = useState<"json" | "fields">("fields");
   const [paramsJsonText, setParamsJsonText] = useState("{}");
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [refValues, setRefValues] = useState<Record<string, RefFieldValue>>({});
@@ -94,7 +141,7 @@ export function ActionRunner({ open, onClose, action }: Props) {
   const [stopping, setStopping] = useState(false);
 
   // ── Right-pane tab state ──
-  const [rightTab, setRightTab] = useState<"console" | "widget">("console");
+  const [rightTab, setRightTab] = useState<"result" | "console" | "widget">("result");
 
   // `stoppedRef` tears down both watch loops (dialog closed / unmounted).
   // `runningRef` tracks just the invocation's own liveness so the console
@@ -102,6 +149,18 @@ export function ActionRunner({ open, onClose, action }: Props) {
   const stoppedRef = useRef(false);
   const runningRef = useRef(false);
   const consoleBoxRef = useRef<HTMLDivElement | null>(null);
+  // Persistence: `hasSavedRef` tells the schema-default pre-fill effect to
+  // skip (we already restored saved values); `skipSaveRef` suppresses the
+  // save effect for the single commit that hydrates state on open, so we
+  // never write a previous action's stale values under this action's key.
+  const hasSavedRef = useRef(false);
+  const skipSaveRef = useRef(false);
+
+  // Per-action localStorage key for the last-used params.
+  const storageKey = useMemo(
+    () => `${STORAGE_PREFIX}${action.path}/${action.name}`,
+    [action.path, action.name],
+  );
 
   // ── Resolve the parameter type (for the params editor) ──
   const paramRef = action.paramTypeRef;
@@ -134,21 +193,33 @@ export function ActionRunner({ open, onClose, action }: Props) {
   //    changes while it's open). ──
   useEffect(() => {
     if (!open) return;
-    setParamsMode("json");
-    setParamsJsonText("{}");
-    setFieldValues({});
-    setRefValues({});
+    skipSaveRef.current = true;
+    const saved = loadSavedParams(storageKey);
+    hasSavedRef.current = Boolean(saved);
+    if (saved) {
+      setParamsMode(saved.paramsMode);
+      setParamsJsonText(saved.paramsJsonText);
+      setFieldValues(saved.fieldValues);
+      setRefValues(saved.refValues);
+    } else {
+      setParamsMode("fields");
+      setParamsJsonText("{}");
+      setFieldValues({});
+      setRefValues({});
+    }
     setInvocation(null);
     setConsoleEntries([]);
     setStartError(null);
     setStarting(false);
     setStopping(false);
-    setRightTab("console");
-  }, [open, action.path, action.name]);
+    setRightTab("result");
+  }, [open, action.path, action.name, storageKey]);
 
   // ── Pre-fill params from the parameter type schema once it loads ──
   useEffect(() => {
     if (!open || !paramSchema) return;
+    // If we restored saved values on open, don't clobber them with defaults.
+    if (hasSavedRef.current) return;
     const def = defaultValueFromSchema(paramSchema);
     const text = JSON.stringify(def, null, 2);
     setParamsJsonText(text);
@@ -171,17 +242,33 @@ export function ActionRunner({ open, onClose, action }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, paramSchema]);
 
-  // ── Build the params object from whichever tab is active ──
-  const builtParams = useMemo<unknown>(() => {
-    if (paramsMode === "json") {
-      try {
-        return JSON.parse(paramsJsonText);
-      } catch {
-        return null;
-      }
+  // ── Persist the last-used params whenever they change while open ──
+  useEffect(() => {
+    if (!open) return;
+    if (skipSaveRef.current) {
+      skipSaveRef.current = false;
+      return;
     }
+    saveParams(storageKey, { paramsMode, paramsJsonText, fieldValues, refValues });
+  }, [open, storageKey, paramsMode, paramsJsonText, fieldValues, refValues]);
+
+  // ── Build the params object from the Fields tab's current state. This is
+  //    also what keeps the JSON tab in sync (see the sync effect below), so
+  //    it's computed independently of `paramsMode`. ──
+  //
+  //    A blank scalar field maps to `null` only when the field's schema
+  //    actually allows null. A blank *required* field falls back to the
+  //    field's schema default so required-non-nullable fields (e.g. a plain
+  //    `string` `redirect_uri`) never submit `null` and trip `"null is not
+  //    of type \"string\""` validation. A blank *optional* field is omitted
+  //    from the payload entirely, rather than defaulted -- an unset optional
+  //    integer becoming a literal `0` (etc.) reads to the receiving action as
+  //    a real, meaningful value rather than "not provided", which breaks any
+  //    `if $params.x == null` fallback logic on the other end.
+  const paramsFromFields = useMemo<unknown>(() => {
     if (!paramSchema) return null;
     const props = propertySchema(paramSchema);
+    const required = requiredFieldNames(paramSchema);
     const contents: Record<string, unknown> = {};
     for (const [fieldName, fieldSchema] of Object.entries(props)) {
       const refKind = refKindFromSchema(fieldSchema);
@@ -197,7 +284,17 @@ export function ActionRunner({ open, onClose, action }: Props) {
       const raw = (fieldValues[fieldName] ?? "").trim();
       const fieldType = schemaValueType(fieldSchema);
       if (!raw) {
-        contents[fieldName] = fieldType === "boolean" ? false : null;
+        if (fieldType === "boolean") {
+          contents[fieldName] = false;
+        } else if (isNullableSchema(fieldSchema)) {
+          contents[fieldName] = null;
+        } else if (required.has(fieldName)) {
+          contents[fieldName] = defaultValueFromSchema(
+            fieldSchema,
+            paramSchema as Record<string, unknown>,
+          );
+        }
+        // else: optional, non-nullable, left blank -- omit the key.
         continue;
       }
       if (fieldType === "number" || fieldType === "integer") {
@@ -220,7 +317,68 @@ export function ActionRunner({ open, onClose, action }: Props) {
       }
     }
     return contents;
-  }, [paramsMode, paramsJsonText, paramSchema, fieldValues, refValues]);
+  }, [paramSchema, fieldValues, refValues]);
+
+  // ── Build the params object from whichever tab is active ──
+  const builtParams = useMemo<unknown>(() => {
+    if (paramsMode === "json") {
+      try {
+        return JSON.parse(paramsJsonText);
+      } catch {
+        return null;
+      }
+    }
+    return paramsFromFields;
+  }, [paramsMode, paramsJsonText, paramsFromFields]);
+
+  // ── Keep the JSON tab in sync while the Fields tab is being edited ──
+  useEffect(() => {
+    if (!open || !paramSchema) return;
+    if (paramsMode !== "fields") return;
+    const text = JSON.stringify(paramsFromFields ?? null, null, 2);
+    setParamsJsonText((prev) => (prev === text ? prev : text));
+  }, [open, paramsMode, paramSchema, paramsFromFields]);
+
+  // ── Keep the Fields tab in sync while the JSON tab is being edited ──
+  useEffect(() => {
+    if (!open || !paramSchema) return;
+    if (paramsMode !== "json") return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(paramsJsonText);
+    } catch {
+      return;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+    const source = parsed as Record<string, unknown>;
+    const props = propertySchema(paramSchema);
+    const nextFieldValues: Record<string, string> = {};
+    const nextRefValues: Record<string, RefFieldValue> = {};
+    for (const [fieldName, fieldSchema] of Object.entries(props)) {
+      const refKind = refKindFromSchema(fieldSchema);
+      if (refKind) {
+        const refSource = source[fieldName];
+        if (refSource && typeof refSource === "object") {
+          const refObj = refSource as Record<string, unknown>;
+          if (typeof refObj.name === "string") {
+            nextRefValues[fieldName] = { kind: refKind, mode: "name", value: refObj.name };
+          } else if (typeof refObj.id === "string") {
+            nextRefValues[fieldName] = { kind: refKind, mode: "id", value: refObj.id };
+          } else {
+            nextRefValues[fieldName] = { kind: refKind, mode: "name", value: "" };
+          }
+        } else {
+          nextRefValues[fieldName] = { kind: refKind, mode: "name", value: "" };
+        }
+        continue;
+      }
+      const fieldType = schemaValueType(fieldSchema);
+      nextFieldValues[fieldName] = valueFromUnknown(source[fieldName], fieldType);
+    }
+    setFieldValues(nextFieldValues);
+    setRefValues(nextRefValues);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, paramsMode, paramSchema, paramsJsonText]);
 
   const paramsIsValidJson = useMemo(() => {
     if (paramsMode !== "json") return true;
@@ -365,17 +523,17 @@ export function ActionRunner({ open, onClose, action }: Props) {
               <div className="doc-editor-tabs">
                 <button
                   type="button"
-                  className={`doc-editor-tab${paramsMode === "json" ? " doc-editor-tab--active" : ""}`}
-                  onClick={() => setParamsMode("json")}
-                >
-                  JSON
-                </button>
-                <button
-                  type="button"
                   className={`doc-editor-tab${paramsMode === "fields" ? " doc-editor-tab--active" : ""}`}
                   onClick={() => setParamsMode("fields")}
                 >
                   Fields
+                </button>
+                <button
+                  type="button"
+                  className={`doc-editor-tab${paramsMode === "json" ? " doc-editor-tab--active" : ""}`}
+                  onClick={() => setParamsMode("json")}
+                >
+                  JSON
                 </button>
               </div>
 
@@ -404,41 +562,19 @@ export function ActionRunner({ open, onClose, action }: Props) {
                 />
               )}
 
-              <div className="doc-editor-section-sep">Result</div>
-
-              <JsonEditField
-                value={resultText}
-                onChange={() => {}}
-                readOnly
-                placeholder="Run the action to see its result."
-                ariaLabel="Action result"
-                minLines={8}
-              />
-
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
-                <button
-                  className="dialog__btn dialog__btn--primary"
-                  onClick={() => void handleStart()}
-                  disabled={!canStart}
-                >
-                  {starting ? "Starting…" : invocation ? "Run again" : "Start"}
-                </button>
-                <button
-                  className="dialog__btn dialog__btn--danger"
-                  onClick={() => void handleStop()}
-                  disabled={!canStop || stopping}
-                >
-                  {stopping ? "…" : status === "cancelling" ? "Force stop" : "Stop"}
-                </button>
-                {status && <StatusBadge status={status} />}
-              </div>
-
               {startError && <div className="dialog__error">{startError}</div>}
             </div>
 
-            {/* ── RIGHT: console + widget ── */}
+            {/* ── RIGHT: result + console + widget ── */}
             <div className="doc-editor-pane doc-editor-pane--preview">
               <div className="doc-editor-tabs">
+                <button
+                  type="button"
+                  className={`doc-editor-tab${rightTab === "result" ? " doc-editor-tab--active" : ""}`}
+                  onClick={() => setRightTab("result")}
+                >
+                  Result
+                </button>
                 <button
                   type="button"
                   className={`doc-editor-tab${rightTab === "console" ? " doc-editor-tab--active" : ""}`}
@@ -457,7 +593,17 @@ export function ActionRunner({ open, onClose, action }: Props) {
                 )}
               </div>
 
-              {rightTab === "console" ? (
+              {rightTab === "result" ? (
+                <JsonEditField
+                  value={resultText}
+                  onChange={() => {}}
+                  readOnly
+                  noLint
+                  placeholder="Run the action to see its result."
+                  ariaLabel="Action result"
+                  minLines={8}
+                />
+              ) : rightTab === "console" ? (
                 <div
                   ref={consoleBoxRef}
                   style={{
@@ -498,6 +644,23 @@ export function ActionRunner({ open, onClose, action }: Props) {
         </div>
 
         <div className="dialog__footer">
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginRight: "auto" }}>
+            <button
+              className="dialog__btn dialog__btn--primary"
+              onClick={() => void handleStart()}
+              disabled={!canStart}
+            >
+              {starting ? "Starting…" : invocation ? "Run again" : "Start"}
+            </button>
+            <button
+              className="dialog__btn dialog__btn--danger"
+              onClick={() => void handleStop()}
+              disabled={!canStop || stopping}
+            >
+              {stopping ? "…" : status === "cancelling" ? "Force stop" : "Stop"}
+            </button>
+            {status && <StatusBadge status={status} />}
+          </div>
           <button className="dialog__btn" onClick={onClose}>
             Close
           </button>

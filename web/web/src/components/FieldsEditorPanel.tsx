@@ -78,7 +78,7 @@ export function FieldsEditorPanel({
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <div className="fields-editor-table">
       {visible.map(([fieldName, fieldSchema]) =>
         renderField({
           fieldName,
@@ -125,136 +125,165 @@ function renderField(ctx: FieldContext): ReactNode {
   const setValue = (next: string) =>
     onValuesChange({ ...values, [fieldName]: next });
 
+  // Wrap each field in a row with a left "label" cell and a right "control"
+  // cell. We do this for every field type (including rich-text / json /
+  // image) so the row layout is consistent. Each row also gets a description
+  // line below the label, when one is provided in the schema.
+  const renderLabel = (text: string) => (
+    <label className="fields-editor-table__label" style={{ textTransform: "none", letterSpacing: 0 }}>
+      {text}
+    </label>
+  );
+
   const refKind = refKindFromSchema(schema);
   if (refKind) {
     const refState =
       refValues[fieldName] ?? { kind: refKind, mode: "name" as const, value: "" };
     const lookupOptions = refKind === "DocRef" ? documentNames : actionNames;
     return (
-      <div key={fieldName} className="form-field">
-        <label className="form-label" style={{ textTransform: "none", letterSpacing: 0 }}>
-          {String(schema.title ?? fieldName)} ({refKind})
-        </label>
-        <div className="doc-editor-ref-field">
-          <select
-            className="form-input doc-editor-ref-field__mode"
-            value={refState.mode}
-            onChange={(e) =>
-              onRefValuesChange({
-                ...refValues,
-                [fieldName]: { ...refState, mode: e.target.value as "name" | "id" },
-              })
-            }
-          >
-            <option value="name">name</option>
-            <option value="id">id</option>
-          </select>
-          <input
-            className="form-input"
-            value={refState.value}
-            onChange={(e) =>
-              onRefValuesChange({
-                ...refValues,
-                [fieldName]: { ...refState, value: e.target.value, kind: refKind },
-              })
-            }
-            list={refState.mode === "name" ? `fields-editor-ref-options-${fieldName}` : undefined}
-            placeholder={refState.mode === "name" ? `Lookup ${refKind} name` : "UUID"}
-          />
+      <div key={fieldName} className="form-field fields-editor-table__row">
+        {renderLabel(`${String(schema.title ?? fieldName)} (${refKind})`)}
+        <div className="fields-editor-table__control">
+          <div className="doc-editor-ref-field">
+            <select
+              className="form-input doc-editor-ref-field__mode"
+              value={refState.mode}
+              onChange={(e) =>
+                onRefValuesChange({
+                  ...refValues,
+                  [fieldName]: { ...refState, mode: e.target.value as "name" | "id" },
+                })
+              }
+            >
+              <option value="name">name</option>
+              <option value="id">id</option>
+            </select>
+            <input
+              className="form-input"
+              value={refState.value}
+              onChange={(e) =>
+                onRefValuesChange({
+                  ...refValues,
+                  [fieldName]: { ...refState, value: e.target.value, kind: refKind },
+                })
+              }
+              list={refState.mode === "name" ? `fields-editor-ref-options-${fieldName}` : undefined}
+              placeholder={refState.mode === "name" ? `Lookup ${refKind} name` : "UUID"}
+            />
+          </div>
+          <datalist id={`fields-editor-ref-options-${fieldName}`}>
+            {lookupOptions.map((opt) => (
+              <option key={opt} value={opt} />
+            ))}
+          </datalist>
         </div>
-        <datalist id={`fields-editor-ref-options-${fieldName}`}>
-          {lookupOptions.map((opt) => (
-            <option key={opt} value={opt} />
-          ))}
-        </datalist>
       </div>
     );
   }
 
   const fieldType = schemaValueType(schema);
   const label = String(schema.title ?? fieldName);
-  const placeholder = String(schema.description ?? "");
+  const description = String(schema.description ?? "");
+  const descriptionNode = description ? (
+    <div className="fields-editor-table__description">{description}</div>
+  ) : null;
 
   if (fieldType === "rich_text") {
     return (
-      <div key={fieldName} className="form-field">
-        <label className="form-label" style={{ textTransform: "none", letterSpacing: 0 }}>
-          {label}
-        </label>
-        <RichTextField
-          value={values[fieldName] ?? ""}
-          onChange={setValue}
-          ariaLabel={label}
-          placeholder={placeholder}
-        />
+      <div key={fieldName} className="form-field fields-editor-table__row">
+        {renderLabel(label)}
+        <div className="fields-editor-table__control">
+          <RichTextField
+            value={values[fieldName] ?? ""}
+            onChange={setValue}
+            ariaLabel={label}
+            placeholder={description}
+          />
+          {descriptionNode}
+        </div>
       </div>
     );
   }
 
   if (fieldType === "image") {
     return (
-      <ImageField
-        key={fieldName}
-        label={label}
-        ariaLabel={label}
-        value={values[fieldName] ?? ""}
-        onChange={setValue}
-      />
+      <div key={fieldName} className="form-field fields-editor-table__row">
+        {renderLabel(label)}
+        <div className="fields-editor-table__control">
+          <ImageField
+            label=""
+            ariaLabel={label}
+            value={values[fieldName] ?? ""}
+            onChange={setValue}
+          />
+          {descriptionNode}
+        </div>
+      </div>
     );
   }
 
   if (fieldType === "boolean") {
     return (
-      <label
-        key={fieldName}
-        className="form-label"
-        style={{ textTransform: "none", letterSpacing: 0, fontWeight: 500 }}
-      >
-        <input
-          type="checkbox"
-          checked={String(values[fieldName] ?? "false").toLowerCase() === "true"}
-          onChange={(e) => setValue(e.target.checked ? "true" : "false")}
-          style={{ marginRight: 8 }}
-        />
-        {label}
-      </label>
+      <div key={fieldName} className="form-field fields-editor-table__row">
+        {renderLabel(label)}
+        <div className="fields-editor-table__control">
+          <label
+            className="fields-editor-table__inline-control"
+            style={{ textTransform: "none", letterSpacing: 0, fontWeight: 500 }}
+          >
+            <input
+              type="checkbox"
+              checked={String(values[fieldName] ?? "false").toLowerCase() === "true"}
+              onChange={(e) => setValue(e.target.checked ? "true" : "false")}
+            />
+            <span>{label}</span>
+          </label>
+          {descriptionNode}
+        </div>
+      </div>
     );
   }
 
   if (fieldType === "array" || fieldType === "object") {
     return (
-      <div key={fieldName} className="form-field">
-        <label className="form-label" style={{ textTransform: "none", letterSpacing: 0 }}>
-          {label}
-        </label>
-        <JsonEditField
-          value={values[fieldName] ?? ""}
-          onChange={setValue}
-          placeholder={
-            placeholder ||
-            (fieldType === "array" ? "[\n  {}\n]" : "{\n  \"key\": \"value\"\n}")
-          }
-          ariaLabel={label}
-          minLines={4}
-        />
+      <div key={fieldName} className="form-field fields-editor-table__row">
+        {renderLabel(label)}
+        <div className="fields-editor-table__control">
+          <JsonEditField
+            value={values[fieldName] ?? ""}
+            onChange={setValue}
+            placeholder={
+              description ||
+              (fieldType === "array" ? "[\n  {}\n]" : `{\n  "key": "value"\n}`)
+            }
+            ariaLabel={label}
+            minLines={4}
+          />
+          {descriptionNode}
+        </div>
       </div>
     );
   }
 
-  const isLong = /contents|summary|text|body|description/i.test(fieldName);
+  // Number/integer fields use a single-line <input type="number">; everything
+  // else gets a plain <input> so short values render as a one-line box rather
+  // than a 2-row textarea. Rich-text / array / object / image already
+  // short-circuit above.
+  const isNumber = fieldType === "number" || fieldType === "integer";
   return (
-    <div key={fieldName} className="form-field">
-      <label className="form-label" style={{ textTransform: "none", letterSpacing: 0 }}>
-        {label}
-      </label>
-      <textarea
-        className="form-textarea"
-        rows={isLong ? 4 : 2}
-        value={values[fieldName] ?? ""}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder={placeholder}
-        spellCheck={fieldType !== "number" && fieldType !== "integer"}
-      />
+    <div key={fieldName} className="form-field fields-editor-table__row">
+      {renderLabel(label)}
+      <div className="fields-editor-table__control">
+        <input
+          className="form-input"
+          type={isNumber ? "number" : "text"}
+          value={values[fieldName] ?? ""}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder={description}
+          spellCheck={!isNumber}
+        />
+        {descriptionNode}
+      </div>
     </div>
   );
 }

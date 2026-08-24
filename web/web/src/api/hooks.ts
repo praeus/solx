@@ -30,6 +30,7 @@ import {
   fetchType,
   fetchTypes,
   listFiles,
+  searchActions,
   searchDocuments,
   updateDocument,
   uploadFile,
@@ -247,6 +248,24 @@ export function useActions(opts: UseActionsOptions = {}): UseQueryResult<Page<Ac
     queryKey: ["actions", "list", params],
     queryFn: () => fetchActions(params),
     enabled: enabled !== false,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export interface UseSearchActionsOptions {
+  q?: string;
+  pathPrefix?: string;
+  limit?: number;
+  offset?: number;
+  enabled?: boolean;
+}
+
+export function useSearchActions(opts: UseSearchActionsOptions): UseQueryResult<Page<ActionSummary>> {
+  const { enabled, ...params } = opts;
+  return useQuery({
+    queryKey: ["actions", "search", params],
+    queryFn: () => searchActions(params),
+    enabled: enabled !== false && Boolean(params.q?.trim()),
     placeholderData: (previous) => previous,
   });
 }

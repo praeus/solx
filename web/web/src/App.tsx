@@ -14,10 +14,13 @@
  *
  * Query routing — one rule, applied per tab from TAB_CAPABILITIES:
  *
- *   Documents, no text query → /api/documents        (path + type + sort)
- *   Documents, text query    → /api/documents/search  (path + type facets,
- *                              relevance-ranked; SearchQuery has no sort axis)
- *   Actions / Types          → /api/{actions,types}   (path + name substring
+ *   Documents, no text query → /docs            (path + type facet + sort)
+ *   Documents, text query    → /search           (Tantivy, path + type
+ *                              facets, relevance-ranked; no sort axis)
+ *   Actions, no text query   → /actions          (path + sort)
+ *   Actions, text query      → /actions-search   (FTS5, path scope,
+ *                              relevance-ranked; no sort axis)
+ *   Types                    → /types            (path + name substring
  *                              via filter_field, + sort)
  *
  * Every query is filtered, sorted and paginated in the database. Every
@@ -62,6 +65,7 @@ import {
   useDocuments,
   useFilesList,
   useHealth,
+  useSearchActions,
   useSearchDocuments,
   useTypes,
 } from "./api/hooks";
@@ -161,18 +165,26 @@ export function App() {
     enabled: activeTab === "documents" && hasQuery,
   });
 
-  // Actions / Types: substring filter on the column the tab declares, plus
-  // path scope and sort — all pushed down to libsql.
-  const actionsQuery = useActions({
+  // Actions: full-text (FTS5) when there's a query (relevance-ranked, no
+  // sort axis), plain list otherwise (sortable). Path narrows both.
+  const actionsListQuery = useActions({
     pathPrefix: pathPrefix || undefined,
-    filterField: hasQuery ? TAB_CAPABILITIES.actions.filterField : undefined,
-    filterValue: hasQuery ? query : undefined,
     sortBy: browse.sortBy,
     sortOrder: browse.sortOrder,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
-    enabled: activeTab === "actions",
+    enabled: activeTab === "actions" && !hasQuery,
   });
+  const actionsSearchQuery = useSearchActions({
+    q: query || undefined,
+    pathPrefix: pathPrefix || undefined,
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
+    enabled: activeTab === "actions" && hasQuery,
+  });
+
+  // Types: substring filter on the column the tab declares, plus path scope
+  // and sort — pushed down to libsql.
   const typesListQuery = useTypes({
     pathPrefix: pathPrefix || undefined,
     filterField: hasQuery ? TAB_CAPABILITIES.types.filterField : undefined,
@@ -197,6 +209,15 @@ export function App() {
     ? (docsSearchQuery.data?.total ?? 0)
     : (docsListQuery.data?.total ?? 0);
 
+  // Actions results, from whichever endpoint answered. `search` returns the
+  // same `Page<Action>` shape as `list`, so no remapping is needed.
+  const actions = hasQuery
+    ? (actionsSearchQuery.data?.items ?? [])
+    : (actionsListQuery.data?.items ?? []);
+  const actionsTotal = hasQuery
+    ? (actionsSearchQuery.data?.total ?? 0)
+    : (actionsListQuery.data?.total ?? 0);
+
   const showSearchBar = isSearchableTab(activeTab);
 
   // Per-tab view bindings for the shared search bar.
@@ -204,7 +225,7 @@ export function App() {
     activeTab === "documents"
       ? documentsTotal
       : activeTab === "actions"
-        ? (actionsQuery.data?.total ?? 0)
+        ? actionsTotal
         : (typesListQuery.data?.total ?? 0);
 
   const activeFetching =
@@ -213,7 +234,9 @@ export function App() {
         ? docsSearchQuery.isFetching
         : docsListQuery.isFetching
       : activeTab === "actions"
-        ? actionsQuery.isFetching
+        ? hasQuery
+          ? actionsSearchQuery.isFetching
+          : actionsListQuery.isFetching
         : typesListQuery.isFetching;
 
   // Per-tab fetch errors. We surface these in a dedicated banner so
@@ -222,7 +245,7 @@ export function App() {
   const tabErrors: Array<{ kind: "documents" | "actions" | "types" | "files"; message: string }> = [];
   const docsErr = (docsListQuery.error ?? docsSearchQuery.error) as Error | null;
   if (docsErr) tabErrors.push({ kind: "documents", message: docsErr.message });
-  const actionErr = actionsQuery.error as Error | null;
+  const actionErr = (actionsListQuery.error ?? actionsSearchQuery.error) as Error | null;
   if (actionErr) tabErrors.push({ kind: "actions", message: actionErr.message });
   const typeErr = typesListQuery.error as Error | null;
   if (typeErr) tabErrors.push({ kind: "types", message: typeErr.message });
@@ -262,7 +285,8 @@ export function App() {
             onClick={() => {
               void docsListQuery.refetch();
               void docsSearchQuery.refetch();
-              void actionsQuery.refetch();
+              void actionsListQuery.refetch();
+              void actionsSearchQuery.refetch();
               void typesListQuery.refetch();
               void filesQuery.refetch();
             }}
@@ -320,10 +344,10 @@ export function App() {
 
           {activeTab === "actions" && (
             <ActionList
-              documents={actionsQuery.data?.items ?? []}
-              total={actionsQuery.data?.total ?? 0}
-              loading={actionsQuery.isLoading}
-              error={actionsQuery.error as Error | null}
+              documents={actions}
+              total={actionsTotal}
+              loading={hasQuery ? actionsSearchQuery.isLoading : actionsListQuery.isLoading}
+              error={(hasQuery ? actionsSearchQuery.error : actionsListQuery.error) as Error | null}
               page={page}
               onPageChange={setPage}
               onCreateClick={() =>
@@ -336,7 +360,10 @@ export function App() {
                   entity: action,
                 })
               }
-              onRetry={() => void actionsQuery.refetch()}
+              onRetry={() => {
+                void actionsListQuery.refetch();
+                void actionsSearchQuery.refetch();
+              }}
             />
           )}
 

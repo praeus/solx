@@ -30,6 +30,13 @@ interface Props {
   height?: string;
   /** Custom aria-label for screen readers. */
   ariaLabel?: string;
+  /**
+   * Skip the JSON lint extensions and the validity badge. Use this for
+   * display-only contexts where the value might not be JSON (e.g. a server
+   * error message in the ActionRunner result panel) — the linter would
+   * otherwise flag the display as invalid.
+   */
+  noLint?: boolean;
 }
 
 export function JsonEditField({
@@ -40,6 +47,7 @@ export function JsonEditField({
   readOnly = false,
   height,
   ariaLabel,
+  noLint = false,
 }: Props) {
   const lintExtensions = useMemo(() => jsonLintExtensions(), []);
   const { valid, error } = parseJsonStatus(value);
@@ -55,21 +63,23 @@ export function JsonEditField({
           height={height}
           minLines={minLines}
           placeholder={placeholder}
-          extensions={lintExtensions}
+          extensions={noLint ? [] : lintExtensions}
           ariaLabel={ariaLabel}
         />
       </div>
-      <div className="json-edit-field__status">
-        {valid === null ? (
-          <span className="json-edit-field__status--neutral">empty</span>
-        ) : valid ? (
-          <span className="json-edit-field__status--ok">✓ valid JSON</span>
-        ) : (
-          <span className="json-edit-field__status--err" title={error ?? undefined}>
-            ✗ {error ?? "invalid JSON"}
-          </span>
-        )}
-      </div>
+      {!noLint && (
+        <div className="json-edit-field__status">
+          {valid === null ? (
+            <span className="json-edit-field__status--neutral">empty</span>
+          ) : valid ? (
+            <span className="json-edit-field__status--ok">✓ valid JSON</span>
+          ) : (
+            <span className="json-edit-field__status--err" title={error ?? undefined}>
+              ✗ {error ?? "invalid JSON"}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
