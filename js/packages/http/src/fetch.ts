@@ -44,6 +44,21 @@ export function nestedPath(resource: string, relPath: string): string {
   return `/${resource}/${segments.map(encodeURIComponent).join('/')}`;
 }
 
+/**
+ * Turn a plain options object (`ListOptions`, `SearchQuery`,
+ * `ActionSearchQuery`, ...) into a query-string record, dropping `undefined`
+ * fields. The wire format is camelCase end to end, so field names pass
+ * through unchanged — no key renaming needed.
+ */
+export function toQuery(opts?: object): Record<string, QueryValue> {
+  if (!opts) return {};
+  const out: Record<string, QueryValue> = {};
+  for (const [key, value] of Object.entries(opts)) {
+    if (value !== undefined) out[key] = value as QueryValue;
+  }
+  return out;
+}
+
 function buildUrl(baseUrl: string, path: string, query?: Record<string, QueryValue>): string {
   const url = `${baseUrl.replace(/\/$/, '')}${path}`;
   if (!query) return url;

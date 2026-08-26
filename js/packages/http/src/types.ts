@@ -1,9 +1,9 @@
 /**
  * Pure-fetch `TypeManager` — HTTP proxy for `solx-server`, mirroring
  * `solx-client::RemoteTypeManager` (solx-core/solx-client/src/types.rs)
- * route-for-route. Same snake_case<->camelCase conversion pattern as
- * `@solx/types`'s Neon-backed `native.ts`, but talks `fetch`/JSON directly
- * instead of going through a native binding.
+ * route-for-route. The wire format is camelCase end to end (same as
+ * `@solx/surface`'s public types), so request/response bodies pass straight
+ * through with no conversion layer.
  */
 import type {
   JsonValue,
@@ -14,70 +14,7 @@ import type {
   TypeManager as TypeManagerIface,
 } from '@solx/surface';
 import { Ref } from '@solx/surface';
-import { entityPath, requestJson, type QueryValue } from './fetch.js';
-
-interface TypeEntitySnake {
-  id: string;
-  path: string;
-  name: string;
-  description?: string;
-  schema: Record<string, JsonValue>;
-  groups: string[];
-  created_at: string;
-  updated_at: string;
-}
-
-interface TypeInputSnake {
-  description?: string;
-  schema: Record<string, JsonValue>;
-  groups?: string[];
-}
-
-interface PageSnake<T> {
-  items: T[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-function entityFromSnake(s: TypeEntitySnake): TypeEntity {
-  return {
-    id: s.id,
-    path: s.path,
-    name: s.name,
-    description: s.description,
-    schema: s.schema,
-    groups: s.groups,
-    createdAt: s.created_at,
-    updatedAt: s.updated_at,
-  };
-}
-
-function inputToSnake(i: TypeInput): TypeInputSnake {
-  const out: TypeInputSnake = { schema: i.schema };
-  if (i.description !== undefined) out.description = i.description;
-  if (i.groups !== undefined) out.groups = i.groups;
-  return out;
-}
-
-function pageFromSnake<T, S>(s: PageSnake<S>, fromSnake: (x: S) => T): Page<T> {
-  return { items: s.items.map(fromSnake), total: s.total, limit: s.limit, offset: s.offset };
-}
-
-function listOptionsToSnake(opts?: ListOptions): Record<string, QueryValue> {
-  if (!opts) return {};
-  const out: Record<string, QueryValue> = {};
-  if (opts.pathPrefix !== undefined) out['path_prefix'] = opts.pathPrefix;
-  if (opts.limit !== undefined) out['limit'] = opts.limit;
-  if (opts.offset !== undefined) out['offset'] = opts.offset;
-  if (opts.filterField !== undefined) out['filter_field'] = opts.filterField;
-  if (opts.filterValue !== undefined) out['filter_value'] = opts.filterValue;
-  if (opts.sortBy !== undefined) out['sort_by'] = opts.sortBy;
-  if (opts.sortOrder !== undefined) out['sort_order'] = opts.sortOrder;
-  if (opts.dateAfter !== undefined) out['date_after'] = opts.dateAfter;
-  if (opts.dateBefore !== undefined) out['date_before'] = opts.dateBefore;
-  return out;
-}
+import { entityPath, requestJson, toQuery } from './fetch.js';
 
 /**
  * HTTP-proxy `TypeManager` talking to a `solx-server`. Public name matches
@@ -92,24 +29,13 @@ export class HttpTypeManager implements TypeManagerIface {
   ) {}
 
   async save(path: string, name: string, input: TypeInput): Promise<TypeEntity> {
-    const s = await requestJson<TypeEntitySnake>(
-      this.baseUrl,
-      this.token,
-      'PUT',
-      entityPath('types', path, name),
-      { body: inputToSnake(input) },
-    );
-    return entityFromSnake(s);
+    return requestJson<TypeEntity>(this.baseUrl, this.token, 'PUT', entityPath('types', path, name), {
+      body: input,
+    });
   }
 
   async get(path: string, name: string): Promise<TypeEntity> {
-    const s = await requestJson<TypeEntitySnake>(
-      this.baseUrl,
-      this.token,
-      'GET',
-      entityPath('types', path, name),
-    );
-    return entityFromSnake(s);
+    return requestJson<TypeEntity>(this.baseUrl, this.token, 'GET', entityPath('types', path, name));
   }
 
   async delete(path: string, name: string): Promise<void> {
@@ -117,14 +43,9 @@ export class HttpTypeManager implements TypeManagerIface {
   }
 
   async list(opts?: ListOptions): Promise<Page<TypeEntity>> {
-    const s = await requestJson<PageSnake<TypeEntitySnake>>(
-      this.baseUrl,
-      this.token,
-      'GET',
-      '/types',
-      { query: listOptionsToSnake(opts) },
-    );
-    return pageFromSnake(s, entityFromSnake);
+    return requestJson<Page<TypeEntity>>(this.baseUrl, this.token, 'GET', '/types', {
+      query: toQuery(opts),
+    });
   }
 
   /**
@@ -142,7 +63,7 @@ export class HttpTypeManager implements TypeManagerIface {
    */
   async validate(value: JsonValue, typeRef: string): Promise<void> {
     await requestJson<void>(this.baseUrl, this.token, 'POST', '/validate', {
-      body: { value, type_ref: typeRef },
+      body: { value, typeRef },
     });
   }
 }

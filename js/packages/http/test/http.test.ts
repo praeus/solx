@@ -69,7 +69,7 @@ beforeAll(async () => {
           id: 'id-1',
           path: '/p',
           name: 'n',
-          type_ref: '/types/docs/Document',
+          typeRef: '/types/docs/Document',
           contents: {},
           schema: {},
           groups: [],
@@ -77,8 +77,8 @@ beforeAll(async () => {
           phrases: [],
           links: [],
           files: [],
-          created_at: NOW,
-          updated_at: NOW,
+          createdAt: NOW,
+          updatedAt: NOW,
         }),
       );
     })();
@@ -108,7 +108,7 @@ describe('entity references in the URL', () => {
     expect(last().method).toBe('PUT');
     expect(last().url).toBe('/docs/research/ai/note');
     expect(JSON.parse(last().body.toString())).toEqual({
-      type_ref: '/types/docs/Document',
+      typeRef: '/types/docs/Document',
       contents: { k: 'v' },
     });
   });
@@ -141,7 +141,7 @@ describe('entity references in the URL', () => {
 });
 
 describe('collection routes', () => {
-  test('list options ride in the query string, snake_cased', async () => {
+  test('list options ride in the query string, camelCased', async () => {
     nextResponse = (res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ items: [], total: 0, limit: 10, offset: 0 }));
@@ -150,9 +150,9 @@ describe('collection routes', () => {
     expect(last().method).toBe('GET');
     const url = new URL(`http://x${last().url}`);
     expect(url.pathname).toBe('/docs');
-    expect(url.searchParams.get('path_prefix')).toBe('/research');
+    expect(url.searchParams.get('pathPrefix')).toBe('/research');
     expect(url.searchParams.get('limit')).toBe('10');
-    expect(url.searchParams.get('sort_by')).toBe('created_at');
+    expect(url.searchParams.get('sortBy')).toBe('created_at');
     expect(url.searchParams.has('offset')).toBe(false);
   });
 
@@ -165,7 +165,7 @@ describe('collection routes', () => {
     const url = new URL(`http://x${last().url}`);
     expect(url.pathname).toBe('/search');
     expect(url.searchParams.get('q')).toBe('ada');
-    expect(url.searchParams.get('type_ref')).toBe('/types/docs/Document');
+    expect(url.searchParams.get('typeRef')).toBe('/types/docs/Document');
   });
 
   test('validate is top-level, and a 204 resolves rather than throwing', async () => {
@@ -177,7 +177,7 @@ describe('collection routes', () => {
     expect(last().url).toBe('/validate');
     expect(JSON.parse(last().body.toString())).toEqual({
       value: { name: 'Ada' },
-      type_ref: '/types/custom/Person',
+      typeRef: '/types/custom/Person',
     });
   });
 
@@ -198,7 +198,7 @@ describe('actions', () => {
     const url = new URL(`http://x${last().url}`);
     expect(url.pathname).toBe('/actions-search');
     expect(url.searchParams.get('q')).toBe('livejournal');
-    expect(url.searchParams.get('path_prefix')).toBe('/tools');
+    expect(url.searchParams.get('pathPrefix')).toBe('/tools');
   });
 
   test('exec POSTs the params to the action own URL', async () => {
@@ -218,7 +218,7 @@ describe('files', () => {
   test('put sends raw bytes, not base64 JSON', async () => {
     nextResponse = (res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ rel_path: 'media/pic.png' }));
+      res.end(JSON.stringify({ relPath: 'media/pic.png' }));
     };
     const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
     const stored = await solx.files.put('media/pic.png', bytes);
@@ -242,7 +242,7 @@ describe('files', () => {
   test('a byte view over a larger buffer is not over-sent', async () => {
     nextResponse = (res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ rel_path: 'a.bin' }));
+      res.end(JSON.stringify({ relPath: 'a.bin' }));
     };
     const backing = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
     const view = backing.subarray(2, 5);

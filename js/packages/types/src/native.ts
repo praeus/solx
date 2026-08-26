@@ -7,91 +7,21 @@
  * This module:
  *
  *   1. Loads the `.node` binary via `./loader.ts`.
- *   2. Wraps each primitive in a properly-typed async method.
- *   3. Translates snake_case DTOs from the Rust side to camelCase
- *      {@link TypeEntity} on the way out, and back on the way in.
- *   4. Catches `SolxError`-prefixed `Error` instances and rethrows
+ *   2. Wraps each primitive in a properly-typed async method. The Neon
+ *      boundary marshals the same `solx_surface::entities::TypeEntity`
+ *      struct as `solx-server`'s HTTP responses, so the JSON crossing it is
+ *      camelCase already — no DTO conversion needed on this side.
+ *   3. Catches `SolxError`-prefixed `Error` instances and rethrows
  *      them as real {@link SolxError} values.
  */
 
 import { SolxError } from '@solx/surface';
-import type { JsonObject, JsonValue } from '@solx/surface';
+import type { JsonValue } from '@solx/surface';
 import type { ListOptions, Page, TypeEntity, TypeInput } from '@solx/surface';
 import { loadNative } from './loader.js';
 import type { NativeTypesModule, TypeManagerHandle } from './native-types.js';
 
 export type { NativeTypesModule, TypeManagerHandle };
-
-// ----- snake_case DTO mirror (Rust serde shape) -----
-
-interface TypeEntitySnake {
-  id: string;
-  path: string;
-  name: string;
-  description?: string;
-  schema: JsonObject;
-  groups: string[];
-  created_at: string;
-  updated_at: string;
-}
-
-interface TypeInputSnake {
-  description?: string;
-  schema?: JsonObject;
-  groups?: string[];
-}
-
-interface PageSnake<T> {
-  items: T[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-function entityFromSnake(s: TypeEntitySnake): TypeEntity {
-  return {
-    id: s.id,
-    path: s.path,
-    name: s.name,
-    description: s.description,
-    schema: s.schema,
-    groups: s.groups,
-    createdAt: s.created_at,
-    updatedAt: s.updated_at,
-  };
-}
-
-function inputToSnake(i: TypeInput): TypeInputSnake {
-  const out: TypeInputSnake = {};
-  if (i.description !== undefined) out.description = i.description;
-  if (i.schema !== undefined) out.schema = i.schema;
-  if (i.groups !== undefined) out.groups = i.groups;
-  return out;
-}
-
-function pageFromSnake<T, S>(s: PageSnake<S>, fromSnake: (x: S) => T): Page<T> {
-  return {
-    items: s.items.map(fromSnake),
-    total: s.total,
-    limit: s.limit,
-    offset: s.offset,
-  };
-}
-
-function listOptionsToJson(opts?: ListOptions): string {
-  if (!opts) return '{}';
-  const out: Record<string, JsonValue> = {};
-  if (opts.pathPrefix !== undefined) out['path_prefix'] = opts.pathPrefix;
-  if (opts.limit !== undefined) out['limit'] = opts.limit;
-  if (opts.offset !== undefined) out['offset'] = opts.offset;
-  if (opts.filterField !== undefined) out['filter_field'] = opts.filterField;
-  if (opts.filterValue !== undefined) out['filter_value'] = opts.filterValue;
-  if (opts.sortBy !== undefined) out['sort_by'] = opts.sortBy;
-  if (opts.sortOrder !== undefined) out['sort_order'] = opts.sortOrder;
-  if (opts.dateAfter !== undefined) out['date_after'] = opts.dateAfter;
-  if (opts.dateBefore !== undefined) out['date_before'] = opts.dateBefore;
-  return JSON.stringify(out);
-}
 
 async function withSolxError<T>(fn: () => Promise<T>): Promise<T> {
   try {
@@ -143,13 +73,8 @@ export class TypeManager {
   async save(path: string, name: string, input: TypeInput): Promise<TypeEntity> {
     return withSolxError(async () => {
       const native = loadNative();
-      const json = await native.typesSave(
-        this.handle,
-        path,
-        name,
-        JSON.stringify(inputToSnake(input)),
-      );
-      return entityFromSnake(JSON.parse(json) as TypeEntitySnake);
+      const json = await native.typesSave(this.handle, path, name, JSON.stringify(input));
+      return JSON.parse(json) as TypeEntity;
     });
   }
 
@@ -157,7 +82,7 @@ export class TypeManager {
     return withSolxError(async () => {
       const native = loadNative();
       const json = await native.typesGet(this.handle, path, name);
-      return entityFromSnake(JSON.parse(json) as TypeEntitySnake);
+      return JSON.parse(json) as TypeEntity;
     });
   }
 
@@ -171,11 +96,8 @@ export class TypeManager {
   async list(opts?: ListOptions): Promise<Page<TypeEntity>> {
     return withSolxError(async () => {
       const native = loadNative();
-      const json = await native.typesList(this.handle, listOptionsToJson(opts));
-      return pageFromSnake(
-        JSON.parse(json) as PageSnake<TypeEntitySnake>,
-        entityFromSnake,
-      );
+      const json = await native.typesList(this.handle, JSON.stringify(opts ?? {}));
+      return JSON.parse(json) as Page<TypeEntity>;
     });
   }
 
@@ -183,7 +105,7 @@ export class TypeManager {
     return withSolxError(async () => {
       const native = loadNative();
       const json = await native.typesResolve(this.handle, typeRef);
-      return entityFromSnake(JSON.parse(json) as TypeEntitySnake);
+      return JSON.parse(json) as TypeEntity;
     });
   }
 

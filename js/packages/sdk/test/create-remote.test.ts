@@ -39,32 +39,32 @@ const describeIfNative = nativePath ? describe : describe.skip;
 const TOKEN = 'test-bearer-token';
 const NOW_ISO = '2026-01-01T00:00:00Z';
 
-interface TypeEntitySnake {
+interface TypeEntityMock {
   id: string;
   path: string;
   name: string;
   description?: string;
   schema: unknown;
   groups: string[];
-  created_at: string;
-  updated_at: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
-interface DocumentSnake {
+interface DocumentMock {
   id: string;
   path: string;
   name: string;
   title?: string;
   summary?: string;
-  type_ref: string;
+  typeRef: string;
   contents: unknown;
   author?: string;
-  pub_date?: string;
+  pubDate?: string;
   confidence?: number;
   links: unknown[];
   files: unknown[];
-  created_at: string;
-  updated_at: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 function readBody(req: Parameters<Parameters<typeof createServer>[0]>[0]): Promise<Buffer> {
@@ -92,8 +92,8 @@ function splitUrl(url: string): { resource: string; path: string; name: string; 
 
 /** Minimal stand-in for solx-server: bearer auth + a handful of REST routes. */
 function startMockServer(): Promise<{ server: Server; url: string }> {
-  const types = new Map<string, TypeEntitySnake>();
-  const docs = new Map<string, DocumentSnake>();
+  const types = new Map<string, TypeEntityMock>();
+  const docs = new Map<string, DocumentMock>();
   const files = new Map<string, Buffer>();
 
   return new Promise((resolve) => {
@@ -120,7 +120,7 @@ function startMockServer(): Promise<{ server: Server; url: string }> {
         if (resource === 'files') {
           if (method === 'PUT') {
             files.set(rest, raw);
-            res.end(JSON.stringify({ rel_path: rest }));
+            res.end(JSON.stringify({ relPath: rest }));
             return;
           }
           if (method === 'GET') {
@@ -136,15 +136,15 @@ function startMockServer(): Promise<{ server: Server; url: string }> {
 
         if (resource === 'types' && method === 'PUT') {
           const input = json();
-          const entity: TypeEntitySnake = {
+          const entity: TypeEntityMock = {
             id: types.get(key)?.id ?? randomUUID(),
             path,
             name,
             description: input.description,
             schema: input.schema,
             groups: input.groups ?? [],
-            created_at: NOW_ISO,
-            updated_at: NOW_ISO,
+            createdAt: NOW_ISO,
+            updatedAt: NOW_ISO,
           };
           types.set(key, entity);
           res.end(JSON.stringify(entity));
@@ -158,21 +158,21 @@ function startMockServer(): Promise<{ server: Server; url: string }> {
         }
         if (resource === 'docs' && method === 'PUT') {
           const input = json();
-          const doc: DocumentSnake = {
+          const doc: DocumentMock = {
             id: docs.get(key)?.id ?? randomUUID(),
             path,
             name,
             title: input.title,
             summary: input.summary,
-            type_ref: input.type_ref,
+            typeRef: input.typeRef,
             contents: input.contents,
             author: input.author,
-            pub_date: input.pub_date,
+            pubDate: input.pubDate,
             confidence: input.confidence,
             links: input.links ?? [],
             files: input.files ?? [],
-            created_at: NOW_ISO,
-            updated_at: NOW_ISO,
+            createdAt: NOW_ISO,
+            updatedAt: NOW_ISO,
           };
           docs.set(key, doc);
           res.end(JSON.stringify(doc));

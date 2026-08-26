@@ -8,7 +8,7 @@ import type { FileStore as FileStoreIface } from '@solx/surface';
 import { nestedPath, requestBytes, requestJson } from './fetch.js';
 
 interface FilePutResponse {
-  rel_path: string;
+  relPath: string;
 }
 
 interface FileListResponse {
@@ -34,7 +34,7 @@ export class HttpFileStore implements FileStoreIface {
       nestedPath('files', relPath),
       { bytes },
     );
-    return resp.rel_path;
+    return resp.relPath;
   }
 
   async get(relPath: string): Promise<Uint8Array> {
