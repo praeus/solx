@@ -21,7 +21,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ActionInputApp, ActionSummary } from "../api/api";
-import { useCreateAction, useDocumentTypes } from "../api/hooks";
+import { useActions, useCreateAction } from "../api/hooks";
 import { ActionRunner } from "./ActionRunner";
 import { ChipTagInput } from "./ChipTagInput";
 import { FilesField, coerceFilesField, type FileRef } from "./FilesField";
@@ -66,7 +66,7 @@ interface Props {
 
 export function ActionEditor({ open, onClose, existing, existingEntity, defaultPath, onSaved }: Props) {
   const isEdit = existing !== null;
-  const typesQuery = useDocumentTypes();
+  const categoriesQuery = useActions({ limit: 1000, sortBy: "category", sortOrder: "asc", enabled: open });
   const createMutation = useCreateAction();
 
   const [path, setPath] = useState(defaultPath ?? "/");
@@ -156,10 +156,13 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
     }
   }, [open, existing, existingEntity, defaultPath]);
 
-  const types = useMemo(
-    () => (typesQuery.data?.items ?? []).slice().sort((a, b) => String(a.name).localeCompare(String(b.name))),
-    [typesQuery.data],
-  );
+  const categories = useMemo(() => {
+    const items = categoriesQuery.data?.items ?? [];
+    const names = items
+      .map((a) => String(a.category ?? "").trim())
+      .filter((c) => c.length > 0);
+    return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
+  }, [categoriesQuery.data]);
 
   if (!open) return null;
 
@@ -475,7 +478,7 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
               list="action-editor-categories"
             />
             <datalist id="action-editor-categories">
-              {Array.from(new Set(types.map((t) => String(t.name)))).map((c) => (
+              {categories.map((c) => (
                 <option key={c} value={c} />
               ))}
             </datalist>

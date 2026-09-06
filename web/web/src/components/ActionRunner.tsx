@@ -51,6 +51,9 @@ import {
   type Invocation,
 } from "../api/api";
 import { useActions, useDocuments, useType } from "../api/hooks";
+import { getConnection } from "../api/connection";
+import { mountWidget, type WidgetDescriptor } from "@solx/widgets/host";
+import type { JsonValue } from "@solx/surface";
 import { FieldsEditorPanel } from "./FieldsEditorPanel";
 import { JsonEditField } from "./JsonEditField";
 import { defaultValueFromSchema } from "./schemaDefaults";
@@ -671,47 +674,79 @@ export function ActionRunner({ open, onClose, action }: Props) {
 }
 
 // ───────────────────────────────────────────────────────────────────────
-// Widget stub — renders the descriptor; mounting is not yet implemented.
+// Widget panel — fetches the bundle, imports it, and mounts the descriptor's
+// custom element via @solx/widgets' mountWidget (solx-core/docs/widget-actions.md §3).
 // ───────────────────────────────────────────────────────────────────────
 
+function isWidgetDescriptor(value: unknown): value is WidgetDescriptor {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Record<string, unknown>).tag_name === "string" &&
+    typeof (value as Record<string, unknown>).bin_name === "string"
+  );
+}
+
 function WidgetPanel({ result }: { result: unknown }) {
-  const descriptor = result as { tag_name?: string; bin_name?: string; fields?: unknown } | null;
-  if (!descriptor || typeof descriptor !== "object") {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [mountError, setMountError] = useState<string | null>(null);
+
+  const descriptor = isWidgetDescriptor(result) ? result : null;
+  // Depend on content, not object identity — `result` is a fresh reference
+  // on every poll tick even when the descriptor itself hasn't changed, and
+  // remounting on every tick would be needless churn.
+  const descriptorKey = descriptor
+    ? `${descriptor.tag_name} ${descriptor.bin_name} ${JSON.stringify(descriptor.fields ?? null)}`
+    : null;
+
+  useEffect(() => {
+    setMountError(null);
+    const container = containerRef.current;
+    if (!descriptor || !container) return;
+    let cancelled = false;
+    const conn = getConnection();
+    mountWidget(descriptor, container, {
+      files: conn.files,
+      client: {
+        actions: {
+          exec: (path, name, params) => conn.actions.exec(path, name, (params ?? {}) as JsonValue),
+        },
+        // Delegated to the same helpers the app drives its own detached runs
+        // with, so the long-poll and cancellation behaviour a widget gets is
+        // the behaviour ActionRunner itself is tested against.
+        invocations: {
+          start: (path, name, params) => startInvocation(path, name, params),
+          poll: (invocationId, waitSecs) => pollInvocation(invocationId, waitSecs),
+          stop: (invocationId, opts) => stopInvocation(invocationId, { force: opts?.force }),
+          tailConsole: (actionRef, opts) => tailConsole(actionRef, opts),
+        },
+      },
+    }).catch((err: unknown) => {
+      if (!cancelled) setMountError(err instanceof Error ? err.message : String(err));
+    });
+    return () => {
+      cancelled = true;
+      container.replaceChildren();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [descriptorKey]);
+
+  if (!descriptor) {
     return (
       <div className="dialog__hint">
         No widget result yet — run the action to produce a widget descriptor.
       </div>
     );
   }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div className="form-field">
-        <label className="form-label">Tag name</label>
-        <input className="form-input" value={String(descriptor.tag_name ?? "")} readOnly />
-      </div>
-      <div className="form-field">
-        <label className="form-label">Bundle (bin name)</label>
-        <input className="form-input" value={String(descriptor.bin_name ?? "")} readOnly />
-      </div>
-      <div className="form-field">
-        <label className="form-label">Fields</label>
-        <pre
-          style={{
-            margin: 0,
-            padding: 8,
-            background: "var(--bg-sunken)",
-            borderRadius: "var(--radius)",
-            fontSize: 12,
-            fontFamily: "var(--font-mono)",
-            overflowX: "auto",
-          }}
-        >
-          {JSON.stringify(descriptor.fields ?? null, null, 2)}
-        </pre>
-      </div>
-      <div className="dialog__hint">
-        Widget mounting is not yet implemented — this is a descriptor preview.
-      </div>
+      <div ref={containerRef} style={{ minHeight: 120 }} />
+      {mountError && (
+        <div className="dialog__hint" style={{ color: "var(--danger, #c0392b)" }}>
+          Failed to mount widget: {mountError}
+        </div>
+      )}
     </div>
   );
 }

@@ -15,6 +15,13 @@ export default defineConfig({
       // sidesteps it entirely and stays live-editable besides).
       "@solx/http": fileURLToPath(new URL("../../solx-js/packages/http/src/index.ts", import.meta.url)),
       "@solx/surface": fileURLToPath(new URL("../../solx-js/packages/surface/src/index.ts", import.meta.url)),
+      // @solx/widgets lives in the sibling solx-packages repo, same reason
+      // as the two aliases above -- aliased straight to source rather than
+      // installed, since it's consumed live and has no build step of its
+      // own to keep in sync.
+      "@solx/widgets/host": fileURLToPath(
+        new URL("../../solx-packages/solx-widgets/src/host/mountWidget.ts", import.meta.url),
+      ),
     },
   },
   server: {
