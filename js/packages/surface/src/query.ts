@@ -5,8 +5,6 @@
  * shape is the canonical pagination envelope used by every store.
  */
 
-import type { SearchHit } from './search.js';
-
 // ---------- SortOrder ----------
 
 export type SortOrder = 'asc' | 'desc';
@@ -72,15 +70,6 @@ export interface SearchQuery {
   offset?: number;
 }
 
-// ---------- SearchResults ----------
-
-export interface SearchResults {
-  hits: SearchHit[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
 // ---------- ActionSearchQuery ----------
 
 /**
@@ -88,8 +77,9 @@ export interface SearchResults {
  * category/phrases, via FTS5). Wire-flat extension of {@link ListOptions} —
  * mirrors `solx_surface::query::ActionSearchQuery`'s `#[serde(flatten)]`
  * shape, so every `ListOptions` field composes with `q` (path scope, sort,
- * date range, …). Unlike {@link SearchQuery}, results are `Page<Action>`
- * (same shape as `list`), not a separate hit/score envelope.
+ * date range, …). Results are `Page<Action>` (same shape as `list`), just
+ * like {@link SearchQuery}'s results are `Page<Document>` — neither is a
+ * separate hit/score envelope.
  */
 export interface ActionSearchQuery extends ListOptions {
   /** Free-text query string. */

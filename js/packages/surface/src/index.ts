@@ -12,6 +12,5 @@ export * from './json.js';
 export * from './error.js';
 export * from './path.js';
 export * from './entities.js';
-export * from './search.js';
 export * from './query.js';
 export * from './managers.js';

@@ -13,7 +13,6 @@ import type {
   Page,
   PathFacet,
   SearchQuery,
-  SearchResults,
 } from '@solx/surface';
 import { entityPath, requestJson, toQuery } from './fetch.js';
 
@@ -59,8 +58,8 @@ export class HttpDocManager implements DocManagerIface {
    * static sibling of the `/docs/{*ref}` catch-all would shadow any document
    * named `search` at the root.
    */
-  async search(query: SearchQuery): Promise<SearchResults> {
-    return requestJson<SearchResults>(this.baseUrl, this.token, 'GET', '/search', {
+  async search(query: SearchQuery): Promise<Page<Document>> {
+    return requestJson<Page<Document>>(this.baseUrl, this.token, 'GET', '/search', {
       query: toQuery(query),
     });
   }

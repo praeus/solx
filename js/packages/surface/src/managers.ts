@@ -18,14 +18,7 @@ import type {
   TypeEntity,
   TypeInput,
 } from './entities.js';
-import type {
-  ActionSearchQuery,
-  ListOptions,
-  Page,
-  PathFacet,
-  SearchQuery,
-  SearchResults,
-} from './query.js';
+import type { ActionSearchQuery, ListOptions, Page, PathFacet, SearchQuery } from './query.js';
 import type { JsonValue } from './json.js';
 
 // ---------- TypeManager ----------
@@ -67,7 +60,7 @@ export interface DocManager {
   list(opts?: ListOptions): Promise<Page<Document>>;
   /** Distinct path values in use, each with a count of documents at that path. Optional — see {@link TypeManager.paths}. */
   paths?(opts?: ListOptions): Promise<Page<PathFacet>>;
-  search(query: SearchQuery): Promise<SearchResults>;
+  search(query: SearchQuery): Promise<Page<Document>>;
 }
 
 // ---------- ActionManager ----------

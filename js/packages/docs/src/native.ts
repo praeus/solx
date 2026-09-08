@@ -17,7 +17,7 @@
  */
 
 import { SolxError } from '@solx/surface';
-import type { Document, DocumentInput, ListOptions, Page, SearchQuery, SearchResults } from '@solx/surface';
+import type { Document, DocumentInput, ListOptions, Page, SearchQuery } from '@solx/surface';
 import { TypeManager } from '@solx/types';
 import { loadNative } from '@solx/types/loader';
 import type { DocManagerHandle, NativeDocsModule } from './native-types.js';
@@ -90,11 +90,11 @@ export class DocManager {
     });
   }
 
-  async search(query: SearchQuery): Promise<SearchResults> {
+  async search(query: SearchQuery): Promise<Page<Document>> {
     return withSolxError(async () => {
       const native = loadNative() as unknown as NativeDocsModule;
       const json = await native.docsSearch(this.handle, JSON.stringify(query));
-      return JSON.parse(json) as SearchResults;
+      return JSON.parse(json) as Page<Document>;
     });
   }
 

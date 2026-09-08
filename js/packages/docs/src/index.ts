@@ -15,9 +15,7 @@ export type {
   FileRef,
   ListOptions,
   Page,
-  SearchHit,
   SearchQuery,
-  SearchResults,
   JsonValue,
   SolxErrorKind,
 } from '@solx/surface';
