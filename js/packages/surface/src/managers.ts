@@ -18,7 +18,14 @@ import type {
   TypeEntity,
   TypeInput,
 } from './entities.js';
-import type { ActionSearchQuery, ListOptions, Page, SearchQuery, SearchResults } from './query.js';
+import type {
+  ActionSearchQuery,
+  ListOptions,
+  Page,
+  PathFacet,
+  SearchQuery,
+  SearchResults,
+} from './query.js';
 import type { JsonValue } from './json.js';
 
 // ---------- TypeManager ----------
@@ -28,6 +35,13 @@ export interface TypeManager {
   get(path: string, name: string): Promise<TypeEntity>;
   delete(path: string, name: string): Promise<void>;
   list(opts?: ListOptions): Promise<Page<TypeEntity>>;
+  /**
+   * Distinct path values in use, each with a count of types at that path.
+   * Optional: only the HTTP-proxy implementation (`@solx/http`) provides it
+   * today — the Neon-native `@solx/types` package does not, so this must
+   * stay optional or its assignment to `Solx.types` would fail to typecheck.
+   */
+  paths?(opts?: ListOptions): Promise<Page<PathFacet>>;
   /** Resolve a `/path/Name` ref to the full {@link TypeEntity}. */
   resolve(typeRef: string): Promise<TypeEntity>;
   /** Validate a value against the schema of the given type ref. */
@@ -51,6 +65,8 @@ export interface DocManager {
   get(path: string, name: string): Promise<Document>;
   delete(path: string, name: string): Promise<void>;
   list(opts?: ListOptions): Promise<Page<Document>>;
+  /** Distinct path values in use, each with a count of documents at that path. Optional — see {@link TypeManager.paths}. */
+  paths?(opts?: ListOptions): Promise<Page<PathFacet>>;
   search(query: SearchQuery): Promise<SearchResults>;
 }
 
@@ -61,6 +77,8 @@ export interface ActionManager {
   get(path: string, name: string): Promise<Action>;
   delete(path: string, name: string): Promise<void>;
   list(opts?: ListOptions): Promise<Page<Action>>;
+  /** Distinct path values in use, each with a count of actions at that path. Optional — see {@link TypeManager.paths}. */
+  paths?(opts?: ListOptions): Promise<Page<PathFacet>>;
   search(query: ActionSearchQuery): Promise<Page<Action>>;
   exec(path: string, name: string, params: JsonValue): Promise<ActionExecResult>;
 }

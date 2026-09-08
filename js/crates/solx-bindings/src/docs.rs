@@ -29,12 +29,10 @@ impl Finalize for JsDocManager {}
 
 fn open(mut cx: FunctionContext) -> JsResult<JsBox<JsDocManager>> {
     let db_path = cx.argument::<JsString>(0)?.value(&mut cx);
-    let index_dir = cx.argument::<JsString>(1)?.value(&mut cx);
     let types = cx.argument::<JsBox<JsTypeManager>>(2)?;
     let types_inner = types.inner.clone();
 
     let db_path_buf = PathBuf::from(db_path);
-    let index_dir_buf = PathBuf::from(index_dir);
 
     let open_result: solx_surface::error::Result<Arc<dyn DocManager>> = (|| {
         #[cfg(feature = "local")]
@@ -44,7 +42,7 @@ fn open(mut cx: FunctionContext) -> JsResult<JsBox<JsDocManager>> {
                 .build()
                 .map_err(|e| solx_surface::error::SolxError::Other(e.to_string()))?;
             let local =
-                rt.block_on(LocalDocManager::open(&db_path_buf, &index_dir_buf, types_inner))?;
+                rt.block_on(LocalDocManager::open(&db_path_buf, types_inner))?;
             Ok(Arc::new(local) as Arc<dyn DocManager>)
         }
         #[cfg(not(feature = "local"))]

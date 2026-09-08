@@ -9,6 +9,7 @@ import type {
   JsonValue,
   ListOptions,
   Page,
+  PathFacet,
   TypeEntity,
   TypeInput,
   TypeManager as TypeManagerIface,
@@ -44,6 +45,12 @@ export class HttpTypeManager implements TypeManagerIface {
 
   async list(opts?: ListOptions): Promise<Page<TypeEntity>> {
     return requestJson<Page<TypeEntity>>(this.baseUrl, this.token, 'GET', '/types', {
+      query: toQuery(opts),
+    });
+  }
+
+  async paths(opts?: ListOptions): Promise<Page<PathFacet>> {
+    return requestJson<Page<PathFacet>>(this.baseUrl, this.token, 'GET', '/types-paths', {
       query: toQuery(opts),
     });
   }

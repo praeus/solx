@@ -47,6 +47,14 @@ export interface Page<T> {
   offset: number;
 }
 
+// ---------- PathFacet ----------
+
+/** One row of a `paths` result: a path in use, and how many entities sit there. */
+export interface PathFacet {
+  path: string;
+  count: number;
+}
+
 // ---------- SearchQuery ----------
 
 export interface SearchQuery {

@@ -14,6 +14,7 @@ import type {
   JsonValue,
   ListOptions,
   Page,
+  PathFacet,
 } from '@solx/surface';
 import { entityPath, requestJson, toQuery } from './fetch.js';
 
@@ -44,6 +45,12 @@ export class HttpActionManager implements ActionManagerIface {
 
   async list(opts?: ListOptions): Promise<Page<Action>> {
     return requestJson<Page<Action>>(this.baseUrl, this.token, 'GET', '/actions', {
+      query: toQuery(opts),
+    });
+  }
+
+  async paths(opts?: ListOptions): Promise<Page<PathFacet>> {
+    return requestJson<Page<PathFacet>>(this.baseUrl, this.token, 'GET', '/actions-paths', {
       query: toQuery(opts),
     });
   }

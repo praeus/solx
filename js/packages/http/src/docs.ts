@@ -11,6 +11,7 @@ import type {
   DocumentInput,
   ListOptions,
   Page,
+  PathFacet,
   SearchQuery,
   SearchResults,
 } from '@solx/surface';
@@ -43,6 +44,12 @@ export class HttpDocManager implements DocManagerIface {
 
   async list(opts?: ListOptions): Promise<Page<Document>> {
     return requestJson<Page<Document>>(this.baseUrl, this.token, 'GET', '/docs', {
+      query: toQuery(opts),
+    });
+  }
+
+  async paths(opts?: ListOptions): Promise<Page<PathFacet>> {
+    return requestJson<Page<PathFacet>>(this.baseUrl, this.token, 'GET', '/docs-paths', {
       query: toQuery(opts),
     });
   }
