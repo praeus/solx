@@ -22,12 +22,15 @@ import {
   deleteType,
   execAction,
   fetchAction,
+  fetchActionPaths,
   fetchActions,
   fetchDocument,
+  fetchDocumentPaths,
   fetchDocuments,
   fetchFileContent,
   fetchHealth,
   fetchType,
+  fetchTypePaths,
   fetchTypes,
   listFiles,
   searchActions,
@@ -41,6 +44,7 @@ import {
   type FileListResponse,
   type HealthResponse,
   type Page,
+  type PathFacet,
   type SearchResults,
   type TypeEntity,
 } from "./api";
@@ -78,6 +82,24 @@ export function useDocuments(opts: UseDocumentsOptions = {}): UseQueryResult<Pag
     queryFn: () => fetchDocuments(params),
     enabled: enabled !== false,
     placeholderData: (previous) => previous,
+  });
+}
+
+/**
+ * Distinct document paths, for the Scope picker. Small and slow-changing,
+ * like `useDocumentTypes` below, so a generous fixed `limit` and a 5-minute
+ * `staleTime` are enough — no need for a debounced/incremental fetch.
+ */
+export function useDocumentPaths(
+  limit = 200,
+  opts: { enabled?: boolean } = {},
+): UseQueryResult<Page<PathFacet>> {
+  const { enabled } = opts;
+  return useQuery({
+    queryKey: ["documents", "paths", { limit }],
+    queryFn: () => fetchDocumentPaths({ limit }),
+    enabled: enabled !== false,
+    staleTime: 5 * 60 * 1000,
   });
 }
 
@@ -160,6 +182,20 @@ export function useDocumentTypes(
       fetchTypes(
         groups ? { limit, filterField: "groups", filterValue: groups } : { limit },
       ),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+/** Distinct type paths, for the Scope picker — see `useDocumentPaths`. */
+export function useTypePaths(
+  limit = 200,
+  opts: { enabled?: boolean } = {},
+): UseQueryResult<Page<PathFacet>> {
+  const { enabled } = opts;
+  return useQuery({
+    queryKey: ["types", "paths", { limit }],
+    queryFn: () => fetchTypePaths({ limit }),
+    enabled: enabled !== false,
     staleTime: 5 * 60 * 1000,
   });
 }
@@ -249,6 +285,20 @@ export function useActions(opts: UseActionsOptions = {}): UseQueryResult<Page<Ac
     queryFn: () => fetchActions(params),
     enabled: enabled !== false,
     placeholderData: (previous) => previous,
+  });
+}
+
+/** Distinct action paths, for the Scope picker — see `useDocumentPaths`. */
+export function useActionPaths(
+  limit = 200,
+  opts: { enabled?: boolean } = {},
+): UseQueryResult<Page<PathFacet>> {
+  const { enabled } = opts;
+  return useQuery({
+    queryKey: ["actions", "paths", { limit }],
+    queryFn: () => fetchActionPaths({ limit }),
+    enabled: enabled !== false,
+    staleTime: 5 * 60 * 1000,
   });
 }
 

@@ -25,6 +25,7 @@ import {
   type JsonValue,
   type ListOptions,
   type Page,
+  type PathFacet,
   type SearchHit,
   type SearchQuery,
   type SearchResults,
@@ -35,7 +36,7 @@ import { getConnection, getStoredServerUrl, isConfigured } from "./connection";
 
 export type DocumentSummary = Document;
 export type ActionSummary = Action;
-export type { TypeEntity, Page, SearchHit, SearchResults, ActionExecResult };
+export type { TypeEntity, Page, PathFacet, SearchHit, SearchResults, ActionExecResult };
 
 /**
  * Split a full type reference (`${path}/${name}`, e.g.
@@ -111,6 +112,10 @@ export function fetchDocuments(opts: ListOptions = {}): Promise<Page<Document>> 
   return call(() => getConnection().docs.list(opts));
 }
 
+export function fetchDocumentPaths(opts: ListOptions = {}): Promise<Page<PathFacet>> {
+  return call(() => getConnection().docs.paths(opts));
+}
+
 export function searchDocuments(query: SearchQuery): Promise<SearchResults> {
   return call(() => getConnection().docs.search(query));
 }
@@ -166,6 +171,10 @@ export function fetchTypes(opts: ListOptions = {}): Promise<Page<TypeEntity>> {
   return call(() => getConnection().types.list(opts));
 }
 
+export function fetchTypePaths(opts: ListOptions = {}): Promise<Page<PathFacet>> {
+  return call(() => getConnection().types.paths(opts));
+}
+
 export function fetchType(path: string, name: string): Promise<TypeEntity> {
   return call(() => getConnection().types.get(path, name));
 }
@@ -190,6 +199,10 @@ export function deleteType(path: string, name: string): Promise<void> {
 
 export function fetchActions(opts: ListOptions = {}): Promise<Page<Action>> {
   return call(() => getConnection().actions.list(opts));
+}
+
+export function fetchActionPaths(opts: ListOptions = {}): Promise<Page<PathFacet>> {
+  return call(() => getConnection().actions.paths(opts));
 }
 
 export function searchActions(query: ActionSearchQuery): Promise<Page<Action>> {

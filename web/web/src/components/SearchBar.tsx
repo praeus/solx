@@ -20,7 +20,8 @@
  */
 
 import { type ChangeEvent, useEffect, useRef, useState } from "react";
-import { useDocumentTypes } from "../api/hooks";
+import { useActionPaths, useDocumentPaths, useDocumentTypes, useTypePaths } from "../api/hooks";
+import { PathSelector } from "./PathSelector";
 
 const DEBOUNCE_MS = 300;
 
@@ -141,6 +142,15 @@ export function SearchBar({
     .slice()
     .sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? "")));
 
+  // One path-facet query per tab, each only enabled while its tab is active
+  // -- the same gating `App.tsx` already uses for its own list/search
+  // queries -- and picked by `activeTab` below.
+  const documentPathsQuery = useDocumentPaths(200, { enabled: activeTab === "documents" });
+  const actionPathsQuery = useActionPaths(200, { enabled: activeTab === "actions" });
+  const typePathsQuery = useTypePaths(200, { enabled: activeTab === "types" });
+  const activePathsQuery =
+    activeTab === "documents" ? documentPathsQuery : activeTab === "actions" ? actionPathsQuery : typePathsQuery;
+
   const patch = (fields: Partial<BrowseState>) => onChange({ ...state, ...fields });
 
   const hasAnyFilter =
@@ -190,27 +200,13 @@ export function SearchBar({
       <div className="search-bar__facets">
         <label className="search-bar__facet">
           <span className="search-bar__facet-label">Scope</span>
-          <div className="search-bar__facet-with-clear">
-            <input
-              className="search-bar__facet-input"
-              type="text"
-              value={draftPath}
-              onChange={(e) => setDraftPath(e.target.value)}
-              placeholder="/ (everywhere)"
-              spellCheck={false}
-              aria-label="Limit to path"
-            />
-            {draftPath && (
-              <button
-                className="search-bar__facet-clear"
-                onClick={() => setDraftPath("")}
-                aria-label="Clear path scope"
-                title="Clear"
-              >
-                ✕
-              </button>
-            )}
-          </div>
+          <PathSelector
+            value={draftPath}
+            onChange={setDraftPath}
+            paths={activePathsQuery.data?.items ?? []}
+            loading={activePathsQuery.isLoading}
+            placeholder="/ (everywhere)"
+          />
         </label>
 
         {caps.typeFacet && (

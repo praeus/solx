@@ -2193,6 +2193,105 @@
   white-space: nowrap;
 }
 
+/* ──────────────────────────────────────────────────────────────────────
+ * PathSelector (free-text scope input + assistive dropdown of real paths)
+ *
+ * A parallel set of classes rather than a reuse of `.type-selector__*`:
+ * this combo sits inside the narrow `.search-bar__facet` slot rather than
+ * `TypeSelector`'s two-button `.type-selector__row` layout, and needs its
+ * own base border/background/padding since (unlike `TypeSelector`'s input)
+ * it doesn't share the generic `.form-input` class.
+ * ────────────────────────────────────────────────────────────────────── */
+
+.path-selector__combo {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 160px;
+}
+
+.path-selector__input {
+  width: 220px;
+  padding: 4px 52px 4px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: inherit;
+}
+
+.path-selector__clear,
+.path-selector__chevron {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.path-selector__clear {
+  right: 22px;
+}
+
+.path-selector__chevron {
+  right: 2px;
+  font-size: 10px;
+}
+
+.path-selector__clear:hover,
+.path-selector__chevron:hover {
+  color: var(--text);
+}
+
+.path-selector__dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.path-selector__dropdown-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.path-selector__dropdown-item.is-highlighted {
+  background: var(--bg-sunken);
+}
+
+.path-selector__dropdown-item.is-selected {
+  color: var(--accent);
+}
+
+.path-selector__dropdown-item-count {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.path-selector__dropdown-empty {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .blog-preview__comment-replies {
   list-style: none;
   margin: 0;
@@ -2241,7 +2340,9 @@
   .search-bar__clear,
   .search-bar__facet-clear,
   .type-selector__clear,
-  .type-selector__chevron {
+  .type-selector__chevron,
+  .path-selector__clear,
+  .path-selector__chevron {
     min-width: 44px;
     min-height: 44px;
     display: inline-flex;
@@ -2251,11 +2352,13 @@
 
   /* The combobox affordances are absolutely positioned over the input, so
      widening them means re-spacing the pair and the text beneath them. */
-  .type-selector__input {
+  .type-selector__input,
+  .path-selector__input {
     padding-right: 92px;
   }
 
-  .type-selector__clear {
+  .type-selector__clear,
+  .path-selector__clear {
     right: 44px;
   }
 
@@ -2275,6 +2378,7 @@
   .doc-card,
   .file-list-row,
   .type-selector__dropdown-item,
+  .path-selector__dropdown-item,
   .doc-editor-compound-item {
     min-height: 48px;
   }
@@ -2298,7 +2402,8 @@
   .search-bar__facet-input,
   .search-bar__facet-select,
   .file-list-toolbar__prefix,
-  .chip-tag-input__input {
+  .chip-tag-input__input,
+  .path-selector__input {
     font-size: 16px;
   }
 
@@ -2353,9 +2458,14 @@
 
   .search-bar__facet-input,
   .search-bar__facet-select,
-  .search-bar__facet-with-clear {
+  .search-bar__facet-with-clear,
+  .path-selector__combo {
     flex: 1;
     min-width: 0;
+  }
+
+  .path-selector__input {
+    width: 100%;
   }
 
   .search-bar__reset {
