@@ -26,9 +26,7 @@ import {
   type ListOptions,
   type Page,
   type PathFacet,
-  type SearchHit,
   type SearchQuery,
-  type SearchResults,
   type TypeEntity,
   type TypeInput,
 } from "@solx/surface";
@@ -36,7 +34,7 @@ import { getConnection, getStoredServerUrl, isConfigured } from "./connection";
 
 export type DocumentSummary = Document;
 export type ActionSummary = Action;
-export type { TypeEntity, Page, PathFacet, SearchHit, SearchResults, ActionExecResult };
+export type { TypeEntity, Page, PathFacet, ActionExecResult };
 
 /**
  * Split a full type reference (`${path}/${name}`, e.g.
@@ -116,7 +114,7 @@ export function fetchDocumentPaths(opts: ListOptions = {}): Promise<Page<PathFac
   return call(() => getConnection().docs.paths(opts));
 }
 
-export function searchDocuments(query: SearchQuery): Promise<SearchResults> {
+export function searchDocuments(query: SearchQuery): Promise<Page<Document>> {
   return call(() => getConnection().docs.search(query));
 }
 

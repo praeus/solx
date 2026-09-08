@@ -57,7 +57,6 @@ import { DocumentEditorSkeleton } from "./components/DocumentEditorSkeleton";
 import type {
   ActionSummary,
   DocumentSummary,
-  SearchHit,
   TypeEntity,
 } from "./api/api";
 import {
@@ -201,9 +200,10 @@ export function App() {
   // inside FileList on top of this result.
   const filesQuery = useFilesList("", activeTab === "files");
 
-  // Documents results, from whichever endpoint answered.
+  // Documents results, from whichever endpoint answered. `search` returns
+  // the same `Page<Document>` shape as `list`, so no remapping is needed.
   const documents = hasQuery
-    ? (docsSearchQuery.data?.hits ?? []).map(toDocumentSummary)
+    ? (docsSearchQuery.data?.items ?? [])
     : (docsListQuery.data?.items ?? []);
   const documentsTotal = hasQuery
     ? (docsSearchQuery.data?.total ?? 0)
@@ -480,15 +480,4 @@ export function App() {
       />
     </div>
   );
-}
-
-function toDocumentSummary(hit: SearchHit): DocumentSummary {
-  return {
-    id: hit.id,
-    path: hit.path,
-    name: hit.name,
-    title: hit.title,
-    summary: hit.summary,
-    typeRef: hit.typeRef,
-  } as unknown as DocumentSummary;
 }

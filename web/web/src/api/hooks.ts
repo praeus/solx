@@ -45,7 +45,6 @@ import {
   type HealthResponse,
   type Page,
   type PathFacet,
-  type SearchResults,
   type TypeEntity,
 } from "./api";
 import { acquireObjectUrl, releaseObjectUrl } from "./objectUrlCache";
@@ -112,7 +111,7 @@ export interface UseSearchOptions {
   enabled?: boolean;
 }
 
-export function useSearchDocuments(opts: UseSearchOptions): UseQueryResult<SearchResults> {
+export function useSearchDocuments(opts: UseSearchOptions): UseQueryResult<Page<DocumentSummary>> {
   const { enabled, ...params } = opts;
   return useQuery({
     queryKey: ["documents", "search", params],
