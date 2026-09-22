@@ -12,11 +12,6 @@
  *     the same component/wire shape `DocumentEditor` uses.
  *   - Run: a single "Run Action" button (edit mode) that opens the detached
  *     `ActionRunner`.
- *
- * NOT in scope (no equivalent entity in solx): Permission/allowed-permission
- * fields, Schedule creation, custom-action project scaffolding (superseded
- * by the solx-quickjs package), run trace table, model instructions (legacy
- * sol-browser concept, not carried over).
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -508,18 +503,17 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
             />
           </div>
 
+          <FilesField
+            value={attachedFiles}
+            onChange={setAttachedFiles}
+            label="Attached files"
+            uploadPrefix="files/actions/shared/"
+          />
+
           <details style={{ marginTop: 8 }}>
             <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--text-muted)" }}>
-              Advanced — attached files &amp; raw action_config JSON
+              Advanced — raw action_config JSON
             </summary>
-            <div className="form-field" style={{ marginTop: 6 }}>
-              <FilesField
-                value={attachedFiles}
-                onChange={setAttachedFiles}
-                label="Attached files"
-                uploadPrefix={`files/actions/${name.trim() || "shared"}/`}
-              />
-            </div>
             <div className="form-field" style={{ marginTop: 6 }}>
               <textarea
                 className="form-textarea form-json"

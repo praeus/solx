@@ -292,8 +292,13 @@ export interface ConsoleTailResult {
 }
 
 /** `true` once a status can never change again — mirrors `invocations::is_terminal`. */
-export function isTerminalInvocationStatus(status: string): boolean {
-  return status !== "running" && status !== "cancelling";
+export function isTerminalInvocationStatus(status: string | undefined | null): boolean {
+  // A missing or non-terminal status means "not done yet": `start`'s response
+  // shape doesn't carry a `status` field at all (only `invocation_id`,
+  // `action_ref`, `console_seq_start`), and `isTerminal(undefined)` would
+  // otherwise short-circuit `waitForResult` before the first poll even
+  // happens, leaving `result` permanently undefined and the caller confused.
+  return status === "ok" || status === "failed" || status === "cancelled" || status === "timeout" || status === "interrupted";
 }
 
 async function execBuiltin<T>(

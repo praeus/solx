@@ -10,7 +10,7 @@
     "paths": {
       "@solx/http": ["../../solx-js/packages/http/src/index.ts"],
       "@solx/surface": ["../../solx-js/packages/surface/src/index.ts"],
-      "@solx/widgets/host": ["../../solx-packages/solx-widgets/src/host/mountWidget.ts"]
+      "@solx/widgets/host": ["../../solx-packages/solx-widgets/src/host/index.ts"]
     }
   },
   "include": ["src/**/*", "vite.config.ts"]

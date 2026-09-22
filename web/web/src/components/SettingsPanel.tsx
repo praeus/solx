@@ -96,9 +96,7 @@ export function SettingsPanel({ open, onClose }: Props) {
           </label>
 
           <div className="dialog__hint">
-            Stored in this browser only (localStorage) — solx-server has no
-            way to remember connection settings for you, since a browser is
-            just one of potentially many clients pointed at it.
+            Stored in this browser client only.
           </div>
 
           <div className="settings-panel__actions">

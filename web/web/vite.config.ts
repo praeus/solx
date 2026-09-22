@@ -20,7 +20,7 @@ export default defineConfig({
       // installed, since it's consumed live and has no build step of its
       // own to keep in sync.
       "@solx/widgets/host": fileURLToPath(
-        new URL("../../solx-packages/solx-widgets/src/host/mountWidget.ts", import.meta.url),
+        new URL("../../solx-packages/solx-widgets/src/host/index.ts", import.meta.url),
       ),
     },
   },

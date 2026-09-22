@@ -17,7 +17,7 @@
  *           stub: it renders the descriptor's `tag_name` / `bin_name` /
  *           `fields`; mounting the bundle is not yet implemented.
  *
- * Unlike ActionEditor's plain "Run Action" (a single synchronous `exec`
+ * Instead of a plain "Run Action" (a single synchronous `exec`
  * request/response round trip), this drives the async invocation primitives
  * (`solx-actions/src/invocations.rs`, dispatched as ordinary Internal
  * actions under `/builtin/action/*` and `/builtin/console/*`):
@@ -52,7 +52,7 @@ import {
 } from "../api/api";
 import { useActions, useDocuments, useType } from "../api/hooks";
 import { getConnection } from "../api/connection";
-import { mountWidget, type WidgetDescriptor } from "@solx/widgets/host";
+import { mountWidget, startDevBundleWatch, type WidgetDescriptor } from "@solx/widgets/host";
 import type { JsonValue } from "@solx/surface";
 import { FieldsEditorPanel } from "./FieldsEditorPanel";
 import { JsonEditField } from "./JsonEditField";
@@ -704,6 +704,7 @@ function WidgetPanel({ result }: { result: unknown }) {
     const container = containerRef.current;
     if (!descriptor || !container) return;
     let cancelled = false;
+    let stopDevWatch: (() => void) | null = null;
     const conn = getConnection();
     mountWidget(descriptor, container, {
       files: conn.files,
@@ -721,11 +722,19 @@ function WidgetPanel({ result }: { result: unknown }) {
           tailConsole: (actionRef, opts) => tailConsole(actionRef, opts),
         },
       },
+    }).then(() => {
+      // Dev-only: a widget bundle can't be hot-swapped in place (the tag's
+      // customElements.define is permanent), so the only way to pick up a
+      // rebuilt bundle is a full reload -- see solx-widgets/src/host/devReload.ts.
+      if (!cancelled && import.meta.env.DEV) {
+        stopDevWatch = startDevBundleWatch(conn.files, descriptor.bin_name);
+      }
     }).catch((err: unknown) => {
       if (!cancelled) setMountError(err instanceof Error ? err.message : String(err));
     });
     return () => {
       cancelled = true;
+      stopDevWatch?.();
       container.replaceChildren();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
