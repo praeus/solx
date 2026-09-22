@@ -11,7 +11,7 @@ import { createSolx } from 'solx';
 const solx = await createSolx();                 // uses ~/.praeus/solx
 await solx.types.save('/types/custom', 'Person', { schema: { /* ... */ } });
 await solx.docs.save('/research/ai', 'note', { type: '/types/custom/Person', contents: { name: 'Ada' } });
-const result = await solx.actions.exec('/builtin/document', 'search_documents', { query: 'Ada' });
+const result = await solx.actions.exec('/builtin/document', 'search-documents', { query: 'Ada' });
 ```
 
 ## Local and remote are the same call
