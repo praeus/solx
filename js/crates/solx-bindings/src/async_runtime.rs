@@ -63,6 +63,7 @@ impl SolxErrorExt for SolxError {
             SolxError::Db(_) => "Db",
             SolxError::Exec(_) => "Exec",
             SolxError::Config(_) => "Config",
+            SolxError::Unauthorized(_) => "Unauthorized",
             SolxError::Other(_) => "Other",
         }
     }
@@ -76,6 +77,7 @@ impl SolxErrorExt for SolxError {
             | SolxError::Db(s)
             | SolxError::Exec(s)
             | SolxError::Config(s)
+            | SolxError::Unauthorized(s)
             | SolxError::Other(s) => s.clone(),
         }
     }

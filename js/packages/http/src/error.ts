@@ -20,10 +20,15 @@ const KIND_MAP: Record<string, SolxErrorKind> = {
   db: 'Db',
   exec: 'Exec',
   config: 'Config',
+  unauthorized: 'Unauthorized',
   other: 'Other',
 };
 
-export function mapWireError(body: unknown): SolxError {
+/**
+ * `status`/`statusText` only feed the fallback message, for a non-2xx whose
+ * body isn't a `SolxError` (an older server's bare 401, a proxy error page).
+ */
+export function mapWireError(body: unknown, status: number, statusText: string): SolxError {
   if (body && typeof body === 'object') {
     const b = body as { kind?: unknown; message?: unknown };
     if (typeof b.kind === 'string' && typeof b.message === 'string') {
@@ -32,6 +37,8 @@ export function mapWireError(body: unknown): SolxError {
   }
   return new SolxError(
     'Other',
-    `solx-server returned an unrecognized error body: ${JSON.stringify(body)}`,
+    body === undefined
+      ? `solx-server returned ${status} ${statusText} with no error body`
+      : `solx-server returned ${status} ${statusText} with an unrecognized error body: ${JSON.stringify(body)}`,
   );
 }

@@ -21,4 +21,6 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
-/platform-packages/solx-win32-x64-msvc
+# Platform packages are committed (bun needs their package.json to install);
+# only the locally built binary is ignored.
+/platform-packages/*/solx.node

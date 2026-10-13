@@ -17,6 +17,7 @@ export type SolxErrorKind =
   | 'Db'
   | 'Exec'
   | 'Config'
+  | 'Unauthorized'
   | 'Other';
 
 export const SOLX_ERROR_KINDS: readonly SolxErrorKind[] = [
@@ -28,6 +29,7 @@ export const SOLX_ERROR_KINDS: readonly SolxErrorKind[] = [
   'Db',
   'Exec',
   'Config',
+  'Unauthorized',
   'Other',
 ] as const;
 

@@ -51,7 +51,7 @@ beforeAll(async () => {
 
       if (req.headers['authorization'] !== `Bearer ${TOKEN}`) {
         res.writeHead(401, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ kind: 'other', message: 'unauthorized' }));
+        res.end(JSON.stringify({ kind: 'unauthorized', message: 'bad token' }));
         return;
       }
 
@@ -276,6 +276,23 @@ describe('errors', () => {
       res.end(JSON.stringify({ kind: 'not_found', message: 'no such file' }));
     };
     await expect(solx.files.get('gone.bin')).rejects.toBeInstanceOf(SolxError);
+  });
+
+  test('a rejected token becomes an Unauthorized SolxError', async () => {
+    const { port } = server.address() as AddressInfo;
+    const wrong = connectHttp(`http://127.0.0.1:${port}`, 'wrong-token');
+    await expect(wrong.docs.get('/p', 'n')).rejects.toMatchObject({
+      kind: 'Unauthorized',
+      detail: 'bad token',
+    });
+  });
+
+  test('an empty error body still reports the HTTP status', async () => {
+    nextResponse = (res) => res.writeHead(401).end();
+    await expect(solx.docs.get('/p', 'n')).rejects.toMatchObject({
+      kind: 'Other',
+      detail: 'solx-server returned 401 Unauthorized with no error body',
+    });
   });
 
   test('delete accepts an empty 204 body', async () => {

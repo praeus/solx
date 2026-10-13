@@ -123,7 +123,7 @@ export async function requestJson<Resp>(
   }
 
   if (!res.ok) {
-    throw mapWireError(parsed);
+    throw mapWireError(parsed, res.status, res.statusText);
   }
   return parsed as Resp;
 }
@@ -149,7 +149,7 @@ export async function requestBytes(
     } catch {
       parsed = undefined;
     }
-    throw mapWireError(parsed);
+    throw mapWireError(parsed, res.status, res.statusText);
   }
   return new Uint8Array(await res.arrayBuffer());
 }
