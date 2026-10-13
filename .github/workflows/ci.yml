@@ -16,6 +16,7 @@ jobs:
   core:
     name: core (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -25,6 +26,10 @@ jobs:
         working-directory: core
     steps:
       - uses: actions/checkout@v4
+      # keyring's Secret Service backend (via solx-actions) links libdbus.
+      - name: Linux system dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -41,8 +46,13 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets
         continue-on-error: true
+      - uses: taiki-e/install-action@nextest
+      # nextest names slow tests and kills hung ones (see core/.config/nextest.toml);
+      # plain `cargo test` only prints a test once it has finished.
       - name: test
-        run: cargo test --workspace
+        run: cargo nextest run --workspace --profile ci
+      - name: doctests
+        run: cargo test --workspace --doc
 
   web:
     runs-on: ubuntu-22.04

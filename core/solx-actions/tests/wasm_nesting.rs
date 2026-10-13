@@ -284,7 +284,24 @@ async fn a_spinning_guest_is_preempted_and_then_timed_out() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_component_is_compiled_once_and_reused() {
     let guest = guest_or_skip!();
-    let h = Harness::new(guest).await;
+
+    // The cache is process-global and keyed by the artifact bytes, and the
+    // other tests in this binary run the same guest in parallel. Append a
+    // unique custom section (id 0) so this test's first run is a real
+    // compile no matter which test got there first.
+    let name = b"test-nonce";
+    let nonce = format!(
+        "{:?}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+    );
+    let mut payload = vec![name.len() as u8];
+    payload.extend_from_slice(name);
+    payload.extend_from_slice(nonce.as_bytes());
+    let mut unique = guest.to_vec();
+    unique.push(0);
+    unique.push(payload.len() as u8); // < 128, so a single LEB128 byte
+    unique.extend_from_slice(&payload);
+    let h = Harness::new(&unique).await;
 
     let t0 = Instant::now();
     assert!(h.nest(0).await.success);

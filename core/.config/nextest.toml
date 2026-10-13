@@ -1,0 +1,8 @@
+[profile.default]
+# Report any test still running after 60s by name, and kill it after 3 minutes
+# instead of letting the whole job hang until the runner's 6h limit.
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[profile.ci]
+inherits = "default"
+fail-fast = false

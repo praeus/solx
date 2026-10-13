@@ -60,9 +60,13 @@ export function SettingsPanel({ open, onClose }: Props) {
       setServerToken("");
     } else {
       setServerUrl(getStoredServerUrl());
-      setServerToken(getStoredServerToken());
+      // Never load the saved token back into the UI; a blank field keeps it.
+      setServerToken("");
     }
   }, [open]);
+
+  // Browser only: a token is already stored (it is never shown).
+  const hasStoredToken = !IN_TAURI && getStoredServerToken().trim().length > 0;
 
   if (!open) return null;
 
@@ -77,7 +81,8 @@ export function SettingsPanel({ open, onClose }: Props) {
   const handleSave = async () => {
     setSaveError(null);
     if (!IN_TAURI) {
-      setConnection(serverUrl, serverToken);
+      setConnection(serverUrl, serverToken.trim() || getStoredServerToken());
+      setServerToken("");
       afterChange();
       return;
     }
@@ -134,33 +139,11 @@ export function SettingsPanel({ open, onClose }: Props) {
 
         {localHost ? (
           <div className="settings-panel__body">
-            {host?.embeddedServer ? (
-              <>
-                <div className="dialog__hint">
-                  This app also serves solx over HTTP for other clients
-                  (browsers, solx-cli, the desktop client):
-                </div>
-                <label className="settings-panel__field">
-                  <span className="settings-panel__label">Server URL</span>
-                  <input className="settings-panel__input" type="text" readOnly value={host.embeddedServer.url} />
-                </label>
-                <label className="settings-panel__field">
-                  <span className="settings-panel__label">Server Token</span>
-                  <input
-                    className="settings-panel__input"
-                    type="text"
-                    readOnly
-                    value={host.embeddedServer.token}
-                    onFocus={(e) => e.currentTarget.select()}
-                  />
-                </label>
-              </>
-            ) : (
-              <div className="dialog__hint">
-                solx runs inside this app. The embedded HTTP server is off; turn
-                it on under HTTP server in solx settings.
-              </div>
-            )}
+            <div className="dialog__hint">
+              solx runs inside this app, so there is no server URL or token to
+              enter here. Server options, including the embedded HTTP server,
+              are in solx settings.
+            </div>
             {saveError && <div className="dialog__hint settings-panel__error">{saveError}</div>}
             <div className="settings-panel__actions">
               <button
@@ -199,8 +182,12 @@ export function SettingsPanel({ open, onClose }: Props) {
               type="password"
               value={serverToken}
               onChange={(e) => setServerToken(e.target.value)}
-              placeholder="bearer token (printed by solx-server on first start)"
-              autoComplete="off"
+              placeholder={
+                hasStoredToken
+                  ? "•••••••• saved — enter a new token to replace it"
+                  : "bearer token (printed by solx-server on first start)"
+              }
+              autoComplete="new-password"
             />
           </label>
 

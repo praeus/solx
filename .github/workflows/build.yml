@@ -32,6 +32,10 @@ jobs:
           - { os: windows-latest, name: windows-x64, ext: ".exe" }
     steps:
       - uses: actions/checkout@v4
+      # keyring's Secret Service backend (via solx-actions) links libdbus.
+      - name: Linux system dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -71,7 +75,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
-            librsvg2-dev patchelf libssl-dev libxdo-dev
+            librsvg2-dev patchelf libssl-dev libxdo-dev libdbus-1-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
