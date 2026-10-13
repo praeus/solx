@@ -72,6 +72,7 @@ const KIND_TO_SNAKE: Record<string, string> = {
   Db: "db",
   Exec: "exec",
   Config: "config",
+  Unauthorized: "unauthorized",
   Other: "other",
 };
 
@@ -82,6 +83,7 @@ function statusForKind(kind: string): number {
     case "invalid": return 400;
     case "validation": return 422;
     case "conflict": return 409;
+    case "unauthorized": return 401;
     default: return 500;
   }
 }
@@ -90,7 +92,13 @@ function toApiError(e: unknown): ApiError {
   if (SolxError.is(e)) {
     const err = e as SolxError;
     const kind = KIND_TO_SNAKE[err.kind] ?? "other";
-    return new ApiError(err.detail, statusForKind(kind), kind);
+    // The stored token is the only thing the user can fix here, so say where
+    // the right one lives instead of just echoing the server's rejection.
+    const message =
+      kind === "unauthorized"
+        ? `solx-server rejected the connection (${err.detail}). Open Settings and enter the server_token from solx-server's solx-config.json.`
+        : err.detail;
+    return new ApiError(message, statusForKind(kind), kind);
   }
   const message = e instanceof Error ? e.message : String(e);
   return new ApiError(message, 500, "other");
