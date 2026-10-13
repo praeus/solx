@@ -12,12 +12,16 @@ links = "tauri-plugin-solx"
 [features]
 # In-process managers (and their heavy deps). Off for a thin client, which
 # can only proxy to a remote `solx-server`.
-local = ["solx-manager/local"]
+local = ["solx-manager/local", "dep:solx-cli", "dep:solx-packages"]
 
 [dependencies]
 solx-surface = { workspace = true }
 solx-config = { workspace = true }
 solx-manager = { path = "../solx-manager", default-features = false }
+# Package install/uninstall runs a package's install.solx with the CLI's script
+# runner, so only a build that owns the managers (`local`) has them.
+solx-cli = { workspace = true, optional = true }
+solx-packages = { workspace = true, optional = true }
 tauri = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }

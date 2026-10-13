@@ -26,10 +26,15 @@ jobs:
         working-directory: core
     steps:
       - uses: actions/checkout@v4
-      # keyring's Secret Service backend (via solx-actions) links libdbus.
+      # libdbus: keyring's Secret Service backend (via solx-actions).
+      # The rest: the workspace includes solx-tauri-plugin, which pulls in
+      # tauri's GTK/WebKit stack on Linux.
       - name: Linux system dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev \
+            libappindicator3-dev librsvg2-dev patchelf libssl-dev libxdo-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

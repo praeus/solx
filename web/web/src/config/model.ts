@@ -15,6 +15,11 @@ export interface SectionEditorProps<D> {
   draft: D;
   setDraft: (next: D) => void;
   view: ConfigView;
+  /**
+   * For editors that act on the host directly (installing a package) rather
+   * than through a draft: hand back the config as the host now has it.
+   */
+  onView: (next: ConfigView) => void;
 }
 
 export interface SectionDef<D> {

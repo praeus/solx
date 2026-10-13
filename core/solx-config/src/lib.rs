@@ -375,6 +375,15 @@ impl ConfigService {
         }
     }
 
+    /// Where packages installed from a zip are unpacked (one subdirectory
+    /// per package). Read per use, so changing it needs no restart.
+    pub fn packages_dir(&self) -> PathBuf {
+        match self.snapshot().packages_directory {
+            Some(d) if !d.trim().is_empty() => PathBuf::from(d),
+            _ => self.appdata.join("packages"),
+        }
+    }
+
     pub fn search_index_dir(&self) -> PathBuf {
         match self.snapshot().search_index_dir {
             Some(d) if !d.trim().is_empty() => PathBuf::from(d),

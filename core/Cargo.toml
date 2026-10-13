@@ -61,6 +61,7 @@ solx-actions  = { path = "solx-actions" }
 solx-scripts  = { path = "solx-scripts" }
 solx-packages = { path = "solx-packages" }
 solx-manager  = { path = "solx-manager" }
+solx-cli      = { path = "solx-cli" }
 solx-client   = { path = "solx-client" }
 solx-mcp      = { path = "solx-mcp" }
 solx-server   = { path = "solx-server" }

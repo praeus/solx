@@ -64,6 +64,10 @@ pub struct SolxConfig {
     /// Root directory for stored files. Defaults to `<appdata>/files`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files_directory: Option<String>,
+    /// Directory packages installed from a zip are unpacked into. Defaults
+    /// to `<appdata>/packages`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packages_directory: Option<String>,
     /// Directory for model files. Defaults to `<appdata>/models`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub models_directory: Option<String>,

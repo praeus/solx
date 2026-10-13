@@ -38,6 +38,7 @@ export interface InstalledPackage {
 export interface SolxConfigFile {
   data_directory?: string;
   files_directory?: string;
+  packages_directory?: string;
   models_directory?: string;
   search_index_dir?: string;
   docs_db?: string;
@@ -74,6 +75,7 @@ export interface SolxConfigFile {
 export interface EffectiveConfig {
   data_directory: string;
   files_directory: string;
+  packages_directory: string;
   docs_db: string | null;
   actions_db: string | null;
   types_db: string | null;
@@ -109,6 +111,14 @@ export interface ConfigUpdateResult {
 /** Top-level key changes; `null` removes a key. */
 export type ConfigChanges = { [K in keyof SolxConfigFile]?: SolxConfigFile[K] | null };
 
+/** What installing or uninstalling a package leaves behind. */
+export interface PackageResult {
+  /** The config as it is now: the package registered or gone, grants applied or revoked. */
+  config: ConfigView;
+  /** Allowlist collisions with other installed packages; never blocking. */
+  warnings: string[];
+}
+
 export class TauriConfig {
   constructor(private readonly t: TauriTransport) {}
 
@@ -122,5 +132,19 @@ export class TauriConfig {
    */
   update(changes: ConfigChanges): Promise<ConfigUpdateResult> {
     return this.t.call('config_update', { changes });
+  }
+
+  /**
+   * Install a package from the bytes of its zip: unpacked into
+   * `packages_directory`, its `install.solx` run, its declared allowlist
+   * entries granted. Only available in a build that owns its managers.
+   */
+  installPackage(zip: Uint8Array): Promise<PackageResult> {
+    return this.t.call('config_install_package', zip);
+  }
+
+  /** Uninstall by name: run `uninstall.solx`, revoke the grants, delete unpacked files. */
+  uninstallPackage(name: string): Promise<PackageResult> {
+    return this.t.call('config_uninstall_package', { name });
   }
 }

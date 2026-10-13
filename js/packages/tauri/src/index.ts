@@ -32,6 +32,7 @@ export type {
   ConfigView,
   EffectiveConfig,
   InstalledPackage,
+  PackageResult,
   SolxConfigFile,
   ToolRule,
 } from './config.js';

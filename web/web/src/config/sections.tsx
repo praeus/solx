@@ -6,10 +6,11 @@
  * Which keys need a restart comes from the host (`view.restartKeys`), not
  * from here — see `RESTART_KEYS` in solx-config.
  */
-import { useMemo, type ReactNode } from "react";
-import type { ConfigView, SolxConfigFile, ToolRule } from "@solx/tauri";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import type { ConfigView, PackageResult, SolxConfigFile, ToolRule } from "@solx/tauri";
 import { ChipTagInput } from "../components/ChipTagInput";
 import { JsonEditField } from "../components/JsonEditField";
+import { getTauri } from "../api/connection";
 import { useActionPaths } from "../api/hooks";
 import {
   globMatches,
@@ -637,6 +638,7 @@ const server: SectionDef<ServerDraft> = {
 const STORAGE = [
   ["data_directory", "Database directory"],
   ["files_directory", "Files directory"],
+  ["packages_directory", "Packages directory"],
   ["docs_db", "Documents database file"],
   ["actions_db", "Actions database file"],
   ["types_db", "Types database file"],
@@ -678,30 +680,137 @@ const storage: SectionDef<StorageDraft> = {
   Editor: StorageEditor,
 };
 
-// ── packages (read-only) ────────────────────────────────────────────────
+// ── packages ────────────────────────────────────────────────────────────
+//
+// Not a draft: installing and uninstalling act on the host immediately (they
+// run the package's scripts), so this section has no Save/Revert and hands
+// each resulting config back through `onView`.
 
-function PackagesView({ view }: SectionEditorProps<null>) {
+function PackagesView({ view, onView }: SectionEditorProps<null>) {
   const pkgs = view.raw.installed_packages ?? [];
-  if (!pkgs.length) return <span className="dialog__hint">No packages installed.</span>;
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+
+  const run = async (label: string, job: () => Promise<PackageResult>) => {
+    setBusy(label);
+    setError(null);
+    setWarnings([]);
+    try {
+      const result = await job();
+      onView(result.config);
+      setWarnings(result.warnings);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+      setConfirming(null);
+    }
+  };
+
+  const install = (file: File) =>
+    run(`Installing ${file.name}…`, async () =>
+      getTauri().config.installPackage(new Uint8Array(await file.arrayBuffer())),
+    );
+
   return (
-    <div className="config-rows">
-      {pkgs.map((pkg) => (
-        <div className="config-card" key={pkg.name}>
-          <div className="config-card__title">
-            {pkg.name} <span className="config-tag config-tag--muted">{pkg.version || "?"}</span>
-          </div>
-          <span className="dialog__hint">
-            Installed {pkg.installed_at || "?"} from <code>{pkg.path}</code>
-          </span>
-          {(pkg.granted_commands ?? []).length > 0 && (
-            <span className="dialog__hint">Commands: {pkg.granted_commands.join(", ")}</span>
-          )}
-          {(pkg.granted_base_urls ?? []).length > 0 && (
-            <span className="dialog__hint">URLs: {pkg.granted_base_urls.join(", ")}</span>
-          )}
+    <>
+      <div className="dialog__input-row">
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".zip,application/zip"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = ""; // so picking the same zip again still fires
+            if (file) void install(file);
+          }}
+        />
+        <button
+          type="button"
+          className="dialog__btn"
+          disabled={busy !== null}
+          onClick={() => fileInput.current?.click()}
+          title="Install a package from a .zip"
+        >
+          ⬆ Install package…
+        </button>
+        {busy && <span className="dialog__hint">{busy}</span>}
+      </div>
+      <span className="dialog__hint">
+        Unpacked into <code>{view.effective.packages_directory}</code>. Installing runs the package's install
+        script and grants whatever commands and URLs it declares.
+      </span>
+      {error && <div className="dialog__error">{error}</div>}
+      {warnings.map((w) => (
+        <div className="config-warning" key={w}>
+          {w}
         </div>
       ))}
-    </div>
+
+      {!pkgs.length ? (
+        <span className="dialog__hint">No packages installed.</span>
+      ) : (
+        <div className="config-rows">
+          {pkgs.map((pkg) => (
+            <div className="config-card config-card--package" key={pkg.name}>
+              <button
+                type="button"
+                className="config-icon-btn config-card__close"
+                disabled={busy !== null}
+                aria-label={`Uninstall ${pkg.name}`}
+                title="Uninstall"
+                onClick={() => setConfirming(pkg.name)}
+              >
+                ✕
+              </button>
+              <div className="config-card__title">
+                {pkg.name} <span className="config-tag config-tag--muted">{pkg.version || "?"}</span>
+              </div>
+              <span className="dialog__hint">
+                Installed {pkg.installed_at || "?"} from <code>{pkg.path}</code>
+              </span>
+              {(pkg.granted_commands ?? []).length > 0 && (
+                <span className="dialog__hint">Commands: {pkg.granted_commands.join(", ")}</span>
+              )}
+              {(pkg.granted_base_urls ?? []).length > 0 && (
+                <span className="dialog__hint">URLs: {pkg.granted_base_urls.join(", ")}</span>
+              )}
+              {confirming === pkg.name && (
+                <div className="config-warning">
+                  Uninstall <strong>{pkg.name}</strong>? Its uninstall script runs and the commands and URLs it
+                  was granted are revoked. If solx unpacked it from a zip, its files are deleted too. This can't
+                  be undone.
+                  <div className="dialog__input-row config-confirm">
+                    <button
+                      type="button"
+                      className="dialog__btn"
+                      disabled={busy !== null}
+                      onClick={() => setConfirming(null)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="dialog__btn dialog__btn--primary"
+                      disabled={busy !== null}
+                      onClick={() =>
+                        void run(`Uninstalling ${pkg.name}…`, () => getTauri().config.uninstallPackage(pkg.name))
+                      }
+                    >
+                      Uninstall
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -710,7 +819,7 @@ const packages: SectionDef<null> = {
   title: "Packages",
   description: (
     <>
-      Installed packages and what they were granted. Install and uninstall with the solx CLI (
+      Installed packages and what they were granted. Install from a package zip here, or with the solx CLI (
       <code>solx install-package</code>); uninstalling revokes the grants.
     </>
   ),

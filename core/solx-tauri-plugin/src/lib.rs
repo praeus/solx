@@ -81,6 +81,8 @@ fn build<R: Runtime>(state: SolxState) -> TauriPlugin<R> {
             commands::disconnect,
             commands::config_get,
             commands::config_update,
+            commands::config_install_package,
+            commands::config_uninstall_package,
         ])
         .setup(move |app, _api| {
             app.manage(state);

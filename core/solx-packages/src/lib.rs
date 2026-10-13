@@ -50,8 +50,20 @@
 //! against the package directory at install time, so a manifest can say
 //! `"cwd": "bin"` instead of hard-coding where the package is checked out.
 //! An absolute `cwd` is kept as is.
+//!
+//! ## Installing from a zip
+//!
+//! [`install_package_zip`] takes a zip of a package (the manifest at its root,
+//! or inside the one top-level directory that has one, ignoring build-time
+//! siblings), unpacks it to `<packages_directory>/<name>/` — see
+//! [`ConfigService::packages_dir`] — and installs from there, so the package
+//! outlives the zip. Reinstalling replaces the old directory, restoring it if
+//! the new install fails. [`uninstall_package`] deletes a package's directory
+//! when it lives under the packages directory; a package installed from some
+//! other directory is never deleted.
 
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -268,7 +280,207 @@ pub async fn uninstall_package(
     }
 
     config.unregister_package(name)?;
+
+    // A zip install put the files there for solx to own; a directory
+    // installed in place belongs to whoever pointed us at it.
+    if is_within(dir, &config.packages_dir()) {
+        if let Err(e) = std::fs::remove_dir_all(dir) {
+            tracing::warn!(
+                "uninstalled '{name}' but could not delete {}: {e}",
+                dir.display()
+            );
+        }
+    }
     Ok(())
+}
+
+/// Install a package from the zip file at `zip`. See the module doc.
+pub async fn install_package_zip(
+    runner: &dyn CommandRunner,
+    config: &ConfigService,
+    zip: &Path,
+) -> Result<InstallOutcome> {
+    let bytes =
+        std::fs::read(zip).map_err(|e| SolxError::Io(format!("read {}: {e}", zip.display())))?;
+    install_package_zip_bytes(runner, config, bytes).await
+}
+
+/// Install a package from the bytes of a zip. See the module doc.
+pub async fn install_package_zip_bytes(
+    runner: &dyn CommandRunner,
+    config: &ConfigService,
+    bytes: Vec<u8>,
+) -> Result<InstallOutcome> {
+    let packages = config.packages_dir();
+    std::fs::create_dir_all(&packages)
+        .map_err(|e| SolxError::Io(format!("create {}: {e}", packages.display())))?;
+
+    // Unpack beside the destination so the final move is a rename.
+    let stamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
+    let staging = packages.join(format!(".staging-{stamp}"));
+    let result = install_from_staging(runner, config, &packages, &staging, bytes, stamp).await;
+    let _ = std::fs::remove_dir_all(&staging);
+    result
+}
+
+async fn install_from_staging(
+    runner: &dyn CommandRunner,
+    config: &ConfigService,
+    packages: &Path,
+    staging: &Path,
+    bytes: Vec<u8>,
+    stamp: i64,
+) -> Result<InstallOutcome> {
+    extract_zip(&bytes, staging)?;
+    let root = find_package_root(staging)?;
+    let (meta_path, meta_file, _) = manifest_path(&root);
+    let meta: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&meta_path)
+            .map_err(|e| SolxError::Io(format!("read {}: {e}", meta_path.display())))?,
+    )?;
+    let name = meta
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| SolxError::Invalid(format!("{meta_file} missing 'name'")))?;
+    if !is_dir_safe(name) {
+        return Err(SolxError::Invalid(format!(
+            "package name '{name}' can't be used as a directory name \
+             (letters, digits, '-', '_' and '.' only)"
+        )));
+    }
+
+    let target = packages.join(name);
+    let backup = packages.join(format!(".backup-{stamp}"));
+    let had_old = target.exists();
+    if had_old {
+        std::fs::rename(&target, &backup).map_err(|e| {
+            SolxError::Io(format!(
+                "replace {}: {e} (is something in it still running?)",
+                target.display()
+            ))
+        })?;
+    }
+    let restore = || {
+        let _ = std::fs::remove_dir_all(&target);
+        if had_old {
+            let _ = std::fs::rename(&backup, &target);
+        }
+    };
+    if let Err(e) = std::fs::rename(&root, &target) {
+        restore();
+        return Err(SolxError::Io(format!(
+            "move into {}: {e}",
+            target.display()
+        )));
+    }
+    match install_package(runner, config, &target).await {
+        Ok(outcome) => {
+            if had_old {
+                let _ = std::fs::remove_dir_all(&backup);
+            }
+            Ok(outcome)
+        }
+        Err(e) => {
+            restore();
+            Err(e)
+        }
+    }
+}
+
+/// Unpack `bytes` into `dest`, refusing entries that would land outside it.
+fn extract_zip(bytes: &[u8], dest: &Path) -> Result<()> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|e| SolxError::Invalid(format!("not a valid zip file: {e}")))?;
+    std::fs::create_dir_all(dest)
+        .map_err(|e| SolxError::Io(format!("create {}: {e}", dest.display())))?;
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| SolxError::Invalid(format!("read zip entry {i}: {e}")))?;
+        let rel = entry.enclosed_name().ok_or_else(|| {
+            SolxError::Invalid(format!(
+                "zip entry '{}' escapes the package directory",
+                entry.name()
+            ))
+        })?;
+        let out = dest.join(rel);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out)
+                .map_err(|e| SolxError::Io(format!("create {}: {e}", out.display())))?;
+            continue;
+        }
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| SolxError::Io(format!("create {}: {e}", parent.display())))?;
+        }
+        let mut file = std::fs::File::create(&out)
+            .map_err(|e| SolxError::Io(format!("create {}: {e}", out.display())))?;
+        std::io::copy(&mut entry, &mut file)
+            .map_err(|e| SolxError::Io(format!("write {}: {e}", out.display())))?;
+    }
+    Ok(())
+}
+
+fn has_manifest(dir: &Path) -> bool {
+    dir.join(MANIFEST).exists() || dir.join(MANIFEST_LEGACY).exists()
+}
+
+/// Whether `dir` looks like a package among siblings. A bare `package.json`
+/// is npm's, so it only counts next to an `install.solx`.
+fn is_package_dir(dir: &Path) -> bool {
+    dir.is_dir()
+        && (dir.join(MANIFEST).exists() || (has_manifest(dir) && dir.join("install.solx").exists()))
+}
+
+/// The directory under `dir` that holds the package manifest: `dir` itself,
+/// or the one child directory that has a manifest.
+fn find_package_root(dir: &Path) -> Result<PathBuf> {
+    if has_manifest(dir) {
+        return Ok(dir.to_path_buf());
+    }
+    let entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map_err(|e| SolxError::Io(format!("read {}: {e}", dir.display())))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+    // Build bundles carry siblings next to the package (a path dependency
+    // like `../solx-widgets`, needed to build it, not to run it); only the
+    // directory with the manifest is the package.
+    let packages: Vec<&PathBuf> = entries.iter().filter(|p| is_package_dir(p)).collect();
+    match packages.as_slice() {
+        [one] => return Ok((*one).clone()),
+        [] => {}
+        several => {
+            let names: Vec<_> = several
+                .iter()
+                .filter_map(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .collect();
+            return Err(SolxError::Invalid(format!(
+                "the zip holds several packages ({}); install them one at a time",
+                names.join(", ")
+            )));
+        }
+    }
+    Err(SolxError::Invalid(format!(
+        "the zip has no {MANIFEST} at its root or in a top-level folder"
+    )))
+}
+
+fn is_dir_safe(name: &str) -> bool {
+    !name.starts_with('.')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// Whether `path` is strictly inside `parent` (both must exist).
+fn is_within(path: &Path, parent: &Path) -> bool {
+    match (path.canonicalize(), parent.canonicalize()) {
+        (Ok(p), Ok(base)) => p != base && p.starts_with(base),
+        _ => false,
+    }
 }
 
 /// List installed packages.

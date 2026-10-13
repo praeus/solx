@@ -34,4 +34,6 @@ const COMMANDS: &[&str] = &[
     "disconnect",
     "config_get",
     "config_update",
+    "config_install_package",
+    "config_uninstall_package",
 ];

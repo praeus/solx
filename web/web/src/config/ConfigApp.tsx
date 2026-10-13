@@ -87,6 +87,17 @@ export function ConfigApp() {
   const draft = drafts[section.id];
   const dirty = isDirty(section, draft, view);
 
+  // The host changed the config behind a draft's back (a package was
+  // installed): adopt it, keeping any section with unsaved edits as it is.
+  const adoptView = (next: ConfigView) => {
+    setDrafts((prev) =>
+      Object.fromEntries(
+        SECTIONS.map((s) => [s.id, isDirty(s, prev[s.id], view) ? prev[s.id] : s.fromConfig(next.raw)]),
+      ),
+    );
+    setView(next);
+  };
+
   const save = async () => {
     setErrors((e) => ({ ...e, [section.id]: null }));
     let changes;
@@ -164,7 +175,12 @@ export function ConfigApp() {
             <p className="dialog__hint">{section.description}</p>
           </header>
           <div className="config-section__body">
-            <Editor draft={draft} setDraft={(d: unknown) => setDrafts((all) => ({ ...all, [section.id]: d }))} view={view} />
+            <Editor
+              draft={draft}
+              setDraft={(d: unknown) => setDrafts((all) => ({ ...all, [section.id]: d }))}
+              view={view}
+              onView={adoptView}
+            />
           </div>
           {errors[section.id] && <div className="dialog__error">{errors[section.id]}</div>}
           {!section.readOnly && (

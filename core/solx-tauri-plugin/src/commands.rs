@@ -436,6 +436,7 @@ fn config_view(config: &ConfigService) -> ConfigView {
         effective: json!({
             "data_directory": config.db_dir(),
             "files_directory": config.files_dir(),
+            "packages_directory": config.packages_dir(),
             "docs_db": file_name(config.docs_db_path()),
             "actions_db": file_name(config.actions_db_path()),
             "types_db": file_name(config.types_db_path()),
@@ -491,6 +492,82 @@ pub(crate) fn config_update(
         changed_keys,
         restart_required,
     })
+}
+
+/// What installing or uninstalling a package leaves behind: the new config
+/// (so the Settings window can redraw) and, for an install, the install's
+/// allowlist-collision warnings.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PackageResult {
+    config: ConfigView,
+    warnings: Vec<String>,
+}
+
+/// Install a package from a zip. The body is the raw zip bytes (a
+/// `Uint8Array` passed as `invoke`'s args). Runs the package's
+/// `install.solx` and grants its declared allowlist entries, which is why
+/// this is `solx:config`, not `solx:default`.
+#[command]
+pub(crate) async fn config_install_package(
+    state: State<'_, SolxState>,
+    request: Request<'_>,
+) -> Result<PackageResult> {
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err(SolxError::Invalid(
+            "config_install_package: expected the zip as a raw byte body".into(),
+        ));
+    };
+    install_package_zip(&state, bytes.clone()).await
+}
+
+#[cfg(feature = "local")]
+async fn install_package_zip(state: &SolxState, bytes: Vec<u8>) -> Result<PackageResult> {
+    let app = state.app()?;
+    host_config(state)?;
+    let runner = solx_cli::AppRunner { app: app.clone() };
+    let outcome = solx_packages::install_package_zip_bytes(&runner, &app.config, bytes).await?;
+    Ok(PackageResult {
+        config: config_view(&app.config),
+        warnings: outcome.warnings,
+    })
+}
+
+/// Uninstall a package by name: runs its `uninstall.solx`, revokes its
+/// grants, and deletes its files if solx unpacked them.
+#[command]
+pub(crate) async fn config_uninstall_package(
+    state: State<'_, SolxState>,
+    name: String,
+) -> Result<PackageResult> {
+    uninstall_package_by_name(&state, &name).await
+}
+
+#[cfg(feature = "local")]
+async fn uninstall_package_by_name(state: &SolxState, name: &str) -> Result<PackageResult> {
+    let app = state.app()?;
+    host_config(state)?;
+    let runner = solx_cli::AppRunner { app: app.clone() };
+    solx_packages::uninstall_package(&runner, &app.config, name).await?;
+    Ok(PackageResult {
+        config: config_view(&app.config),
+        warnings: Vec::new(),
+    })
+}
+
+#[cfg(not(feature = "local"))]
+async fn install_package_zip(_: &SolxState, _: Vec<u8>) -> Result<PackageResult> {
+    Err(no_local_packages())
+}
+
+#[cfg(not(feature = "local"))]
+async fn uninstall_package_by_name(_: &SolxState, _: &str) -> Result<PackageResult> {
+    Err(no_local_packages())
+}
+
+#[cfg(not(feature = "local"))]
+fn no_local_packages() -> SolxError {
+    SolxError::Invalid("this build can't manage packages; do it on the solx-server host".into())
 }
 
 /// Build the client-mode `App` from a previously persisted URL/token, if any.
