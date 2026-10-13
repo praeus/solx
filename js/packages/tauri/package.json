@@ -1,0 +1,29 @@
+{
+  "name": "@solx/tauri",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Tauri IPC client for a solx desktop host (the solx Tauri plugin). Same manager surface as @solx/http, with invoke() in place of fetch.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "//": "Zero-dependency like @solx/http: the host injects Tauri's `invoke` (from @tauri-apps/api/core) into connectTauri, so this package never imports @tauri-apps/api itself. @solx/surface is a file: dep for the same reason @solx/http's is.",
+  "dependencies": {
+    "@solx/surface": "file:../surface"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  }
+}

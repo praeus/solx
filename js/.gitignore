@@ -1,0 +1,26 @@
+# Cargo
+target/
+**/*.rs.bk
+*.pdb
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+.npmrc
+
+# Build artifacts
+.solx/                    # local solx appdata used for tests
+*.log
+
+# Editors
+.idea/
+.vscode/
+!.vscode/settings.json
+
+# OS
+.DS_Store
+Thumbs.db
+# Platform packages are committed (bun needs their package.json to install);
+# only the locally built binary is ignored.
+/platform-packages/*/solx.node

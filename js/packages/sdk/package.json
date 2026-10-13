@@ -1,0 +1,62 @@
+{
+  "name": "solx",
+  "version": "0.0.0",
+  "private": true,
+  "description": "TypeScript / Node.js surface for solx-core. In-process Neon bindings + tree-shakeable subpath exports.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/types.js"
+    },
+    "./config": {
+      "types": "../config/dist/index.d.ts",
+      "import": "../config/dist/index.js"
+    },
+    "./files": {
+      "types": "../files/dist/index.d.ts",
+      "import": "../files/dist/index.js"
+    },
+    "./docs": {
+      "types": "../docs/dist/index.d.ts",
+      "import": "../docs/dist/index.js"
+    },
+    "./actions": {
+      "types": "../actions/dist/index.d.ts",
+      "import": "../actions/dist/index.js"
+    },
+    "./scripts": {
+      "types": "../scripts/dist/index.d.ts",
+      "import": "../scripts/dist/index.js"
+    },
+    "./surface": {
+      "types": "../surface/dist/index.d.ts",
+      "import": "../surface/dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "dependencies": {
+    "@solx/surface": "workspace:*",
+    "@solx/types": "workspace:*",
+    "@solx/files": "workspace:*",
+    "@solx/config": "workspace:*",
+    "@solx/docs": "workspace:*",
+    "@solx/actions": "workspace:*",
+    "@solx/scripts": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  }
+}

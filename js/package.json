@@ -1,0 +1,33 @@
+{
+  "name": "solx-js",
+  "version": "0.0.0",
+  "private": true,
+  "description": "TypeScript / Node.js surface for solx-core. In-process Neon bindings + tree-shakeable subpath exports.",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "platform-packages/*"
+  ],
+  "//": "optionalDependencies below are auto-populated by the workspace glob; real per-platform deps live in their own package.json files.",
+  "optionalDependencies": {
+    "@solx/win32-x64-msvc": "workspace:*"
+  },
+  "scripts": {
+    "build": "bun run --filter='./packages/*' build",
+    "test": "bun run --filter='./packages/*' test",
+    "typecheck": "bun run --filter='./packages/*' typecheck",
+    "clean": "bun run --filter='./packages/*' clean && bun run --filter='./platform-packages/*' clean",
+    "format": "prettier --write \"**/*.{ts,md,json}\"",
+    "lint": "echo \"(no linter configured yet)\""
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "prettier": "^3.2.5",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}

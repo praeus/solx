@@ -1,0 +1,45 @@
+[workspace]
+members = [
+    "crates/solx-bindings",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Local solx-core crates, consumed via path for v1 (see ARCHITECTURE.md §5).
+# If the published solx-core ever lands on crates.io, switch these to
+# version deps; the published solx.node picks the right version at
+# build time via crates/solx-bindings/Cargo.toml's pinned-clone script.
+solx-surface   = { path = "../solx-core/solx-surface" }
+solx-config    = { path = "../solx-core/solx-config" }
+solx-types     = { path = "../solx-core/solx-types" }
+solx-files     = { path = "../solx-core/solx-files" }
+solx-docs      = { path = "../solx-core/solx-docs" }
+solx-actions   = { path = "../solx-core/solx-actions" }
+solx-scripts   = { path = "../solx-core/solx-scripts" }
+solx-client    = { path = "../solx-core/solx-client" }
+
+# External
+neon      = { version = "1", default-features = false, features = ["napi-6"] }
+tokio     = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+serde     = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "1"
+chrono    = { version = "0.4", features = ["serde"] }
+uuid      = { version = "1", features = ["v4", "serde"] }
+async-trait = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.dev]
+opt-level = 0
+debug = true

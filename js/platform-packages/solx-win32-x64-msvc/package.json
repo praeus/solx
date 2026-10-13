@@ -1,0 +1,16 @@
+{
+  "name": "@solx/win32-x64-msvc",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Prebuilt solx.node for win32-x64-msvc. The binary is built locally (see README \"Develop\") and is not committed.",
+  "main": "solx.node",
+  "files": [
+    "solx.node"
+  ],
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ]
+}
