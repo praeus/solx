@@ -1,20 +1,21 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "solx-explorer",
+  "productName": "solx",
+  "mainBinaryName": "solx",
   "version": "0.1.0",
-  "identifier": "org.praeus.solx-explorer",
+  "identifier": "org.praeus.solx",
   "build": {
-    "beforeDevCommand": "pnpm dev",
-    "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
-    "frontendDist": "../dist"
+    "beforeDevCommand": "node scripts/ui-dev.mjs",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "bun run --cwd ../solx-web/web build",
+    "frontendDist": "../../solx-web/web/dist"
   },
   "app": {
     "windows": [
       {
-        "title": "solx-explorer",
-        "width": 800,
-        "height": 600
+        "title": "solx",
+        "width": 1280,
+        "height": 800
       }
     ],
     "security": {

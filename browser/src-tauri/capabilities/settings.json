@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings",
+  "description": "The Settings window: the only window allowed to read and edit solx-config.json (solx:config). Never load package widgets here.",
+  "windows": ["settings"],
+  "permissions": [
+    "core:default",
+    "solx:default",
+    "solx:config"
+  ]
+}

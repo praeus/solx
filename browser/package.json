@@ -3,24 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "//": "No frontend of its own: the UI is solx-web (../solx-web/web), built and served by tauri.conf.json's before*Command hooks. The server build is the default cargo feature set; the client build swaps it for `client` and uses tauri.client.conf.json's name/identifier.",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "tauri": "tauri"
-  },
-  "dependencies": {
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2"
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "dev:client": "tauri dev --config src-tauri/tauri.client.conf.json --features client -- --no-default-features",
+    "build": "tauri build",
+    "build:client": "tauri build --config src-tauri/tauri.client.conf.json --features client -- --no-default-features"
   },
   "devDependencies": {
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^6.0.2",
-    "typescript": "~6.0.3",
-    "vite": "^8.0.16",
     "@tauri-apps/cli": "^2"
   }
 }
