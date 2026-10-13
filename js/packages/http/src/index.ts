@@ -17,6 +17,7 @@
  *
  * @packageDocumentation
  */
+import type { RemoteSolx } from '@solx/surface';
 import { HttpActionManager } from './actions.js';
 import { HttpDocManager } from './docs.js';
 import { HttpFileStore } from './files.js';
@@ -26,8 +27,9 @@ export { HttpActionManager } from './actions.js';
 export { HttpDocManager } from './docs.js';
 export { HttpFileStore } from './files.js';
 export { HttpTypeManager } from './types.js';
+export { mapWireError } from './error.js';
 
-export interface HttpSolx {
+export interface HttpSolx extends RemoteSolx {
   types: HttpTypeManager;
   files: HttpFileStore;
   docs: HttpDocManager;
