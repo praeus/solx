@@ -30,7 +30,7 @@ import {
   type TypeEntity,
   type TypeInput,
 } from "@solx/surface";
-import { getConnection, getStoredServerUrl, isConfigured } from "./connection";
+import { getConnection, getStoredServerUrl, IN_TAURI, isConfigured, refreshHostInfo } from "./connection";
 
 export type DocumentSummary = Document;
 export type ActionSummary = Action;
@@ -411,13 +411,22 @@ function bytesToBase64(bytes: Uint8Array): string {
 /** ── Health ─────────────────────────────────────────────────────────── */
 
 /**
- * `solx-server`'s `GET /health` is a plain unauthenticated `"ok"` string
- * (no JSON body, no bearer check) — this just probes reachability. Unlike
- * the old Bun backend's `/api/health`, there's no separate "backend up but
- * solx-server down" state to report; there's only "solx-server reachable"
- * or not.
+ * Probes reachability. In a browser that's `solx-server`'s unauthenticated
+ * `GET /health` (no bearer check); only its status matters. In the desktop
+ * app it's the host's `info` — a local host is always reachable, a client
+ * host is probed with one cheap authenticated call through it.
  */
 export async function fetchHealth(): Promise<HealthResponse> {
+  if (IN_TAURI) {
+    try {
+      const info = await refreshHostInfo();
+      if (info.mode === "disconnected") return { reachable: false };
+      if (info.mode === "remote") await getConnection().docs.list({ limit: 1 });
+      return { reachable: true };
+    } catch {
+      return { reachable: false };
+    }
+  }
   if (!isConfigured()) return { reachable: false };
   try {
     const res = await fetch(`${getStoredServerUrl()}/health`);

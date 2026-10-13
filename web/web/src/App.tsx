@@ -68,7 +68,7 @@ import {
   useSearchDocuments,
   useTypes,
 } from "./api/hooks";
-import { getStoredServerUrl, isConfigured } from "./api/connection";
+import { connectionLabel, isConfigured } from "./api/connection";
 import "./App.css";
 
 const PAGE_SIZE = 20;
@@ -266,7 +266,7 @@ export function App() {
       {isConfigured() && healthQuery.data && !healthQuery.data.reachable && (
         <div className="app-banner app-banner--warning" role="alert">
           <strong>solx-server unreachable.</strong>{" "}
-          <span>{getStoredServerUrl()} could not be reached. Check settings.</span>
+          <span>{connectionLabel()} could not be reached. Check settings.</span>
           <button className="app-banner__btn" onClick={() => setSettingsOpen(true)}>
             Open settings
           </button>

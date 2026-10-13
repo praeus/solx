@@ -10,6 +10,7 @@
     "paths": {
       "@solx/http": ["../../solx-js/packages/http/src/index.ts"],
       "@solx/surface": ["../../solx-js/packages/surface/src/index.ts"],
+      "@solx/tauri": ["../../solx-js/packages/tauri/src/index.ts"],
       "@solx/widgets/host": ["../../solx-packages/solx-widgets/src/host/index.ts"]
     }
   },
