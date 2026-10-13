@@ -6,7 +6,7 @@
  * JSON body is the `SolxError` itself.
  */
 import { SolxError } from '@solx/surface';
-import { mapWireError } from './error.js';
+import { mapHttpError } from './error.js';
 
 export type QueryValue = string | number | boolean | undefined;
 
@@ -123,14 +123,14 @@ export async function requestJson<Resp>(
   }
 
   if (!res.ok) {
-    throw mapWireError(parsed, res.status, res.statusText);
+    throw mapHttpError(parsed, res.status, res.statusText);
   }
   return parsed as Resp;
 }
 
 /**
  * Send a request whose success body is raw bytes (file content). Errors are
- * still JSON, so they map through `mapWireError` the same way.
+ * still JSON, so they map through `mapHttpError` the same way.
  */
 export async function requestBytes(
   baseUrl: string,
@@ -149,7 +149,7 @@ export async function requestBytes(
     } catch {
       parsed = undefined;
     }
-    throw mapWireError(parsed, res.status, res.statusText);
+    throw mapHttpError(parsed, res.status, res.statusText);
   }
   return new Uint8Array(await res.arrayBuffer());
 }

@@ -9,6 +9,7 @@
     { "path": "./packages/docs" },
     { "path": "./packages/actions" },
     { "path": "./packages/scripts" },
-    { "path": "./packages/http" }
+    { "path": "./packages/http" },
+    { "path": "./packages/tauri" }
   ]
 }

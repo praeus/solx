@@ -153,3 +153,20 @@ export interface InstalledPackage {
 export interface ScriptRunner {
   run(source: string, params?: JsonValue): Promise<JsonValue>;
 }
+
+// ---------- RemoteSolx ----------
+
+type WithPaths<T> = T & { paths(opts?: ListOptions): Promise<Page<PathFacet>> };
+
+/**
+ * The four managers as served by a solx host outside this process —
+ * `solx-server` over HTTP (`@solx/http`'s `connectHttp`) or a Tauri host
+ * over IPC (`@solx/tauri`'s `connectTauri`). Both provide `paths`, which is
+ * optional on the bare manager interfaces.
+ */
+export interface RemoteSolx {
+  types: WithPaths<TypeManager>;
+  files: FileStore;
+  docs: WithPaths<DocManager>;
+  actions: WithPaths<ActionManager>;
+}

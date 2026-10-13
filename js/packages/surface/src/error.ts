@@ -85,3 +85,40 @@ export class SolxError extends Error {
     return new SolxError('Other', raw);
   }
 }
+
+const WIRE_KIND_MAP: Record<string, SolxErrorKind> = {
+  not_found: 'NotFound',
+  invalid: 'Invalid',
+  validation: 'Validation',
+  conflict: 'Conflict',
+  io: 'Io',
+  db: 'Db',
+  exec: 'Exec',
+  config: 'Config',
+  unauthorized: 'Unauthorized',
+  other: 'Other',
+};
+
+/**
+ * Turn a serialized `solx_surface::SolxError` back into a real
+ * {@link SolxError}. On the wire it is adjacently tagged —
+ * `{"kind":"not_found","message":"..."}`, snake_case (see
+ * solx-core/solx-surface/src/error.rs) — which is how both `solx-server`
+ * (as an HTTP error body) and the solx Tauri plugin (as a rejected
+ * `invoke`) report it. Mirrors `solx-client::error::read_response`.
+ *
+ * `unrecognized` replaces the default message when `body` isn't a
+ * `SolxError`, so a transport can add what it knows (e.g. the HTTP status).
+ */
+export function mapWireError(body: unknown, unrecognized?: string): SolxError {
+  if (body && typeof body === 'object') {
+    const b = body as { kind?: unknown; message?: unknown };
+    if (typeof b.kind === 'string' && typeof b.message === 'string') {
+      return new SolxError(WIRE_KIND_MAP[b.kind] ?? 'Other', b.message);
+    }
+  }
+  return new SolxError(
+    'Other',
+    unrecognized ?? `solx host returned an unrecognized error: ${JSON.stringify(body)}`,
+  );
+}
