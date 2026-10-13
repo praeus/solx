@@ -1,11 +1,6 @@
 {
-  // VS Code workspace settings for solx-web.
-  //
-  //  - File nesting groups related generated files under the source files
-  //    that produced them so the explorer tree stays tidy.
-  //  - The recommended extensions include the Bun debugger and
-  //    Rust-analyzer for the cross-workspace backend.
-
+  // File nesting groups related generated files under the source files
+  // that produced them so the explorer tree stays tidy.
   "files.nesting": {
     "enabled": true,
     "patterns": {
@@ -18,7 +13,8 @@
   "search.exclude": {
     "**/node_modules": true,
     "**/dist": true,
-    "**/vendor": true
+    "**/vendor": true,
+    "**/target": true
   },
 
   "[typescript]": {
@@ -28,8 +24,7 @@
     "editor.defaultFormatter": "vscode.typescript-language-features"
   },
 
-  // Tell TS which tsconfig to use at each folder
-  "typescript.tsdk": "${workspaceFolder}/web/node_modules/typescript/lib",
+  "typescript.tsdk": "web/web/node_modules/typescript/lib",
 
   // Hide vendor and build output from the explorer
   "files.exclude": {

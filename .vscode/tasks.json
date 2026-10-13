@@ -1,0 +1,143 @@
+{
+  // VS Code tasks for the solx monorepo.
+  //
+  // Consolidated from the former per-repo .vscode folders:
+  //   • core/     — Rust workspace (solx-server, …)
+  //   • web/      — solx-web (Vite frontend in web/web)
+  //   • browser/  — solx-browser (Tauri app in browser/src-tauri)
+  //
+  // `${workspaceFolder}` is the monorepo root.
+  //
+  // Ports: solx-server :8766, Vite :5173.
+
+  "version": "2.0.0",
+  "tasks": [
+    /* ──────────────────────────────────────────────────────────────────
+     * core
+     * ────────────────────────────────────────────────────────────────── */
+
+    {
+      "label": "core: cargo build",
+      "type": "shell",
+      "command": "cargo build",
+      "options": {
+        "cwd": "${workspaceFolder}/core"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$rustc",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "close": false
+      },
+      "detail": "Runs 'cargo build' in core/."
+    },
+
+    {
+      "label": "core: start solx-server",
+      "type": "process",
+      "command": "${workspaceFolder}/core/target/debug/solx-server.exe",
+      "args": ["--port", "8766"],
+      "options": {
+        "cwd": "${workspaceFolder}/core"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^(never matches)$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^(never matches)$",
+          "endsPattern": "listening on"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "close": false
+      },
+      "detail": "Starts solx-server on :8766 against the default appdata dir (%APPDATA%/praeus/solx) — no SOLX_APPDATA_DIR override, matching .vscode/mcp.json. Build first with 'core: cargo build' if the binary doesn't exist yet."
+    },
+
+    /* ──────────────────────────────────────────────────────────────────
+     * web
+     * ────────────────────────────────────────────────────────────────── */
+
+    {
+      // Shared by the web and browser launch configs. browser/scripts/ui-dev.mjs
+      // runs `bun run dev` in web/web, or reuses a server already on :5173, and
+      // kills Vite's whole process tree when stopped. Stays running in the
+      // background across debug sessions.
+      "label": "web: start Vite",
+      "type": "shell",
+      "command": "node scripts/ui-dev.mjs",
+      "options": { "cwd": "${workspaceFolder}/browser" },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "vite",
+        "pattern": { "regexp": "^__never_matches__$" },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "VITE",
+          "endsPattern": "ready in|Local:"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "close": false
+      },
+      "detail": "Starts the Vite dev server on http://localhost:5173 (strictPort), or reuses one already running."
+    },
+
+    {
+      // Each child is `isBackground: true`, so they stay up until you
+      // terminate this task (Terminal → "Terminate Task").
+      "label": "web: full stack",
+      "dependsOn": [
+        "core: start solx-server",
+        "web: start Vite"
+      ],
+      "dependsOrder": "parallel",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "solx-dev"
+      },
+      "detail": "Starts solx-server (:8766) and Vite (:5173) in parallel."
+    },
+
+    /* ──────────────────────────────────────────────────────────────────
+     * browser
+     * ────────────────────────────────────────────────────────────────── */
+
+    {
+      "label": "browser: server build",
+      "type": "cargo",
+      "command": "build",
+      "options": { "cwd": "${workspaceFolder}/browser/src-tauri" },
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "browser: client build",
+      "type": "cargo",
+      "command": "build",
+      "args": ["--no-default-features", "--features", "client"],
+      "options": { "cwd": "${workspaceFolder}/browser/src-tauri" },
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "browser: server prepare",
+      "dependsOn": ["web: start Vite", "browser: server build"]
+    },
+    {
+      "label": "browser: client prepare",
+      "dependsOn": ["web: start Vite", "browser: client build"]
+    }
+  ]
+}

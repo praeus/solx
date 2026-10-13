@@ -1,6 +1,6 @@
 // Start solx-web's Vite dev server (the app's devUrl), unless one is already
 // serving on its port. Used by both `tauri dev` (beforeDevCommand) and the
-// VS Code "ui dev" task, so running one after the other doesn't fail with
+// VS Code "web: start Vite" task, so running one after the other doesn't fail with
 // "Port 5173 is already in use".
 //
 // When a server is already up, this prints a ready line (so the VS Code

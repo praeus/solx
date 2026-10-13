@@ -1,0 +1,137 @@
+{
+  // VS Code launch configurations for the solx monorepo.
+  //
+  // Consolidated from the former per-repo .vscode folders (core/, web/,
+  // browser/). `${workspaceFolder}` is the monorepo root.
+  //
+  // Debug types used:
+  //   • "lldb"      — CodeLLDB (vadimcn.vscode-lldb), for solx-server
+  //   • "chrome"    — JavaScript Debugger (ms-vscode.js-debug), for Vite
+  //   • "cppvsdbg"  — C/C++ (ms-vscode.cpptools), MSVC debugger for the
+  //                   Tauri browser app
+  //
+  // Pre-reqs:
+  //   - solx-server binary at core/target/debug/solx-server.exe
+  //     (Run Task → `core: cargo build`)
+  //   - web deps installed: `cd web/web && bun install`
+
+  "version": "0.2.0",
+  "configurations": [
+    /* ──────────────────────────────────────────────────────────────────
+     * solx-server (Rust, core/)
+     *
+     * Launch: CodeLLDB spawns solx-server.exe and attaches from birth.
+     * Attach: for a solx-server you started yourself (Run Task →
+     *         `core: start solx-server`, or another terminal).
+     * ────────────────────────────────────────────────────────────────── */
+
+    {
+      "name": "Debug: solx-server (CodeLLDB, launch)",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/core/target/debug/solx-server.exe",
+      "args": ["--port", "8766"],
+      "cwd": "${workspaceFolder}/core",
+      "env": {
+        "RUST_LOG": "info,solx_server=debug"
+      },
+      "stopOnEntry": false,
+      "presentation": { "group": "core", "order": 1 }
+    },
+    {
+      "name": "Debug: solx-server (CodeLLDB, attach)",
+      "type": "lldb",
+      "request": "attach",
+      "program": "${workspaceFolder}/core/target/debug/solx-server.exe",
+      "pid": "${command:pickProcess}",
+      "presentation": { "group": "core", "order": 2 }
+    },
+
+    /* ──────────────────────────────────────────────────────────────────
+     * Vite frontend (web/web)
+     *
+     * `preLaunchTask` (singular, synchronous) starts Vite before the
+     * browser opens, so it loads only after Vite logs "ready in".
+     * `pathMapping` maps Vite-served paths to disk for source maps.
+     * ────────────────────────────────────────────────────────────────── */
+
+    {
+      "name": "Debug: Vite frontend (Chrome)",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/web/web",
+      "sourceMaps": true,
+      "preLaunchTask": "web: start Vite",
+      "pathMapping": {
+        "/": "${workspaceFolder}/web/web",
+        "/src": "${workspaceFolder}/web/web/src"
+      },
+      "presentation": { "group": "web", "order": 1 }
+    },
+
+    /* ──────────────────────────────────────────────────────────────────
+     * solx-browser (Tauri, browser/)
+     *
+     * "debug" configs build with cargo (no `tauri` CLI), so the webview
+     * loads `devUrl` from the dev server started by "web: start Vite".
+     * "tauri dev" configs start their own dev server (beforeDevCommand),
+     * so stop that task first or they fail with "Port 5173 is already
+     * in use".
+     * ────────────────────────────────────────────────────────────────── */
+
+    {
+      "name": "solx-browser - debug",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/browser/src-tauri/target/debug/solx-explorer.exe",
+      "cwd": "${workspaceFolder}/browser/src-tauri",
+      "console": "integratedTerminal",
+      "preLaunchTask": "browser: server prepare",
+      "presentation": { "group": "browser", "order": 1 }
+    },
+    {
+      "name": "solx-browser - tauri dev",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "pnpm dev",
+      "cwd": "${workspaceFolder}/browser",
+      "presentation": { "group": "browser", "order": 2 }
+    },
+    {
+      "name": "solx-browser (client) - debug",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/browser/src-tauri/target/debug/solx-explorer.exe",
+      "cwd": "${workspaceFolder}/browser/src-tauri",
+      "console": "integratedTerminal",
+      "preLaunchTask": "browser: client prepare",
+      "presentation": { "group": "browser", "order": 3 }
+    },
+    {
+      "name": "solx-browser (client) - tauri dev",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "pnpm dev:client",
+      "cwd": "${workspaceFolder}/browser",
+      "presentation": { "group": "browser", "order": 4 }
+    }
+  ],
+
+  /* ──────────────────────────────────────────────────────────────────
+   * Compounds — single Run/Debug click. Launch configs spawn their own
+   * processes, so no PID race; the Chrome config preLaunchTasks Vite.
+   * ────────────────────────────────────────────────────────────────── */
+
+  "compounds": [
+    {
+      "name": "Debug: full stack",
+      "configurations": [
+        "Debug: solx-server (CodeLLDB, launch)",
+        "Debug: Vite frontend (Chrome)"
+      ],
+      "stopAll": true,
+      "presentation": { "group": "solx-dev" }
+    }
+  ]
+}
