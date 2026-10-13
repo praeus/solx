@@ -7,8 +7,8 @@
   "build": {
     "beforeDevCommand": "node scripts/ui-dev.mjs",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "bun run --cwd ../solx-web/web build",
-    "frontendDist": "../../solx-web/web/dist"
+    "beforeBuildCommand": "bun run --cwd ../web/web build",
+    "frontendDist": "../../web/web/dist"
   },
   "app": {
     "windows": [

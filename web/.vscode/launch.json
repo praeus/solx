@@ -25,7 +25,7 @@
   //   • "chrome"    — Microsoft "JavaScript Debugger" (ms-vscode.js-debug)
   //
   // Pre-reqs:
-  //   - solx-server binary at D:/Projects/solx-core/target/debug/solx-server.exe
+  //   - solx-server binary at D:/Projects/solx/core/target/debug/solx-server.exe
   //   - server/vendor/solx-win32-x64-msvc/solx.node is the freshly built copy
   //   - web/dev deps installed: `cd web && bun install`
 
@@ -39,9 +39,9 @@
       "name": "Debug: solx-server (CodeLLDB, launch)",
       "type": "lldb",
       "request": "launch",
-      "program": "${workspaceFolder}/../solx-core/target/debug/solx-server.exe",
+      "program": "${workspaceFolder}/../core/target/debug/solx-server.exe",
       "args": ["--port", "8766"],
-      "cwd": "${workspaceFolder}/../solx-core",
+      "cwd": "${workspaceFolder}/../core",
       "env": {
         "RUST_LOG": "info,solx_server=debug"
       },
@@ -57,7 +57,7 @@
       "name": "Debug: solx-server (CodeLLDB, attach)",
       "type": "lldb",
       "request": "attach",
-      "program": "${workspaceFolder}/../solx-core/target/debug/solx-server.exe",
+      "program": "${workspaceFolder}/../core/target/debug/solx-server.exe",
       "pid": "${command:pickProcess}",
       "presentation": {
         "reveal": "always",

@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 
 const PORT = 5173; // solx-web's vite.config.ts (strictPort) and tauri.conf.json's devUrl
 const URL_ = `http://localhost:${PORT}/`;
-const WEB_DIR = fileURLToPath(new URL("../../solx-web/web", import.meta.url));
+const WEB_DIR = fileURLToPath(new URL("../../web/web", import.meta.url));
 
 /** Whether anything is listening on the port. Vite binds `localhost`, which
  * may be only `::1` (or only 127.0.0.1), so try both. A TCP connect rather

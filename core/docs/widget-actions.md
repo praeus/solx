@@ -71,9 +71,9 @@ bearer token is the gate, so a browser page can drive all of it directly.
 
 ## 3. Mounting one (the solx-web half — implemented)
 
-Built as `solx-packages/solx-widgets` (a shared TS toolkit, not an
+Built as `js/packages/widgets` (a shared TS toolkit, not an
 installable solx package) plus the first real widget content package,
-`solx-packages/solx-agent`. See `solx-widgets/README.md` for the full
+`solx-packages/solx-agent`. See `js/packages/widgets/README.md` for the full
 contract; summary of how each step below landed:
 
 1. After an `exec`, check `action.resultTypeRef ===
@@ -89,13 +89,13 @@ contract; summary of how each step below landed:
    try { await import(/* @vite-ignore */ url); } finally { URL.revokeObjectURL(url); }
    ```
    Dedupe by `bin_name` so a bundle is imported once per page.
-   (`solx-widgets/src/host/mountWidget.ts`.)
+   (`js/packages/widgets/src/host/mountWidget.ts`.)
 3. `document.createElement(d.tag_name)`, assign `el.fields = d.fields`, and
    inject a scoped client so the element can call back in — a `connectHttp`
    façade narrowed to what the widget should reach.
-   (`mountWidget.ts` also assigns `el.solxClient`; `solx-widgets/src/wrap/defineReactWidget.tsx`
+   (`mountWidget.ts` also assigns `el.solxClient`; `js/packages/widgets/src/wrap/defineReactWidget.tsx`
    threads it through React context, read via `useSolxWidgetClient()` from
-   `solx-widgets/src/wrap/SolxWidgetContext.tsx`. Currently scoped to just
+   `js/packages/widgets/src/wrap/SolxWidgetContext.tsx`. Currently scoped to just
    `{ actions: { exec(path, name, params?) } }` — the one capability asked
    for so far; additive, so more can be exposed later.
    Worth being explicit: this is an ergonomic/discoverable API, not a new
@@ -109,7 +109,7 @@ contract; summary of how each step below landed:
 
 Bundles are expected to be self-contained single-file ESM: a blob URL has no
 useful base, so relative imports inside the bundle will not resolve.
-(`solx-widgets/src/build/widgetViteConfig.ts` produces exactly that shape,
+(`js/packages/widgets/src/build/widgetViteConfig.ts` produces exactly that shape,
 including injecting CSS at runtime rather than emitting a separate asset —
 needed for the same reason. React itself also needs `define:
 { "process.env.NODE_ENV": ... }` set explicitly in that config: a blob-URL

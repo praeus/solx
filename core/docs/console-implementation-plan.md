@@ -111,7 +111,7 @@ CREATE INDEX idx_entries_invocation ON console_entries(action_ref, invocation_id
 
 `seq` doubles as the read cursor. That is what makes `tail` cheap, replayable,
 and safe for multiple concurrent readers — the same property the
-[solx-ollama streaming design](../../solx-packages/solx-ollama/docs/streaming-design.md)
+[solx-ollama streaming design](../../../solx-packages/solx-ollama/docs/streaming-design.md)
 argued for, and it is what a future WebSocket push would sit on.
 
 `source` is worth having from the start: it is how you tell a guest's

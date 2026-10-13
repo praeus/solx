@@ -22,6 +22,13 @@ export interface WidgetConfigOptions {
 export function createWidgetConfig({ entry, outFile }: WidgetConfigOptions): UserConfig {
   return defineConfig({
     plugins: [react(), cssInjectedByJsPlugin()],
+    // This toolkit's own source imports react from its own node_modules, a
+    // different copy than the widget package's. Two Reacts in one bundle
+    // break hooks and context (SolxWidgetContext), so resolve both to the
+    // widget package's copy.
+    resolve: {
+      dedupe: ["react", "react-dom"],
+    },
     // React/ReactDOM's own source is full of `process.env.NODE_ENV` checks.
     // A normal Vite app build replaces these automatically, but a blob-URL
     // bundle never runs through Vite's dev server or an app's index.html --

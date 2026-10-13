@@ -28,11 +28,11 @@ Build & test:
 
 ## Implementation Notes
 
-- The solx-js packages live in `../solx-js` and have `workspace:*` deps that don't
+- The solx-js packages live in `../js` and have `workspace:*` deps that don't
   resolve outside that monorepo. We vendor them into `server/vendor/` via
   `scripts/vendor-solx.mjs`, which rewrites `workspace:*` to `file:./<sibling>`.
 - The vendored `solx.node` is the placeholder from the platform package. To use a
-  real build, run `cargo build -p solx-bindings` in `../solx-js/crates/solx-bindings`
+  real build, run `cargo build -p solx-bindings` in `../js/crates/solx-bindings`
   and copy `target/debug/solx.node` into `server/vendor/solx-win32-x64-msvc/solx.node`.
   The vendor script preserves any existing binary larger than the placeholder.
 - `SOLX_NATIVE_BIN` must be set when starting the dev script.

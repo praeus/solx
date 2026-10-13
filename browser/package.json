@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "//": "No frontend of its own: the UI is solx-web (../solx-web/web), built and served by tauri.conf.json's before*Command hooks. The server build is the default cargo feature set; the client build swaps it for `client` and uses tauri.client.conf.json's name/identifier.",
+  "//": "No frontend of its own: the UI is solx-web (../web/web), built and served by tauri.conf.json's before*Command hooks. The server build is the default cargo feature set; the client build swaps it for `client` and uses tauri.client.conf.json's name/identifier.",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",

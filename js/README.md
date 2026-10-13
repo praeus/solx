@@ -1,6 +1,6 @@
 # solx-js
 
-TypeScript surface for [solx-core](../solx-core). Two ways in, one interface:
+TypeScript surface for [solx-core](../core). Two ways in, one interface:
 in-process Neon bindings for Node, and a zero-dependency `fetch` client for
 the browser. Both implement the same manager contract as the Rust
 `solx-surface` traits.
@@ -43,7 +43,7 @@ Nothing above the constructor changes between modes.
 | `@solx/config`  | Local config service (sync; always local). |
 | `@solx/http`    | Pure-`fetch` client for `solx-server`. Zero-dependency, browser-safe, no Neon — this is what a web frontend uses. |
 
-`@solx/http` is the reason [solx-web](../solx-web) needs no backend of its
+`@solx/http` is the reason [solx-web](../web) needs no backend of its
 own: it implements the same manager interfaces in plain TypeScript, so a
 browser talks to `solx-server` directly.
 

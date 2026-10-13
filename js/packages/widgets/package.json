@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Shared toolkit for building solx widgets. defineReactWidget wraps a React component as a self-mounting custom element; createWidgetConfig is a Vite library-mode config producing a single-file ESM bundle; mountWidget is the loader a host page (solx-web) uses to fetch, import, and mount one. Not an installable solx package itself -- no install.solx, nothing registered in the actions database. Consumed straight from TS source: sibling widget packages (e.g. solx-agent) import it by relative path, solx-web aliases it the same way it already aliases @solx/http from the sibling solx-js repo.",
+  "description": "Shared toolkit for building solx widgets. defineReactWidget wraps a React component as a self-mounting custom element; createWidgetConfig is a Vite library-mode config producing a single-file ESM bundle; mountWidget is the loader a host page (solx-web) uses to fetch, import, and mount one. Not an installable solx package itself -- no install.solx, nothing registered in the actions database. Consumed straight from TS source: widget packages in the sibling solx-packages repo (e.g. solx-agent) import it by relative path through ../solx/js/packages/widgets; solx web aliases it the same way it aliases @solx/http.",
   "scripts": {
     "typecheck": "tsc --noEmit"
   },

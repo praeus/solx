@@ -42,11 +42,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 
-solx-tauri-plugin = { path = "../../solx-core/solx-tauri-plugin" }
-solx-manager = { path = "../../solx-core/solx-manager", default-features = false }
-solx-config = { path = "../../solx-core/solx-config" }
-solx-server = { path = "../../solx-core/solx-server", optional = true }
-solx-actions = { path = "../../solx-core/solx-actions", optional = true }
+solx-tauri-plugin = { path = "../../core/solx-tauri-plugin" }
+solx-manager = { path = "../../core/solx-manager", default-features = false }
+solx-config = { path = "../../core/solx-config" }
+solx-server = { path = "../../core/solx-server", optional = true }
+solx-actions = { path = "../../core/solx-actions", optional = true }
 tokio = { version = "1", features = ["net", "io-util", "time", "sync"], optional = true }
 
 

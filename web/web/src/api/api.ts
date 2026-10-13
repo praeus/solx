@@ -1,7 +1,7 @@
 /**
  * Frontend API client — talks directly to `solx-server` via `@solx/http`,
  * no backend hop in between (there used to be a Bun server here; see
- * `d:\Projects\solx-core\docs\next-steps.md` item 3 for why it's gone).
+ * `core/docs/next-steps.md` item 3 for why it's gone).
  *
  * `@solx/http`'s manager methods already return `@solx/surface`'s camelCase
  * entities (`Document`, `TypeEntity`, `Action`, …) — there is no remaining

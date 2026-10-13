@@ -725,7 +725,7 @@ function WidgetPanel({ result }: { result: unknown }) {
     }).then(() => {
       // Dev-only: a widget bundle can't be hot-swapped in place (the tag's
       // customElements.define is permanent), so the only way to pick up a
-      // rebuilt bundle is a full reload -- see solx-widgets/src/host/devReload.ts.
+      // rebuilt bundle is a full reload -- see js/packages/widgets/src/host/devReload.ts.
       if (!cancelled && import.meta.env.DEV) {
         stopDevWatch = startDevBundleWatch(conn.files, descriptor.bin_name);
       }

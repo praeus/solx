@@ -1,6 +1,6 @@
 # solx-web
 
-A browser UI for [solx-core](../solx-core) — documents, actions, types, and
+A browser UI for [solx-core](../core) — documents, actions, types, and
 files. React talking straight to `solx-server`; no backend of its own.
 
 ```
@@ -36,16 +36,16 @@ database rather than in the browser.
 ## Prerequisites
 
 - [Bun](https://bun.sh) v1.1+
-- A running `solx-server` (`cargo run -p solx-server` in `../solx-core`,
+- A running `solx-server` (`cargo run -p solx-server` in `../core`,
   default `http://127.0.0.1:8766`)
-- A checkout of the sibling [solx-js](../solx-js) repo
+- A checkout of the sibling [solx-js](../js) repo
 
 `@solx/http` and `@solx/surface` aren't npm dependencies here — they're
-aliased straight to their TypeScript source in `../solx-js` (see
+aliased straight to their TypeScript source in `../js` (see
 `web/vite.config.ts`'s `resolve.alias` and `web/tsconfig.json`'s
 `compilerOptions.paths`). Both are zero-dependency and browser-safe, so
 there's no install or build step in that repo for solx-web's sake. The
-sibling checkout has to be at `../solx-js` relative to this repo for the
+sibling checkout has to be at `../js` relative to this repo for the
 aliases to resolve.
 
 ## Setup

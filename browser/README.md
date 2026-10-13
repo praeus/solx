@@ -1,6 +1,6 @@
 # solx-explorer
 
-The solx desktop app: the [solx-web](../solx-web) UI in a Tauri v2 window,
+The solx desktop app: the [solx-web](../web) UI in a Tauri v2 window,
 talking to solx over Tauri IPC (`@solx/tauri` → `solx-tauri-plugin`) rather
 than HTTP. One crate, two builds:
 

@@ -8,10 +8,10 @@
     "noEmit": true,
     "allowImportingTsExtensions": false,
     "paths": {
-      "@solx/http": ["../../solx-js/packages/http/src/index.ts"],
-      "@solx/surface": ["../../solx-js/packages/surface/src/index.ts"],
-      "@solx/tauri": ["../../solx-js/packages/tauri/src/index.ts"],
-      "@solx/widgets/host": ["../../solx-packages/solx-widgets/src/host/index.ts"]
+      "@solx/http": ["../../js/packages/http/src/index.ts"],
+      "@solx/surface": ["../../js/packages/surface/src/index.ts"],
+      "@solx/tauri": ["../../js/packages/tauri/src/index.ts"],
+      "@solx/widgets/host": ["../../js/packages/widgets/src/host/index.ts"]
     }
   },
   "include": ["src/**/*", "vite.config.ts"]

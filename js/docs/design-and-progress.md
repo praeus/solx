@@ -14,7 +14,7 @@ docs / READMEs.
 
 ## 1. Why `solx-js` exists
 
-[`solx-core`](../solx-core) is the Rust library that implements the durable
+[`solx-core`](../core) is the Rust library that implements the durable
 primitives (types, docs, actions, files, config, packages, scripts). It's
 meant to be driven equally well by `solx-cli` (Rust binary) or by a
 TypeScript / Node consumer — a thin web app, a model harness, a notebook,
@@ -615,7 +615,7 @@ faithful persistence check.
 
 - [ARCHITECTURE.md](../ARCHITECTURE.md) — detailed crate-by-crate design
 - [README.md](../README.md) — one-page intro + dev loop
-- [solx-core/design-and-progress.md](../../solx-core/docs/design-and-progress.md) — the upstream Rust design doc this whole project mirrors
+- [solx-core/design-and-progress.md](../../core/docs/design-and-progress.md) — the upstream Rust design doc this whole project mirrors
 - `/memories/repo/solx-js-neon-runtime.md` — Neon + tokio gotchas (the
   runtime setup we use in `async_runtime.rs`)
 - `/memories/repo/solx-browser-tauri-notes.md` — separate repo notes for

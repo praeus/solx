@@ -63,19 +63,19 @@ every time.
 
 ## How a widget package uses this
 
-Import by relative path — `solx-widgets` lives alongside widget packages in
-this same `solx-packages` repo, so there's no aliasing to set up (unlike
-`solx-web`'s consumption of it, which is cross-repo — see below):
+Import by relative path. This package lives in the `solx` repo at
+`js/packages/widgets`; widget packages in the sibling `solx-packages` repo
+reach it through a `solx` checkout next to theirs (`../solx`):
 
 ```ts
-// vite.config.ts
-import { createWidgetConfig } from "../solx-widgets/src/build/widgetViteConfig";
+// vite.config.ts (in solx-packages/my-widget/)
+import { createWidgetConfig } from "../../solx/js/packages/widgets/src/build/widgetViteConfig";
 export default createWidgetConfig({ entry: "src/main.ts", outFile: "my-widget.js" });
 ```
 
 ```ts
 // src/main.ts
-import { defineReactWidget } from "../../solx-widgets/src/wrap/defineReactWidget";
+import { defineReactWidget } from "../../../solx/js/packages/widgets/src/wrap/defineReactWidget";
 import { MyWidget } from "./MyWidget";
 defineReactWidget("my-widget-tag", MyWidget);
 ```
@@ -85,9 +85,9 @@ that upload the built bundle and register the widget action.
 
 ## How solx-web uses this
 
-`solx-web/web/vite.config.ts` and `tsconfig.json` alias `@solx/widgets/host`
-straight to `src/host/mountWidget.ts`, the same way they already alias
-`@solx/http`/`@solx/surface` from the sibling `solx-js` repo.
+`web/web/vite.config.ts` and `tsconfig.json` alias `@solx/widgets/host`
+straight to `src/host/index.ts`, the same way they alias
+`@solx/http`/`@solx/surface` from `js/packages`.
 `ActionRunner.tsx`'s widget panel builds a `WidgetClient` that wraps
 `getConnection().actions.exec` and passes it (along with `files`) into
 `mountWidget`.

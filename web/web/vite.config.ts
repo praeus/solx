@@ -13,17 +13,17 @@ export default defineConfig({
       // npm package to install (bun's `file:`-dependency copy step hits a
       // reproducible EPERM on Windows for this repo layout; aliasing
       // sidesteps it entirely and stays live-editable besides).
-      "@solx/http": fileURLToPath(new URL("../../solx-js/packages/http/src/index.ts", import.meta.url)),
-      "@solx/surface": fileURLToPath(new URL("../../solx-js/packages/surface/src/index.ts", import.meta.url)),
+      "@solx/http": fileURLToPath(new URL("../../js/packages/http/src/index.ts", import.meta.url)),
+      "@solx/surface": fileURLToPath(new URL("../../js/packages/surface/src/index.ts", import.meta.url)),
       // IPC transport for the solx desktop app (solx-explorer); same
       // reasoning as @solx/http. Unused at runtime in a plain browser.
-      "@solx/tauri": fileURLToPath(new URL("../../solx-js/packages/tauri/src/index.ts", import.meta.url)),
-      // @solx/widgets lives in the sibling solx-packages repo, same reason
+      "@solx/tauri": fileURLToPath(new URL("../../js/packages/tauri/src/index.ts", import.meta.url)),
+      // @solx/widgets lives in js/packages/widgets, same reason
       // as the two aliases above -- aliased straight to source rather than
       // installed, since it's consumed live and has no build step of its
       // own to keep in sync.
       "@solx/widgets/host": fileURLToPath(
-        new URL("../../solx-packages/solx-widgets/src/host/index.ts", import.meta.url),
+        new URL("../../js/packages/widgets/src/host/index.ts", import.meta.url),
       ),
     },
   },

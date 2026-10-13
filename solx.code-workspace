@@ -1,0 +1,31 @@
+{
+	"folders": [
+		{
+			"name": "solx",
+			"path": "."
+		},
+		{
+			"name": "core",
+			"path": "core"
+		},
+		{
+			"name": "js",
+			"path": "js"
+		},
+		{
+			"name": "web",
+			"path": "web"
+		},
+		{
+			"name": "browser",
+			"path": "browser"
+		},
+		{
+			"name": "solx-packages",
+			"path": "../solx-packages"
+		}
+	],
+	"settings": {
+		"powershell.cwd": "solx"
+	}
+}

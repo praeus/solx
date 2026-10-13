@@ -16,9 +16,9 @@
     "dist",
     "src"
   ],
-  "//": "@solx/surface is a file: dep, not workspace:*, unlike its siblings — @solx/http is meant to be consumed from outside this Bun workspace too (e.g. solx-web/web via a plain file: dependency, with no vendor-copy step), and workspace:* only resolves inside a workspace that includes this package.",
+  "//": "Consumed from outside this Bun workspace by alias, not as an installed dependency: web/web points vite.config.ts and tsconfig.json paths straight at src/index.ts. @solx/surface is workspace:* like its siblings; a file: dep is copied at install time, so a fresh checkout copies it before surface/dist exists.",
   "dependencies": {
-    "@solx/surface": "file:../surface"
+    "@solx/surface": "workspace:*"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

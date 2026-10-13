@@ -424,7 +424,7 @@ Roughly ordered by ROI:
   banner, etc.
 - `implementation-plan.md` — phased build history; this editor is the
   v0.1 "Actions/Types/Files" extension of that plan.
-- `../solx-core/docs/design-and-progress.md` — canonical solx design
+- `../core/docs/design-and-progress.md` — canonical solx design
   overview; documents/actions/types/files are the core primitives.
 - `web/src/api/api.ts` — `createDocument` / `updateDocument` /
   `fetchDocument` signatures; the wire-level mapping.

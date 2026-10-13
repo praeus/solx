@@ -15,7 +15,7 @@
   //
   // Pre-reqs:
   //   - solx-server binary exists at:
-  //       D:/Projects/solx-core/target/debug/solx-server.exe
+  //       D:/Projects/solx/core/target/debug/solx-server.exe
   //   - server/vendor/solx-win32-x64-msvc/solx.node is the freshly built copy
   //     (run `bun run vendor` after every cargo build of solx-bindings)
   //   - web/dist or web/node_modules exist (run `bun install` in web/)
@@ -31,7 +31,7 @@
     {
       "label": "solx-web: start solx-server",
       "type": "process",
-      "command": "${workspaceFolder}/../solx-core/target/debug/solx-server.exe",
+      "command": "${workspaceFolder}/../core/target/debug/solx-server.exe",
       "args": ["--port", "8766"],
       "isBackground": true,
       "problemMatcher": {

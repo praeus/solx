@@ -273,8 +273,8 @@ from a build script to emit `types.ts`. Out of scope for v1.
 
 ```toml
 [dependencies]
-solx-types    = { path = ".../solx-core/solx-types" }   # or git/registry
-solx-surface  = { path = ".../solx-core/solx-surface" }
+solx-types    = { path = ".../core/solx-types" }   # or git/registry
+solx-surface  = { path = ".../core/solx-surface" }
 neon          = { version = "1", features = ["napi-6"] }
 ```
 
@@ -367,7 +367,7 @@ cleaner teardown if we ever want it).
 
 ### Pulling in `solx-core` — path or git?
 
-For local development: `solx-core = { path = "../solx-core/solx-types" }`
+For local development: `solx-core = { path = "../core/solx-types" }`
 in each binding crate's `Cargo.toml`. This is what the v1 scaffold uses
 — it lets the two repos evolve together without a release dance.
 
@@ -525,7 +525,7 @@ No HTTP, no extra process, no compile step. Single `npm install solx`.
 
 ## 11. References
 
-- [solx-core docs/design-and-progress.md](https://github.com/.../solx-core/blob/main/docs/design-and-progress.md) — the upstream design this SDK implements.
+- [solx-core docs/design-and-progress.md](https://github.com/.../core/blob/main/docs/design-and-progress.md) — the upstream design this SDK implements.
 - `solx-core/solx-surface/src/managers.rs` — the `Solx` aggregate trait
   we mirror as the `createSolx` factory.
 - `solx-core/solx-surface/src/rpc.rs` (in the larger `sol` repo) — wire
