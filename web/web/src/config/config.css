@@ -1,0 +1,192 @@
+/* Settings window (ConfigApp). Builds on App.css's dialog__* / app-banner
+   classes and index.css's tokens. */
+
+.config-app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.config-app--center {
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.config-app__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.config-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 200px;
+  flex-shrink: 0;
+  padding: 12px 8px;
+  background: var(--bg-raised);
+  border-right: 1px solid var(--border);
+}
+
+.config-nav__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.config-nav__item:hover {
+  background: var(--bg-sunken);
+}
+
+.config-nav__item.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.config-nav__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+.config-nav__reload {
+  margin-top: auto;
+  font-size: 12px;
+}
+
+.config-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.config-section__header {
+  padding: 20px 24px 8px;
+}
+
+.config-section__title {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.config-section__body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 24px 24px;
+}
+
+.config-section > .dialog__error {
+  margin: 0 24px 12px;
+}
+
+.config-section__footer {
+  align-items: center;
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.config-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.config-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+
+.config-card__title {
+  font-weight: 500;
+}
+
+.config-mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.config-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.config-tag--muted {
+  background: var(--bg-sunken);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.config-warning {
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 13px;
+}
+
+.config-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.config-icon-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.config-icon-btn:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.config-add-btn {
+  align-self: flex-start;
+  font-size: 13px;
+}
+
+.config-arrow {
+  color: var(--text-faint);
+}
