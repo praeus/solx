@@ -7,7 +7,9 @@ use solx_surface::path::split_ref;
 use solx_surface::query::{ListOptions, Page, PathFacet};
 use solx_surface::wire::ValidateRequest;
 
-use crate::http::{collection_url, delete, entity_url, get_json, get_json_query, post_json, put_json};
+use crate::http::{
+    collection_url, delete, entity_url, get_json, get_json_query, post_json, put_json,
+};
 
 /// HTTP-proxy [`TypeManager`] talking to a `solx-server`.
 pub struct RemoteTypeManager {
@@ -63,7 +65,10 @@ impl TypeManager for RemoteTypeManager {
 
     async fn validate(&self, value: &Value, type_ref: &str) -> Result<()> {
         let url = collection_url(&self.base_url, "validate")?;
-        let req = ValidateRequest { value: value.clone(), type_ref: type_ref.to_string() };
+        let req = ValidateRequest {
+            value: value.clone(),
+            type_ref: type_ref.to_string(),
+        };
         post_json(&self.http, &self.token, url, &req).await
     }
 }

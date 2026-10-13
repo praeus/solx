@@ -26,8 +26,8 @@
 //! but relies on a human calling `oauth-stop`; nothing would do that for an
 //! abandoned generation.
 
-use std::collections::VecDeque;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -272,9 +272,11 @@ fn push_line(state: &Arc<Mutex<StreamState>>, line: &[u8], max_buffer_bytes: usi
     s.buffered_bytes += size;
     while s.buffered_bytes > max_buffer_bytes && s.chunks.len() > 1 {
         if let Some(evicted) = s.chunks.pop_front() {
-            s.buffered_bytes = s
-                .buffered_bytes
-                .saturating_sub(serde_json::to_string(&evicted).map(|s| s.len()).unwrap_or(0));
+            s.buffered_bytes = s.buffered_bytes.saturating_sub(
+                serde_json::to_string(&evicted)
+                    .map(|s| s.len())
+                    .unwrap_or(0),
+            );
             s.base_index += 1;
             s.dropped += 1;
         }
@@ -307,7 +309,9 @@ pub(super) async fn poll(params: &Value) -> Result<Value, String> {
             .ok_or_else(|| format!("no stream registered for stream_id '{stream_id}'"))?;
 
         let result = {
-            let mut s = state.lock().map_err(|e| format!("stream state poisoned: {e}"))?;
+            let mut s = state
+                .lock()
+                .map_err(|e| format!("stream state poisoned: {e}"))?;
             s.last_polled = Instant::now();
             // Running total of chunks evicted over the stream's whole
             // lifetime, matching `ConsoleStore::ReadResult::dropped` —  not

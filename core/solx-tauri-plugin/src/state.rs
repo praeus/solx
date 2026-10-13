@@ -34,13 +34,19 @@ pub struct SolxState {
 
 impl SolxState {
     pub(crate) fn new(app: Option<Arc<App>>, backend: Backend) -> Self {
-        SolxState { app: RwLock::new(app), backend, embedded: RwLock::new(None) }
+        SolxState {
+            app: RwLock::new(app),
+            backend,
+            embedded: RwLock::new(None),
+        }
     }
 
     /// The current `App`, or a `Config` error while a client is disconnected.
     pub fn app(&self) -> Result<Arc<App>> {
         self.app.read().unwrap().clone().ok_or_else(|| {
-            SolxError::Config("not connected to a solx-server — set the server URL and token in Settings".into())
+            SolxError::Config(
+                "not connected to a solx-server — set the server URL and token in Settings".into(),
+            )
         })
     }
 

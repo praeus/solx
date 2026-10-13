@@ -14,12 +14,18 @@ use crate::LocalActionManager;
 
 /// Open a manager over `actions_db`, with its sibling type/doc/file stores
 /// and config all rooted in `dir`.
-pub(crate) async fn open_manager(dir: &Path, actions_db: &Path) -> (Arc<ConfigService>, LocalActionManager) {
+pub(crate) async fn open_manager(
+    dir: &Path,
+    actions_db: &Path,
+) -> (Arc<ConfigService>, LocalActionManager) {
     let cfg = Arc::new(ConfigService::open_in(dir).unwrap());
     let types: Arc<dyn TypeManager> =
         Arc::new(LocalTypeManager::open(&dir.join("types.db")).await.unwrap());
-    let docs: Arc<dyn DocManager> =
-        Arc::new(LocalDocManager::open(&dir.join("docs.db"), types.clone()).await.unwrap());
+    let docs: Arc<dyn DocManager> = Arc::new(
+        LocalDocManager::open(&dir.join("docs.db"), types.clone())
+            .await
+            .unwrap(),
+    );
     let files: Arc<dyn FileStore> = Arc::new(LocalFileStore::new(dir.join("files")));
     let m = LocalActionManager::open(actions_db, cfg.clone(), types, docs, files)
         .await
@@ -34,7 +40,11 @@ pub(crate) async fn setup() -> (tempfile::TempDir, Arc<ConfigService>, LocalActi
 }
 
 /// A manager wired for recursive execution, as `solx-manager` does it.
-pub(crate) async fn setup_wired() -> (tempfile::TempDir, Arc<ConfigService>, Arc<LocalActionManager>) {
+pub(crate) async fn setup_wired() -> (
+    tempfile::TempDir,
+    Arc<ConfigService>,
+    Arc<LocalActionManager>,
+) {
     let (dir, cfg, m) = setup().await;
     let m = Arc::new(m);
     m.set_self_ref(Arc::downgrade(&m));
@@ -48,7 +58,11 @@ pub(crate) async fn setup_wired() -> (tempfile::TempDir, Arc<ConfigService>, Arc
 pub(crate) fn allow_command(cfg: &ConfigService, key: &str, command: &str) {
     cfg.register_command(
         key,
-        solx_config::CommandDef { command: command.into(), description: None, cwd: None },
+        solx_config::CommandDef {
+            command: command.into(),
+            description: None,
+            cwd: None,
+        },
     )
     .unwrap();
 }

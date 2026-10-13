@@ -118,7 +118,10 @@ fn parse_block(stmts: &[String], pos: &mut usize) -> Result<Vec<Statement>> {
                 *pos += 1;
                 let (var, src) = parse_assignment(&raw);
                 if is_value_expr(&src) {
-                    out.push(Statement::Value { var, expr: parse_expr(&src)? });
+                    out.push(Statement::Value {
+                        var,
+                        expr: parse_expr(&src)?,
+                    });
                 } else {
                     out.push(Statement::Pipeline { var, src });
                 }
@@ -145,7 +148,9 @@ fn parse_if(first_cond: Expr, stmts: &[String], pos: &mut usize) -> Result<State
     let mut else_branch = None;
     loop {
         if *pos >= stmts.len() {
-            return Err(SolxError::Invalid("unterminated 'if': missing 'endif'".into()));
+            return Err(SolxError::Invalid(
+                "unterminated 'if': missing 'endif'".into(),
+            ));
         }
         match classify(&stmts[*pos])? {
             Keyword::ElseIf(cond) => {
@@ -412,8 +417,17 @@ mod tests {
         assert_eq!(
             flat(src),
             vec![
-                "if $x == null", "$y = json 1", "elseif $x > 2", "json 2", "else",
-                "for $i in 0..2", "json $i", "endfor", "endif", "wait 1", "json 3",
+                "if $x == null",
+                "$y = json 1",
+                "elseif $x > 2",
+                "json 2",
+                "else",
+                "for $i in 0..2",
+                "json $i",
+                "endfor",
+                "endif",
+                "wait 1",
+                "json 3",
             ]
         );
     }
@@ -438,13 +452,24 @@ mod tests {
     fn then_ends_the_condition() {
         assert_eq!(
             flat("if $x == 1 then json 1; elseif $x == 2 then json 2; else; json 3; endif"),
-            vec!["if $x == 1", "json 1", "elseif $x == 2", "json 2", "else", "json 3", "endif"]
+            vec![
+                "if $x == 1",
+                "json 1",
+                "elseif $x == 2",
+                "json 2",
+                "else",
+                "json 3",
+                "endif"
+            ]
         );
         assert_eq!(
             flat("if $x then\n  json 1;\nendif"),
             vec!["if $x", "json 1", "endif"]
         );
-        assert_eq!(flat("if $x then; json 1; endif"), vec!["if $x", "json 1", "endif"]);
+        assert_eq!(
+            flat("if $x then; json 1; endif"),
+            vec!["if $x", "json 1", "endif"]
+        );
         assert_eq!(
             flat("if $a then if $b then json 1; endif; endif"),
             vec!["if $a", "if $b", "json 1", "endif", "endif"]
@@ -457,7 +482,10 @@ mod tests {
             flat("if $x == \"a then b\"; json 1; endif"),
             vec!["if $x == \"a then b\"", "json 1", "endif"]
         );
-        assert_eq!(flat("if $x.then; json 1; endif"), vec!["if $x.then", "json 1", "endif"]);
+        assert_eq!(
+            flat("if $x.then; json 1; endif"),
+            vec!["if $x.then", "json 1", "endif"]
+        );
         // `then` is only special in an if/elseif header.
         assert_eq!(flat("json then"), vec!["json then"]);
     }
@@ -481,9 +509,18 @@ mod tests {
     #[test]
     fn if_on_line_after_else_is_nested() {
         let stmts = parse("if $x; json 1; else\n  if $y; json 2; endif\nendif");
-        let Statement::If { branches, else_branch } = &stmts[0] else { panic!() };
+        let Statement::If {
+            branches,
+            else_branch,
+        } = &stmts[0]
+        else {
+            panic!()
+        };
         assert_eq!(branches.len(), 1);
-        assert!(matches!(else_branch.as_deref(), Some([Statement::If { .. }])));
+        assert!(matches!(
+            else_branch.as_deref(),
+            Some([Statement::If { .. }])
+        ));
     }
 
     #[test]

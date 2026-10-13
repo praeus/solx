@@ -276,7 +276,11 @@ fn lex(src: &str) -> Result<Vec<Token>> {
                     .parse::<i64>()
                     .ok()
                     .map(serde_json::Number::from)
-                    .or_else(|| num.parse::<f64>().ok().and_then(serde_json::Number::from_f64))
+                    .or_else(|| {
+                        num.parse::<f64>()
+                            .ok()
+                            .and_then(serde_json::Number::from_f64)
+                    })
                     .ok_or_else(|| {
                         SolxError::Invalid(format!("invalid number literal in expression: {num}"))
                     })?;
@@ -320,7 +324,7 @@ fn lex(src: &str) -> Result<Vec<Token>> {
 /// character is kept as-is along with its backslash.
 fn lex_json_escape(chars: &mut Peekable<Chars>, out: &mut String, src: &str) -> Result<()> {
     let bad = || SolxError::Invalid(format!("invalid \\u escape in string literal: {src}"));
-    let hex4 =|chars: &mut Peekable<Chars>| -> Result<u32> {
+    let hex4 = |chars: &mut Peekable<Chars>| -> Result<u32> {
         let digits: String = (0..4).filter_map(|_| chars.next()).collect();
         u32::from_str_radix(&digits, 16).map_err(|_| bad())
     };
@@ -460,7 +464,9 @@ impl Parser {
                 let inner = self.parse_or()?;
                 match self.next() {
                     Some(Token::RParen) => Ok(inner),
-                    _ => Err(SolxError::Invalid("missing closing ')' in expression".into())),
+                    _ => Err(SolxError::Invalid(
+                        "missing closing ')' in expression".into(),
+                    )),
                 }
             }
             Some(Token::Var(name)) => Ok(Expr::Var(name)),
@@ -528,7 +534,10 @@ pub fn eval_expr(expr: &Expr, ctx: &HashMap<String, Value>) -> Result<Value> {
         Expr::Var(name) => Ok(resolve_var(name, ctx)),
         Expr::Template(parts) => Ok(Value::String(render_template(parts, ctx))),
         Expr::Array(items) => Ok(Value::Array(
-            items.iter().map(|e| eval_expr(e, ctx)).collect::<Result<_>>()?,
+            items
+                .iter()
+                .map(|e| eval_expr(e, ctx))
+                .collect::<Result<_>>()?,
         )),
         Expr::Object(fields) => {
             let mut map = serde_json::Map::new();
@@ -650,9 +659,7 @@ fn values_eq(a: &Value, b: &Value) -> bool {
 
 fn as_number(v: &Value) -> Result<f64> {
     v.as_f64().ok_or_else(|| {
-        SolxError::Invalid(format!(
-            "ordering comparison requires a number, got: {v}"
-        ))
+        SolxError::Invalid(format!("ordering comparison requires a number, got: {v}"))
     })
 }
 
@@ -690,7 +697,10 @@ mod tests {
     use super::*;
 
     fn ctx_with(pairs: &[(&str, Value)]) -> HashMap<String, Value> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     fn eval(src: &str, ctx: &HashMap<String, Value>) -> Value {
@@ -718,15 +728,15 @@ mod tests {
     #[test]
     fn compares_triple_quoted_string_with_apostrophe() {
         let ctx = ctx_with(&[("name", Value::String("can't stop".into()))]);
-        assert_eq!(eval(r#"$name == '''can't stop'''"#, &ctx), Value::Bool(true));
+        assert_eq!(
+            eval(r#"$name == '''can't stop'''"#, &ctx),
+            Value::Bool(true)
+        );
     }
 
     #[test]
     fn dotted_var_path() {
-        let ctx = ctx_with(&[(
-            "res",
-            serde_json::json!({"a": {"b": 5}}),
-        )]);
+        let ctx = ctx_with(&[("res", serde_json::json!({"a": {"b": 5}}))]);
         assert_eq!(eval("$res.a.b == 5", &ctx), Value::Bool(true));
     }
 
@@ -812,13 +822,25 @@ mod tests {
         assert_eq!(eval(r#""x${missing}y""#, &ctx), serde_json::json!("xnully"));
         // Bare `$name` is literal even when a variable of that name exists,
         // so pasted JSON (`"$schema"`, `"$ref"`) is never rewritten.
-        assert_eq!(eval(r#""$schema $name""#, &ctx), serde_json::json!("$schema $name"));
-        assert_eq!(eval(r#""${} ${a b} ${.x} ${open""#, &ctx), serde_json::json!("${} ${a b} ${.x} ${open"));
+        assert_eq!(
+            eval(r#""$schema $name""#, &ctx),
+            serde_json::json!("$schema $name")
+        );
+        assert_eq!(
+            eval(r#""${} ${a b} ${.x} ${open""#, &ctx),
+            serde_json::json!("${} ${a b} ${.x} ${open")
+        );
         assert_eq!(eval("'${id}'", &ctx), serde_json::json!("${id}"));
         // `\$` is a literal `$` that never starts a reference.
-        assert_eq!(eval(r#""write \${id} to insert ${id}""#, &ctx), serde_json::json!("write ${id} to insert 42"));
+        assert_eq!(
+            eval(r#""write \${id} to insert ${id}""#, &ctx),
+            serde_json::json!("write ${id} to insert 42")
+        );
         assert_eq!(eval(r#""\$5 \\${id}""#, &ctx), serde_json::json!("$5 \\42"));
-        assert_eq!(eval(r#"{"\${k}": "${name}"}"#, &ctx), serde_json::json!({"${k}": "Ann"}));
+        assert_eq!(
+            eval(r#"{"\${k}": "${name}"}"#, &ctx),
+            serde_json::json!({"${k}": "Ann"})
+        );
         assert_eq!(eval(r#""""#, &ctx), serde_json::json!(""));
         assert_eq!(eval(r#""${id}""#, &ctx), serde_json::json!("42"));
         assert_eq!(eval(r#""${name}" == "Ann""#, &ctx), Value::Bool(true));
@@ -842,14 +864,24 @@ mod tests {
                 "list": [1, "two", 8765, [], {}], "fb": 3
             })
         );
-        assert_eq!(eval(r#"{"${who}": 1}"#, &ctx), serde_json::json!({"Ann": 1}));
+        assert_eq!(
+            eval(r#"{"${who}": 1}"#, &ctx),
+            serde_json::json!({"Ann": 1})
+        );
         assert_eq!(eval("[]", &ctx), serde_json::json!([]));
         assert!(is_truthy(&eval("$page contains \"id\" && [1] != []", &ctx)));
     }
 
     #[test]
     fn malformed_literals_error() {
-        for src in [r#"{a: 1}"#, r#"{"a" 1}"#, r#"{"a": 1"#, "[1 2]", "[1,", r#"{"a": 1,, }"#] {
+        for src in [
+            r#"{a: 1}"#,
+            r#"{"a" 1}"#,
+            r#"{"a": 1"#,
+            "[1 2]",
+            "[1,",
+            r#"{"a": 1,, }"#,
+        ] {
             assert!(parse_expr(src).is_err(), "{src}");
         }
     }

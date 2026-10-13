@@ -71,15 +71,26 @@ struct ConsolePrint {
 
 #[async_trait]
 impl InternalActionHandler for ConsolePrint {
-    async fn call(&self, params: &Value, ctx: &InternalCallCtx) -> std::result::Result<Value, String> {
+    async fn call(
+        &self,
+        params: &Value,
+        ctx: &InternalCallCtx,
+    ) -> std::result::Result<Value, String> {
         let caller = ctx.caller.as_ref().ok_or_else(|| {
             "console-print has no action caller — it can only be called from within \
              an action's own execution"
                 .to_string()
         })?;
 
-        let level = params.get("level").and_then(Value::as_str).unwrap_or("info").to_string();
-        let message = params.get("message").and_then(Value::as_str).map(str::to_string);
+        let level = params
+            .get("level")
+            .and_then(Value::as_str)
+            .unwrap_or("info")
+            .to_string();
+        let message = params
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         let data = params.get("data").cloned().filter(|v| !v.is_null());
 
         let seq = self
@@ -105,7 +116,11 @@ struct ConsoleCopy {
 
 #[async_trait]
 impl InternalActionHandler for ConsoleCopy {
-    async fn call(&self, params: &Value, ctx: &InternalCallCtx) -> std::result::Result<Value, String> {
+    async fn call(
+        &self,
+        params: &Value,
+        ctx: &InternalCallCtx,
+    ) -> std::result::Result<Value, String> {
         let caller = ctx.caller.as_ref().ok_or_else(|| {
             "console-copy has no action caller — it can only be called from within \
              an action's own execution"
@@ -120,7 +135,14 @@ impl InternalActionHandler for ConsoleCopy {
 
         let result = self
             .store
-            .copy(from_action_ref, caller.action_ref(), invocation_id, cursor, limit, label)
+            .copy(
+                from_action_ref,
+                caller.action_ref(),
+                invocation_id,
+                cursor,
+                limit,
+                label,
+            )
             .await
             .map_err(|e| e.to_string())?;
         Ok(copy_result_to_value(result))
@@ -137,11 +159,19 @@ struct ConsoleRead {
 
 #[async_trait]
 impl InternalActionHandler for ConsoleRead {
-    async fn call(&self, params: &Value, _ctx: &InternalCallCtx) -> std::result::Result<Value, String> {
+    async fn call(
+        &self,
+        params: &Value,
+        _ctx: &InternalCallCtx,
+    ) -> std::result::Result<Value, String> {
         let action_ref = require_str(params, "action_ref")?;
         let from_seq = params.get("from_seq").and_then(Value::as_i64);
         let limit = params.get("limit").and_then(Value::as_i64).unwrap_or(200);
-        let result = self.store.read(action_ref, from_seq, limit).await.map_err(|e| e.to_string())?;
+        let result = self
+            .store
+            .read(action_ref, from_seq, limit)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(result_to_value(result))
     }
 }
@@ -152,7 +182,11 @@ struct ConsoleTail {
 
 #[async_trait]
 impl InternalActionHandler for ConsoleTail {
-    async fn call(&self, params: &Value, _ctx: &InternalCallCtx) -> std::result::Result<Value, String> {
+    async fn call(
+        &self,
+        params: &Value,
+        _ctx: &InternalCallCtx,
+    ) -> std::result::Result<Value, String> {
         let action_ref = require_str(params, "action_ref")?;
         let cursor = params.get("cursor").and_then(Value::as_i64);
         let limit = params.get("limit").and_then(Value::as_i64).unwrap_or(200);
@@ -172,10 +206,18 @@ struct ConsoleClear {
 
 #[async_trait]
 impl InternalActionHandler for ConsoleClear {
-    async fn call(&self, params: &Value, _ctx: &InternalCallCtx) -> std::result::Result<Value, String> {
+    async fn call(
+        &self,
+        params: &Value,
+        _ctx: &InternalCallCtx,
+    ) -> std::result::Result<Value, String> {
         let action_ref = require_str(params, "action_ref")?;
         let before_seq = params.get("before_seq").and_then(Value::as_i64);
-        let removed = self.store.clear(action_ref, before_seq).await.map_err(|e| e.to_string())?;
+        let removed = self
+            .store
+            .clear(action_ref, before_seq)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(json!({ "removed": removed }))
     }
 }
@@ -186,10 +228,18 @@ struct ConsoleList {
 
 #[async_trait]
 impl InternalActionHandler for ConsoleList {
-    async fn call(&self, params: &Value, _ctx: &InternalCallCtx) -> std::result::Result<Value, String> {
+    async fn call(
+        &self,
+        params: &Value,
+        _ctx: &InternalCallCtx,
+    ) -> std::result::Result<Value, String> {
         let prefix = params.get("prefix").and_then(Value::as_str);
         let limit = params.get("limit").and_then(Value::as_i64).unwrap_or(100);
-        let consoles = self.store.list(prefix, limit).await.map_err(|e| e.to_string())?;
+        let consoles = self
+            .store
+            .list(prefix, limit)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(json!({
             "consoles": consoles.into_iter().map(|c| json!({
                 "action_ref": c.action_ref,
@@ -211,7 +261,11 @@ struct ActionStart {
 
 #[async_trait]
 impl InternalActionHandler for ActionStart {
-    async fn call(&self, params: &Value, _ctx: &InternalCallCtx) -> std::result::Result<Value, String> {
+    async fn call(
+        &self,
+        params: &Value,
+        _ctx: &InternalCallCtx,
+    ) -> std::result::Result<Value, String> {
         let name = require_str(params, "name")?;
         let path = path_or_root(params);
         let action_params = params.get("params").cloned().unwrap_or_else(|| json!({}));
@@ -228,9 +282,16 @@ struct ActionStop {
 
 #[async_trait]
 impl InternalActionHandler for ActionStop {
-    async fn call(&self, params: &Value, _ctx: &InternalCallCtx) -> std::result::Result<Value, String> {
+    async fn call(
+        &self,
+        params: &Value,
+        _ctx: &InternalCallCtx,
+    ) -> std::result::Result<Value, String> {
         let invocation_id = require_str(params, "invocation_id")?;
-        let force = params.get("force").and_then(Value::as_bool).unwrap_or(false);
+        let force = params
+            .get("force")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let grace_secs = params.get("grace_secs").and_then(Value::as_u64);
         self.executor
             .stop_invocation(invocation_id, force, grace_secs)
@@ -245,7 +306,11 @@ struct ActionPoll {
 
 #[async_trait]
 impl InternalActionHandler for ActionPoll {
-    async fn call(&self, params: &Value, _ctx: &InternalCallCtx) -> std::result::Result<Value, String> {
+    async fn call(
+        &self,
+        params: &Value,
+        _ctx: &InternalCallCtx,
+    ) -> std::result::Result<Value, String> {
         let invocation_id = require_str(params, "invocation_id")?;
         let wait_secs = params.get("wait_secs").and_then(Value::as_u64);
         self.executor
@@ -261,7 +326,11 @@ struct ActionCancelled {
 
 #[async_trait]
 impl InternalActionHandler for ActionCancelled {
-    async fn call(&self, _params: &Value, ctx: &InternalCallCtx) -> std::result::Result<Value, String> {
+    async fn call(
+        &self,
+        _params: &Value,
+        ctx: &InternalCallCtx,
+    ) -> std::result::Result<Value, String> {
         let caller = ctx.caller.as_ref().ok_or_else(|| {
             "action-cancelled has no action caller — it can only be called from within \
              an action's own execution"
@@ -369,17 +438,55 @@ pub fn plugin(
 ) -> InternalActionRegistry {
     let mut registry = InternalActionRegistry::new();
 
-    registry.register(&["console-print"], Arc::new(ConsolePrint { store: console.clone() }));
-    registry.register(&["console-copy"], Arc::new(ConsoleCopy { store: console.clone() }));
-    registry.register(&["console-read"], Arc::new(ConsoleRead { store: console.clone() }));
-    registry.register(&["console-tail"], Arc::new(ConsoleTail { store: console.clone() }));
-    registry.register(&["console-clear"], Arc::new(ConsoleClear { store: console.clone() }));
+    registry.register(
+        &["console-print"],
+        Arc::new(ConsolePrint {
+            store: console.clone(),
+        }),
+    );
+    registry.register(
+        &["console-copy"],
+        Arc::new(ConsoleCopy {
+            store: console.clone(),
+        }),
+    );
+    registry.register(
+        &["console-read"],
+        Arc::new(ConsoleRead {
+            store: console.clone(),
+        }),
+    );
+    registry.register(
+        &["console-tail"],
+        Arc::new(ConsoleTail {
+            store: console.clone(),
+        }),
+    );
+    registry.register(
+        &["console-clear"],
+        Arc::new(ConsoleClear {
+            store: console.clone(),
+        }),
+    );
     registry.register(&["console-list"], Arc::new(ConsoleList { store: console }));
 
-    registry.register(&["action-start"], Arc::new(ActionStart { executor: executor.clone() }));
-    registry.register(&["action-stop"], Arc::new(ActionStop { executor: executor.clone() }));
+    registry.register(
+        &["action-start"],
+        Arc::new(ActionStart {
+            executor: executor.clone(),
+        }),
+    );
+    registry.register(
+        &["action-stop"],
+        Arc::new(ActionStop {
+            executor: executor.clone(),
+        }),
+    );
     registry.register(&["action-poll"], Arc::new(ActionPoll { executor }));
-    registry.register(&["action-cancelled"], Arc::new(ActionCancelled { store: invocations }));
+    registry.register(
+        &["action-cancelled"],
+        Arc::new(ActionCancelled { store: invocations }),
+    );
 
     registry.add_seeds(seed_actions());
     registry

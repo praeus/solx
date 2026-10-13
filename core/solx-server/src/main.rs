@@ -8,7 +8,11 @@ use tracing_subscriber::EnvFilter;
 use solx_server::state::AppState;
 
 #[derive(Parser)]
-#[command(name = "solx-server", about = "HTTP server hosting the local solx managers", version)]
+#[command(
+    name = "solx-server",
+    about = "HTTP server hosting the local solx managers",
+    version
+)]
 struct Cli {
     /// Address to bind on. Defaults to config's `server_host`, else
     /// `127.0.0.1`. Use `0.0.0.0` (or a specific interface IP) to serve
@@ -38,16 +42,27 @@ async fn main() -> anyhow::Result<()> {
 
     // Always local — must never proxy to itself, even if this appdata
     // dir's config happens to contain a stray `server_url`.
-    let app = solx_manager::App::build_local().await.context("build local App")?;
+    let app = solx_manager::App::build_local()
+        .await
+        .context("build local App")?;
 
-    let token = app.config.ensure_server_token().context("ensure server token")?;
+    let token = app
+        .config
+        .ensure_server_token()
+        .context("ensure server token")?;
 
     let snap = app.config.snapshot();
     let addr = solx_server::bind_addr(&snap, cli.host, cli.port)?;
     let host = addr.ip();
 
-    let cors = solx_server::cors_layer(host, snap.server_cors_origins.as_deref().unwrap_or_default());
-    let state = AppState { app, token: Arc::from(token.as_str()) };
+    let cors = solx_server::cors_layer(
+        host,
+        snap.server_cors_origins.as_deref().unwrap_or_default(),
+    );
+    let state = AppState {
+        app,
+        token: Arc::from(token.as_str()),
+    };
     let router = solx_server::build_router_with_cors(state, cors);
 
     let listener = tokio::net::TcpListener::bind(addr)

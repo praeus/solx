@@ -197,7 +197,12 @@ pub struct Page<T> {
 
 impl<T> Page<T> {
     pub fn new(items: Vec<T>, total: usize, limit: usize, offset: usize) -> Self {
-        Page { items, total, limit, offset }
+        Page {
+            items,
+            total,
+            limit,
+            offset,
+        }
     }
 }
 
@@ -286,27 +291,39 @@ mod tests {
 
     #[test]
     fn path_prefix_matches_the_dir_and_its_descendants() {
-        let sql = ListOptions { path_prefix: Some("/blogs".into()), ..opts() }
-            .to_sql(SCHEMA)
-            .unwrap();
+        let sql = ListOptions {
+            path_prefix: Some("/blogs".into()),
+            ..opts()
+        }
+        .to_sql(SCHEMA)
+        .unwrap();
         assert_eq!(sql.where_clause, " WHERE (path=?1 OR path LIKE ?2)");
-        assert_eq!(sql.binds, vec!["/blogs".to_string(), "/blogs/%".to_string()]);
+        assert_eq!(
+            sql.binds,
+            vec!["/blogs".to_string(), "/blogs/%".to_string()]
+        );
     }
 
     #[test]
     fn root_prefix_matches_everything() {
-        let sql = ListOptions { path_prefix: Some("/".into()), ..opts() }
-            .to_sql(SCHEMA)
-            .unwrap();
+        let sql = ListOptions {
+            path_prefix: Some("/".into()),
+            ..opts()
+        }
+        .to_sql(SCHEMA)
+        .unwrap();
         assert_eq!(sql.where_clause, " WHERE path LIKE ?1");
         assert_eq!(sql.binds, vec!["/%".to_string()]);
     }
 
     #[test]
     fn invalid_path_prefix_is_rejected() {
-        assert!(ListOptions { path_prefix: Some("/a/../b".into()), ..opts() }
-            .to_sql(SCHEMA)
-            .is_err());
+        assert!(ListOptions {
+            path_prefix: Some("/a/../b".into()),
+            ..opts()
+        }
+        .to_sql(SCHEMA)
+        .is_err());
     }
 
     #[test]
@@ -394,9 +411,12 @@ mod tests {
 
     #[test]
     fn unknown_sort_key_falls_back_to_the_default() {
-        let sql = ListOptions { sort_by: Some("; DROP TABLE".into()), ..opts() }
-            .to_sql(SCHEMA)
-            .unwrap();
+        let sql = ListOptions {
+            sort_by: Some("; DROP TABLE".into()),
+            ..opts()
+        }
+        .to_sql(SCHEMA)
+        .unwrap();
         assert_eq!(sql.order_clause, " ORDER BY path ASC, name ASC");
     }
 
@@ -417,10 +437,16 @@ mod tests {
 
     #[test]
     fn date_bounds_are_dropped_when_unsupported() {
-        let schema = ListSchema { date_column: None, ..SCHEMA };
-        let sql = ListOptions { date_after: Some("2024-01-01".into()), ..opts() }
-            .to_sql(schema)
-            .unwrap();
+        let schema = ListSchema {
+            date_column: None,
+            ..SCHEMA
+        };
+        let sql = ListOptions {
+            date_after: Some("2024-01-01".into()),
+            ..opts()
+        }
+        .to_sql(schema)
+        .unwrap();
         assert_eq!(sql.where_clause, "");
     }
 

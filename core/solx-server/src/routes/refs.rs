@@ -34,17 +34,32 @@ mod tests {
             split_url_ref("research/ai/note").unwrap(),
             ("/research/ai".to_string(), "note".to_string())
         );
-        assert_eq!(split_url_ref("note").unwrap(), ("/".to_string(), "note".to_string()));
+        assert_eq!(
+            split_url_ref("note").unwrap(),
+            ("/".to_string(), "note".to_string())
+        );
     }
 
     #[test]
     fn rejects_traversal_and_forbidden_characters() {
         // No conformant client can even send these — URL parsers strip dot
         // segments — but the server must not depend on that.
-        assert!(matches!(split_url_ref("a/../b").unwrap_err().0, SolxError::Invalid(_)));
-        assert!(matches!(split_url_ref("a/./b").unwrap_err().0, SolxError::Invalid(_)));
-        assert!(matches!(split_url_ref("a:b").unwrap_err().0, SolxError::Invalid(_)));
-        assert!(matches!(split_url_ref(r"a\b").unwrap_err().0, SolxError::Invalid(_)));
+        assert!(matches!(
+            split_url_ref("a/../b").unwrap_err().0,
+            SolxError::Invalid(_)
+        ));
+        assert!(matches!(
+            split_url_ref("a/./b").unwrap_err().0,
+            SolxError::Invalid(_)
+        ));
+        assert!(matches!(
+            split_url_ref("a:b").unwrap_err().0,
+            SolxError::Invalid(_)
+        ));
+        assert!(matches!(
+            split_url_ref(r"a\b").unwrap_err().0,
+            SolxError::Invalid(_)
+        ));
     }
 
     #[test]

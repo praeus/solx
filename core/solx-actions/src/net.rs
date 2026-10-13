@@ -96,7 +96,9 @@ fn is_allowed(allowlist: &[String], url: &Url) -> bool {
 /// Whether allowlist entry `prefix` admits `url`: same origin, and the
 /// entry's path (if any) a prefix of the URL's. See the module docs.
 fn prefix_admits(prefix: &str, url: &Url) -> bool {
-    let Some(scheme_end) = prefix.find("://") else { return false };
+    let Some(scheme_end) = prefix.find("://") else {
+        return false;
+    };
     let authority_start = scheme_end + "://".len();
     let authority_end = prefix[authority_start..]
         .find(['/', '?', '#'])
@@ -106,7 +108,9 @@ fn prefix_admits(prefix: &str, url: &Url) -> bool {
         Some(origin) => (origin, true),
         None => (origin, false),
     };
-    let Ok(base) = Url::parse(origin) else { return false };
+    let Ok(base) = Url::parse(origin) else {
+        return false;
+    };
     base.scheme() == url.scheme()
         && base.host().is_some()
         && base.host() == url.host()
@@ -160,9 +164,17 @@ mod tests {
     #[test]
     fn non_http_schemes_are_refused_whatever_is_allowed() {
         let (_d, cfg) = cfg_with(&["about:", "file:///", "javascript:"]);
-        for url in ["about:blank", "file:///etc/passwd", "javascript:alert(1)", "data:text/html,x"] {
+        for url in [
+            "about:blank",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,x",
+        ] {
             let err = check_outbound_url(&cfg, url).unwrap_err();
-            assert!(err.to_string().contains("http:// or https://"), "{url}: {err}");
+            assert!(
+                err.to_string().contains("http:// or https://"),
+                "{url}: {err}"
+            );
         }
     }
 
@@ -178,7 +190,10 @@ mod tests {
             // No port in the entry means the default port only.
             "https://api.example.com:8443/",
         ] {
-            assert!(check_outbound_url(&cfg, url).is_err(), "{url} should be refused");
+            assert!(
+                check_outbound_url(&cfg, url).is_err(),
+                "{url} should be refused"
+            );
         }
         for url in [
             "https://api.example.com/v1",
@@ -186,7 +201,10 @@ mod tests {
             "http://127.0.0.1:80/x",
             "http://127.0.0.1/x",
         ] {
-            assert!(check_outbound_url(&cfg, url).is_ok(), "{url} should be allowed");
+            assert!(
+                check_outbound_url(&cfg, url).is_ok(),
+                "{url} should be allowed"
+            );
         }
     }
 
@@ -226,7 +244,9 @@ mod tests {
         // Serves `302 -> <location>` on `/hop`, and `200 landed` otherwise.
         async fn serve(listener: tokio::net::TcpListener, location: String) {
             loop {
-                let Ok((mut sock, _)) = listener.accept().await else { return };
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
                 let location = location.clone();
                 tokio::spawn(async move {
                     let mut buf = [0u8; 2048];
@@ -235,7 +255,8 @@ mod tests {
                     let resp = if req.starts_with("GET /hop") {
                         format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                     } else {
-                        "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nlanded".to_string()
+                        "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nlanded"
+                            .to_string()
                     };
                     let _ = sock.write_all(resp.as_bytes()).await;
                 });
@@ -259,7 +280,11 @@ mod tests {
 
         // Allowed host redirecting off the allowlist: refused.
         let listener_task = tokio::spawn(serve(allowed, outside_url.clone()));
-        let err = client.get(format!("{allowed_base}hop")).send().await.unwrap_err();
+        let err = client
+            .get(format!("{allowed_base}hop"))
+            .send()
+            .await
+            .unwrap_err();
         assert!(err.is_redirect(), "{err}");
         listener_task.abort();
 

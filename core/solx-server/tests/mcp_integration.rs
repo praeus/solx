@@ -23,7 +23,10 @@ async fn spawn_server() -> (tempfile::TempDir, Arc<solx_manager::App>, String, S
     let app = solx_manager::App::build_local_in(dir.path()).await.unwrap();
     let token = app.config.ensure_server_token().unwrap();
 
-    let state = AppState { app: app.clone(), token: Arc::from(token.as_str()) };
+    let state = AppState {
+        app: app.clone(),
+        token: Arc::from(token.as_str()),
+    };
     let router = solx_server::build_router(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -41,7 +44,10 @@ async fn spawn_server() -> (tempfile::TempDir, Arc<solx_manager::App>, String, S
 // can name. `StreamableHttpClientTransport::from_config(..)` builds rmcp's
 // internal client itself — call it inline at each `.serve(..)` call site so
 // type inference resolves it there instead.
-fn mcp_client_config(uri: String, auth_header: Option<String>) -> StreamableHttpClientTransportConfig {
+fn mcp_client_config(
+    uri: String,
+    auth_header: Option<String>,
+) -> StreamableHttpClientTransportConfig {
     let mut config = StreamableHttpClientTransportConfig::with_uri(uri);
     config.auth_header = auth_header;
     config
@@ -51,46 +57,73 @@ fn mcp_client_config(uri: String, auth_header: Option<String>) -> StreamableHttp
 async fn tools_list_and_call_tool_round_trip_over_http() -> anyhow::Result<()> {
     let (_dir, _app, mcp_url, token) = spawn_server().await;
 
-    let client = ().serve(StreamableHttpClientTransport::from_config(mcp_client_config(mcp_url, Some(token)))).await?;
+    let client = ()
+        .serve(StreamableHttpClientTransport::from_config(
+            mcp_client_config(mcp_url, Some(token)),
+        ))
+        .await?;
 
     // Only the router is advertised; actions are found through it (see
     // `solx-mcp/src/server.rs`), then called by their `act__` names.
     let tools = client.list_tools(None).await?;
     let names: Vec<&str> = tools.tools.iter().map(|t| t.name.as_ref()).collect();
-    assert_eq!(names, vec!["explore_tools"], "list_tools should expose only the router meta-tool");
+    assert_eq!(
+        names,
+        vec!["explore_tools"],
+        "list_tools should expose only the router meta-tool"
+    );
 
     let found = client
-        .call_tool(CallToolRequestParams::new("explore_tools").with_arguments(
-            serde_json::json!({"discovery_mode": "list_all", "path_prefix": "/builtin/file"})
-                .as_object()
-                .unwrap()
-                .clone(),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("explore_tools").with_arguments(
+                serde_json::json!({"discovery_mode": "list_all", "path_prefix": "/builtin/file"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
         .await?;
-    let found = found.content[0].as_text().expect("router returns text").text.clone();
+    let found = found.content[0]
+        .as_text()
+        .expect("router returns text")
+        .text
+        .clone();
     let put_name = "act__builtin__file__file-put";
     let get_name = "act__builtin__file__file-get";
     for name in [put_name, get_name] {
-        assert!(found.contains(name), "router should surface {name}, got:\n{found}");
+        assert!(
+            found.contains(name),
+            "router should surface {name}, got:\n{found}"
+        );
     }
 
     let put = client
-        .call_tool(CallToolRequestParams::new(put_name).with_arguments(
-            serde_json::json!({"rel_path": "notes/a.txt", "content": "hello over mcp http"})
-                .as_object()
-                .unwrap()
-                .clone(),
-        ))
+        .call_tool(
+            CallToolRequestParams::new(put_name).with_arguments(
+                serde_json::json!({"rel_path": "notes/a.txt", "content": "hello over mcp http"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
         .await?;
     assert!(put.content[0].as_text().is_some());
 
     let got = client
-        .call_tool(CallToolRequestParams::new(get_name).with_arguments(
-            serde_json::json!({"rel_path": "notes/a.txt"}).as_object().unwrap().clone(),
-        ))
+        .call_tool(
+            CallToolRequestParams::new(get_name).with_arguments(
+                serde_json::json!({"rel_path": "notes/a.txt"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
         .await?;
     let structured = got.structured_content.expect("structured_content present");
-    assert_eq!(structured.get("content").and_then(|v| v.as_str()), Some("hello over mcp http"));
+    assert_eq!(
+        structured.get("content").and_then(|v| v.as_str()),
+        Some("hello over mcp http")
+    );
 
     client.cancel().await?;
     Ok(())
@@ -100,8 +133,15 @@ async fn tools_list_and_call_tool_round_trip_over_http() -> anyhow::Result<()> {
 async fn mcp_route_rejects_missing_or_wrong_token() -> anyhow::Result<()> {
     let (_dir, _app, mcp_url, _token) = spawn_server().await;
 
-    let err = ().serve(StreamableHttpClientTransport::from_config(mcp_client_config(mcp_url, Some("wrong-token".to_string())))).await;
-    assert!(err.is_err(), "expected initialize over /mcp to fail with a wrong bearer token");
+    let err = ()
+        .serve(StreamableHttpClientTransport::from_config(
+            mcp_client_config(mcp_url, Some("wrong-token".to_string())),
+        ))
+        .await;
+    assert!(
+        err.is_err(),
+        "expected initialize over /mcp to fail with a wrong bearer token"
+    );
     Ok(())
 }
 
@@ -113,7 +153,11 @@ struct ProgressCapture {
 }
 
 impl ClientHandler for ProgressCapture {
-    async fn on_progress(&self, params: ProgressNotificationParam, _context: NotificationContext<RoleClient>) {
+    async fn on_progress(
+        &self,
+        params: ProgressNotificationParam,
+        _context: NotificationContext<RoleClient>,
+    ) {
         self.received.lock().unwrap().push(params);
     }
 }
@@ -124,7 +168,8 @@ impl ClientHandler for ProgressCapture {
 /// Streamable HTTP transport carries server-initiated notifications, not
 /// just request/response.
 #[tokio::test]
-async fn call_tool_streams_console_entries_as_progress_notifications_over_http() -> anyhow::Result<()> {
+async fn call_tool_streams_console_entries_as_progress_notifications_over_http(
+) -> anyhow::Result<()> {
     let (_dir, app, mcp_url, token) = spawn_server().await;
 
     app.files()
@@ -146,18 +191,30 @@ async fn call_tool_streams_console_entries_as_progress_notifications_over_http()
         .await?;
 
     let capture = ProgressCapture::default();
-    let client = capture.clone().serve(StreamableHttpClientTransport::from_config(mcp_client_config(mcp_url, Some(token)))).await?;
+    let client = capture
+        .clone()
+        .serve(StreamableHttpClientTransport::from_config(
+            mcp_client_config(mcp_url, Some(token)),
+        ))
+        .await?;
 
-    let result = client.call_tool(CallToolRequestParams::new("act__tools__count")).await?;
+    let result = client
+        .call_tool(CallToolRequestParams::new("act__tools__count"))
+        .await?;
     assert!(!result.is_error.unwrap_or(false), "{result:?}");
 
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     let received = capture.received.lock().unwrap().clone();
-    assert!(!received.is_empty(), "expected at least one progress notification over HTTP/SSE");
+    assert!(
+        !received.is_empty(),
+        "expected at least one progress notification over HTTP/SSE"
+    );
     let messages: Vec<String> = received.iter().filter_map(|p| p.message.clone()).collect();
     assert!(
-        messages.iter().any(|m| m.contains("exec /builtin/action/entity-list-actions")),
+        messages
+            .iter()
+            .any(|m| m.contains("exec /builtin/action/entity-list-actions")),
         "expected a progress message naming the first stage, got: {messages:?}"
     );
 

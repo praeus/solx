@@ -102,7 +102,10 @@ fn parse_grants(meta: &serde_json::Value, file: &str) -> Result<Grants> {
             .map_err(|e| SolxError::Invalid(format!("{file} '{key}': {e}")))?,
         None => Vec::new(),
     };
-    Ok(Grants { commands, base_urls })
+    Ok(Grants {
+        commands,
+        base_urls,
+    })
 }
 
 /// Locate the package manifest, preferring [`MANIFEST`]. Returns the path,
@@ -163,11 +166,17 @@ pub async fn install_package(
     // verify.solx) can exec the package's own Command/Webhook actions.
     // Collisions with a *different* installed package are warned about,
     // not fatal — see the module doc.
-    let others: Vec<InstalledPackage> =
-        config.list_packages().into_iter().filter(|p| p.name != name).collect();
+    let others: Vec<InstalledPackage> = config
+        .list_packages()
+        .into_iter()
+        .filter(|p| p.name != name)
+        .collect();
 
     for (key, def) in &grants.commands {
-        if let Some(owner) = others.iter().find(|p| p.granted_commands.iter().any(|k| k == key)) {
+        if let Some(owner) = others
+            .iter()
+            .find(|p| p.granted_commands.iter().any(|k| k == key))
+        {
             let msg = format!(
                 "command key '{key}' was granted by package '{}'; now overwritten by '{name}'",
                 owner.name
@@ -178,7 +187,9 @@ pub async fn install_package(
         config.register_command(key, resolve_cwd(def, &pkg_dir))?;
     }
     for prefix in &grants.base_urls {
-        if let Some(owner) = others.iter().find(|p| p.granted_base_urls.iter().any(|p| p == prefix))
+        if let Some(owner) = others
+            .iter()
+            .find(|p| p.granted_base_urls.iter().any(|p| p == prefix))
         {
             let msg = format!(
                 "base URL prefix '{prefix}' was granted by package '{}'; now also granted to '{name}'",
@@ -204,7 +215,10 @@ pub async fn install_package(
         granted_base_urls: grants.base_urls,
     };
     config.register_package(pkg.clone())?;
-    Ok(InstallOutcome { package: pkg, warnings })
+    Ok(InstallOutcome {
+        package: pkg,
+        warnings,
+    })
 }
 
 /// Uninstall `name`: run `uninstall.solx` (if present), revoke whatever this
@@ -231,15 +245,24 @@ pub async fn uninstall_package(
 
     // Revoke after the script ran (symmetric with granting before install.solx
     // runs), and only what no other installed package still claims.
-    let others: Vec<InstalledPackage> =
-        config.list_packages().into_iter().filter(|p| p.name != name).collect();
+    let others: Vec<InstalledPackage> = config
+        .list_packages()
+        .into_iter()
+        .filter(|p| p.name != name)
+        .collect();
     for key in &pkg.granted_commands {
-        if !others.iter().any(|p| p.granted_commands.iter().any(|k| k == key)) {
+        if !others
+            .iter()
+            .any(|p| p.granted_commands.iter().any(|k| k == key))
+        {
             config.deregister_command(key)?;
         }
     }
     for prefix in &pkg.granted_base_urls {
-        if !others.iter().any(|p| p.granted_base_urls.iter().any(|p| p == prefix)) {
+        if !others
+            .iter()
+            .any(|p| p.granted_base_urls.iter().any(|p| p == prefix))
+        {
             config.remove_allowed_base_url(prefix)?;
         }
     }
@@ -288,8 +311,7 @@ fn resolve_cwd(def: &CommandDef, pkg_dir: &Path) -> CommandDef {
 /// Run a package script with the process CWD temporarily set to the package
 /// directory (so relative paths in the script resolve), restoring it after.
 async fn run_in_dir(runner: &dyn CommandRunner, dir: &Path, script: &str) -> Result<()> {
-    let original =
-        std::env::current_dir().map_err(|e| SolxError::Io(format!("read cwd: {e}")))?;
+    let original = std::env::current_dir().map_err(|e| SolxError::Io(format!("read cwd: {e}")))?;
     std::env::set_current_dir(dir)
         .map_err(|e| SolxError::Io(format!("set cwd to {}: {e}", dir.display())))?;
     let result = execute_script(runner, script).await;

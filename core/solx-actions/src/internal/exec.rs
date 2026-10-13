@@ -98,7 +98,9 @@ mod tests {
     #[tokio::test]
     async fn runs_a_json_only_script_and_returns_its_result() {
         let (_d, local) = test_local().await;
-        let v = exec(&json!({"script": "json 5"}), &local, None).await.unwrap();
+        let v = exec(&json!({"script": "json 5"}), &local, None)
+            .await
+            .unwrap();
         assert_eq!(v, Value::from(5));
     }
 

@@ -112,7 +112,11 @@ pub async fn run_command(
     let command = def.command.as_str();
 
     let params_json = serde_json::to_string(params)?;
-    let (shell, flag) = if cfg!(windows) { ("cmd", "/C") } else { ("sh", "-c") };
+    let (shell, flag) = if cfg!(windows) {
+        ("cmd", "/C")
+    } else {
+        ("sh", "-c")
+    };
 
     // `SOL_LOG_DIR` is the env var `solx-omniparse`/`solx-media` already read
     // for their own file logging (a convention carried over from old sol) —
@@ -131,7 +135,8 @@ pub async fn run_command(
     // bound (not `_`) for the rest of this function — dropping it
     // deregisters the token, and we want that to happen automatically on
     // every exit path below, not just the success path.
-    let registration = console_loopback::register(console, invocations, action_ref, invocation_id).await;
+    let registration =
+        console_loopback::register(console, invocations, action_ref, invocation_id).await;
 
     let mut cmd = tokio::process::Command::new(shell);
     cmd.arg(flag)
@@ -168,7 +173,9 @@ pub async fn run_command(
         if let Some(env) = cfg.get("env").and_then(|v| v.as_object()) {
             for (k, v) in env {
                 match v.as_str() {
-                    Some(s) => { cmd.env(k, s); }
+                    Some(s) => {
+                        cmd.env(k, s);
+                    }
                     None => tracing::warn!(
                         action_ref = %action_ref,
                         env_key = %k,
@@ -178,9 +185,9 @@ pub async fn run_command(
             }
         }
     }
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| SolxError::Exec(format!("spawn command key '{fn_name}' ('{command}'): {e}")))?;
+    let mut child = cmd.spawn().map_err(|e| {
+        SolxError::Exec(format!("spawn command key '{fn_name}' ('{command}'): {e}"))
+    })?;
 
     // Feed stdin *concurrently* with draining stdout/stderr. Writing it all
     // up front deadlocks whenever the payload exceeds the pipe buffer
@@ -268,10 +275,18 @@ pub async fn run_webhook(
 
     let method = webhook_method_label(action_config);
     let started = std::time::Instant::now();
-    log_webhook(&console, action_ref, &invocation_id, "info", format!("{method} {url}")).await;
+    log_webhook(
+        &console,
+        action_ref,
+        &invocation_id,
+        "info",
+        format!("{method} {url}"),
+    )
+    .await;
 
     let redirects = crate::net::redirect_policy(cfg);
-    let result = run_webhook_inner(actions, path, name, url, action_config, params, redirects).await;
+    let result =
+        run_webhook_inner(actions, path, name, url, action_config, params, redirects).await;
 
     let elapsed_ms = started.elapsed().as_millis();
     match &result {
@@ -327,7 +342,11 @@ fn is_get_method(action_config: &Option<Value>) -> bool {
 /// returned params so they aren't also sent in the JSON/multipart body.
 /// No URL-encoding is applied — the action author chose the template and
 /// owns how it's encoded (path vs. query vs. header differ).
-fn substitute_path_params(url: &str, action_config: &Option<Value>, params: &Value) -> (String, Value) {
+fn substitute_path_params(
+    url: &str,
+    action_config: &Option<Value>,
+    params: &Value,
+) -> (String, Value) {
     let Some(path_params) = action_config
         .as_ref()
         .and_then(|c| c.get("path_params"))
@@ -349,9 +368,23 @@ fn substitute_path_params(url: &str, action_config: &Option<Value>, params: &Val
     (substituted, remaining)
 }
 
-async fn log_webhook(console: &ConsoleStore, action_ref: &str, invocation_id: &str, level: &str, message: String) {
+async fn log_webhook(
+    console: &ConsoleStore,
+    action_ref: &str,
+    invocation_id: &str,
+    level: &str,
+    message: String,
+) {
     let _ = console
-        .print(action_ref, invocation_id, None, level, "webhook", Some(message), None)
+        .print(
+            action_ref,
+            invocation_id,
+            None,
+            level,
+            "webhook",
+            Some(message),
+            None,
+        )
         .await;
 }
 
@@ -466,7 +499,9 @@ fn build_multipart_related_body(params: &Value) -> Result<MultipartRelatedBody> 
     let media_b64 = params
         .get("media_base64")
         .and_then(Value::as_str)
-        .ok_or_else(|| SolxError::Exec("body_mode 'multipart_related' requires params.media_base64".into()))?;
+        .ok_or_else(|| {
+            SolxError::Exec("body_mode 'multipart_related' requires params.media_base64".into())
+        })?;
     let media_bytes = base64::engine::general_purpose::STANDARD
         .decode(media_b64)
         .map_err(|e| SolxError::Exec(format!("invalid media_base64: {e}")))?;
@@ -517,10 +552,9 @@ async fn dispatch_oauth_token_exchange(
     auth: &Value,
     params: &Value,
 ) -> Result<Value> {
-    let code = params
-        .get("code")
-        .and_then(Value::as_str)
-        .ok_or_else(|| SolxError::Exec("oauth_authorization_code requires 'code' in params".into()))?;
+    let code = params.get("code").and_then(Value::as_str).ok_or_else(|| {
+        SolxError::Exec("oauth_authorization_code requires 'code' in params".into())
+    })?;
     let client_id = crate::auth::secret_field(
         action_config,
         auth,
@@ -599,14 +633,21 @@ mod tests {
             &params,
         );
 
-        assert_eq!(url, "https://www.googleapis.com/drive/v3/files/abc123/permissions");
+        assert_eq!(
+            url,
+            "https://www.googleapis.com/drive/v3/files/abc123/permissions"
+        );
         assert_eq!(remaining, json!({ "type": "anyone", "role": "reader" }));
     }
 
     #[test]
     fn substitute_path_params_is_a_no_op_without_config() {
         let params = json!({ "documentId": "xyz" });
-        let (url, remaining) = substitute_path_params("https://docs.googleapis.com/v1/documents/{documentId}", &None, &params);
+        let (url, remaining) = substitute_path_params(
+            "https://docs.googleapis.com/v1/documents/{documentId}",
+            &None,
+            &params,
+        );
         assert_eq!(url, "https://docs.googleapis.com/v1/documents/{documentId}");
         assert_eq!(remaining, params);
     }
@@ -633,13 +674,18 @@ mod tests {
         });
 
         let body = build_multipart_related_body(&params).expect("body should build");
-        assert!(body.content_type.starts_with("multipart/related; boundary=solxmpb"));
+        assert!(body
+            .content_type
+            .starts_with("multipart/related; boundary=solxmpb"));
 
         let text = String::from_utf8_lossy(&body.bytes);
         assert!(text.contains("Content-Type: application/json; charset=UTF-8"));
         assert!(text.contains("\"name\":\"icon.png\""));
         assert!(text.contains("Content-Type: image/png"));
-        assert!(body.bytes.windows(b"fake-png-bytes".len()).any(|w| w == b"fake-png-bytes"));
+        assert!(body
+            .bytes
+            .windows(b"fake-png-bytes".len())
+            .any(|w| w == b"fake-png-bytes"));
         assert!(text.trim_end().ends_with("--"));
     }
 
@@ -655,7 +701,9 @@ mod tests {
     /// Binds a one-shot HTTP server that captures the request body of the
     /// single request it receives and replies with `response_body`. Returns
     /// the base URL plus a `JoinHandle` yielding the captured body.
-    async fn start_token_endpoint(response_body: String) -> (String, tokio::task::JoinHandle<String>) {
+    async fn start_token_endpoint(
+        response_body: String,
+    ) -> (String, tokio::task::JoinHandle<String>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -685,7 +733,8 @@ mod tests {
     /// "Missing parameter: redirect_uri".
     #[tokio::test]
     async fn oauth_authorization_code_prefers_params_redirect_uri_over_auth() {
-        let (url, handle) = start_token_endpoint(r#"{"access_token":"at","expires_in":3600}"#.into()).await;
+        let (url, handle) =
+            start_token_endpoint(r#"{"access_token":"at","expires_in":3600}"#.into()).await;
         let client = reqwest::Client::new();
         let action_config = json!({});
         let auth = json!({
@@ -698,7 +747,8 @@ mod tests {
             "redirect_uri": "http://127.0.0.1:8765/callback"
         });
 
-        let result = dispatch_oauth_token_exchange(&client, &url, &action_config, &auth, &params).await;
+        let result =
+            dispatch_oauth_token_exchange(&client, &url, &action_config, &auth, &params).await;
         assert!(result.is_ok(), "{:?}", result.err());
 
         let body = handle.await.unwrap();
@@ -717,7 +767,8 @@ mod tests {
     /// callback) is still honored.
     #[tokio::test]
     async fn oauth_authorization_code_falls_back_to_auth_redirect_uri() {
-        let (url, handle) = start_token_endpoint(r#"{"access_token":"at","expires_in":3600}"#.into()).await;
+        let (url, handle) =
+            start_token_endpoint(r#"{"access_token":"at","expires_in":3600}"#.into()).await;
         let client = reqwest::Client::new();
         let action_config = json!({});
         let auth = json!({
@@ -727,7 +778,8 @@ mod tests {
         });
         let params = json!({ "code": "the-code" });
 
-        let result = dispatch_oauth_token_exchange(&client, &url, &action_config, &auth, &params).await;
+        let result =
+            dispatch_oauth_token_exchange(&client, &url, &action_config, &auth, &params).await;
         assert!(result.is_ok(), "{:?}", result.err());
 
         let body = handle.await.unwrap();
@@ -747,7 +799,12 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ActionManager for StubActionManager {
-        async fn save(&self, _path: &str, _name: &str, _input: solx_surface::entities::ActionInput) -> Result<solx_surface::entities::Action> {
+        async fn save(
+            &self,
+            _path: &str,
+            _name: &str,
+            _input: solx_surface::entities::ActionInput,
+        ) -> Result<solx_surface::entities::Action> {
             panic!("stub ActionManager::save should not be called by these tests")
         }
         async fn get(&self, _path: &str, _name: &str) -> Result<solx_surface::entities::Action> {
@@ -756,16 +813,30 @@ mod tests {
         async fn delete(&self, _path: &str, _name: &str) -> Result<()> {
             panic!("stub ActionManager::delete should not be called by these tests")
         }
-        async fn list(&self, _opts: solx_surface::query::ListOptions) -> Result<solx_surface::query::Page<solx_surface::entities::Action>> {
+        async fn list(
+            &self,
+            _opts: solx_surface::query::ListOptions,
+        ) -> Result<solx_surface::query::Page<solx_surface::entities::Action>> {
             panic!("stub ActionManager::list should not be called by these tests")
         }
-        async fn paths(&self, _opts: solx_surface::query::ListOptions) -> Result<solx_surface::query::Page<solx_surface::query::PathFacet>> {
+        async fn paths(
+            &self,
+            _opts: solx_surface::query::ListOptions,
+        ) -> Result<solx_surface::query::Page<solx_surface::query::PathFacet>> {
             panic!("stub ActionManager::paths should not be called by these tests")
         }
-        async fn search(&self, _query: solx_surface::query::ActionSearchQuery) -> Result<solx_surface::query::Page<solx_surface::entities::Action>> {
+        async fn search(
+            &self,
+            _query: solx_surface::query::ActionSearchQuery,
+        ) -> Result<solx_surface::query::Page<solx_surface::entities::Action>> {
             panic!("stub ActionManager::search should not be called by these tests")
         }
-        async fn exec(&self, _path: &str, _name: &str, _params: Value) -> Result<solx_surface::entities::ActionExecResult> {
+        async fn exec(
+            &self,
+            _path: &str,
+            _name: &str,
+            _params: Value,
+        ) -> Result<solx_surface::entities::ActionExecResult> {
             panic!("stub ActionManager::exec should not be called by these tests")
         }
     }
@@ -804,13 +875,31 @@ mod tests {
         let action_config = Some(json!({ "method": "GET" }));
         let params = json!({ "q": "trashed=false", "pageSize": 5 });
 
-        let result = run_webhook_inner(&StubActionManager, "/p", "n", &url, &action_config, &params, reqwest::redirect::Policy::default()).await;
+        let result = run_webhook_inner(
+            &StubActionManager,
+            "/p",
+            "n",
+            &url,
+            &action_config,
+            &params,
+            reqwest::redirect::Policy::default(),
+        )
+        .await;
         assert!(result.is_ok(), "{:?}", result.err());
 
         let (request_line, body) = handle.await.unwrap();
-        assert!(request_line.starts_with("GET "), "expected a GET request, got: {request_line}");
-        assert!(request_line.contains("q=trashed%3Dfalse"), "expected q in the query string, got: {request_line}");
-        assert!(request_line.contains("pageSize=5"), "expected pageSize in the query string, got: {request_line}");
+        assert!(
+            request_line.starts_with("GET "),
+            "expected a GET request, got: {request_line}"
+        );
+        assert!(
+            request_line.contains("q=trashed%3Dfalse"),
+            "expected q in the query string, got: {request_line}"
+        );
+        assert!(
+            request_line.contains("pageSize=5"),
+            "expected pageSize in the query string, got: {request_line}"
+        );
         assert!(body.is_empty(), "GET must not send a body, got: {body:?}");
     }
 
@@ -821,13 +910,31 @@ mod tests {
         let (url, handle) = start_capturing_endpoint().await;
         let params = json!({ "name": "a-file" });
 
-        let result = run_webhook_inner(&StubActionManager, "/p", "n", &url, &None, &params, reqwest::redirect::Policy::default()).await;
+        let result = run_webhook_inner(
+            &StubActionManager,
+            "/p",
+            "n",
+            &url,
+            &None,
+            &params,
+            reqwest::redirect::Policy::default(),
+        )
+        .await;
         assert!(result.is_ok(), "{:?}", result.err());
 
         let (request_line, body) = handle.await.unwrap();
-        assert!(request_line.starts_with("POST "), "expected a POST request, got: {request_line}");
-        assert!(!request_line.contains('?'), "POST must not carry a query string, got: {request_line}");
-        assert!(body.contains("\"name\":\"a-file\""), "expected the JSON body, got: {body}");
+        assert!(
+            request_line.starts_with("POST "),
+            "expected a POST request, got: {request_line}"
+        );
+        assert!(
+            !request_line.contains('?'),
+            "POST must not carry a query string, got: {request_line}"
+        );
+        assert!(
+            body.contains("\"name\":\"a-file\""),
+            "expected the JSON body, got: {body}"
+        );
     }
 
     /// Binds a listener that accepts the connection and then never writes a
@@ -859,10 +966,22 @@ mod tests {
         let action_config = Some(json!({ "timeout_secs": 1 }));
 
         let started = std::time::Instant::now();
-        let result = run_webhook_inner(&StubActionManager, "/p", "n", &url, &action_config, &json!({}), reqwest::redirect::Policy::default()).await;
+        let result = run_webhook_inner(
+            &StubActionManager,
+            "/p",
+            "n",
+            &url,
+            &action_config,
+            &json!({}),
+            reqwest::redirect::Policy::default(),
+        )
+        .await;
         let elapsed = started.elapsed();
 
-        assert!(result.is_err(), "a stalled connection must error, not succeed");
+        assert!(
+            result.is_err(),
+            "a stalled connection must error, not succeed"
+        );
         assert!(
             elapsed < Duration::from_secs(5),
             "expected the 1s action_config.timeout_secs to cut this off promptly, took {elapsed:?}"

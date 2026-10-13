@@ -70,14 +70,18 @@ impl LocalActionManager {
         // Captured before the row exists, so a poller can jump straight to
         // this run's own console output — see `ConsoleStore::current_next_seq`.
         let console_seq_start = self.console.current_next_seq(&action_ref).await?;
-        self.invocations.create(&invocation_id, &action_ref, console_seq_start).await?;
+        self.invocations
+            .create(&invocation_id, &action_ref, console_seq_start)
+            .await?;
 
         let manager = self.self_arc()?;
         let path = path.to_string();
         let name = name.to_string();
         let task_id = invocation_id.clone();
         let handle = tokio::spawn(async move {
-            let outcome = manager.exec_as_with(&path, &name, params, None, Some(&task_id)).await;
+            let outcome = manager
+                .exec_as_with(&path, &name, params, None, Some(&task_id))
+                .await;
             let (status, result, error) = match outcome {
                 Ok(r) if r.success => (invocations::status::OK, Some(r.result), None),
                 Ok(r) => (invocations::status::FAILED, Some(r.result), r.message),
@@ -85,7 +89,10 @@ impl LocalActionManager {
             };
             // Best-effort: if this write fails there is nothing left to do
             // with the error — the task is finished either way.
-            let _ = manager.invocations.finish(&task_id, status, result, error).await;
+            let _ = manager
+                .invocations
+                .finish(&task_id, status, result, error)
+                .await;
             if let Ok(mut running) = manager.running.lock() {
                 running.remove(&task_id);
             }
@@ -132,7 +139,12 @@ impl LocalActionManager {
     ///
     /// Cooperative exit is the reliable path; force is the backstop, not a
     /// guarantee.
-    pub async fn stop_invocation(&self, invocation_id: &str, force: bool, grace_secs: Option<u64>) -> Result<Value> {
+    pub async fn stop_invocation(
+        &self,
+        invocation_id: &str,
+        force: bool,
+        grace_secs: Option<u64>,
+    ) -> Result<Value> {
         let Some(inv) = self.invocations.request_cancel(invocation_id).await? else {
             return Err(SolxError::NotFound(format!("invocation {invocation_id}")));
         };
@@ -150,7 +162,8 @@ impl LocalActionManager {
             return Ok(inv.to_json());
         }
 
-        let grace = Duration::from_secs(grace_secs.unwrap_or_else(|| self.config.stop_grace_secs()));
+        let grace =
+            Duration::from_secs(grace_secs.unwrap_or_else(|| self.config.stop_grace_secs()));
         let manager = self.self_arc()?;
         let id = invocation_id.to_string();
         tokio::spawn(async move {
@@ -177,7 +190,11 @@ impl LocalActionManager {
     /// Current status of a detached invocation, optionally long-polling
     /// (reusing `console`'s 250ms/60s long-poll cadence) until it goes
     /// terminal.
-    pub async fn poll_invocation(&self, invocation_id: &str, wait_secs: Option<u64>) -> Result<Value> {
+    pub async fn poll_invocation(
+        &self,
+        invocation_id: &str,
+        wait_secs: Option<u64>,
+    ) -> Result<Value> {
         let wait = wait_secs.map(|s| Duration::from_secs(s.min(console::MAX_TAIL_WAIT_SECS)));
         let deadline = wait.map(|w| tokio::time::Instant::now() + w);
 
@@ -268,7 +285,10 @@ mod tests {
             .start_invocation("/t", "quick", serde_json::json!({}))
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("requires a long-lived host"), "{err}");
+        assert!(
+            err.to_string().contains("requires a long-lived host"),
+            "{err}"
+        );
     }
 
     #[tokio::test]
@@ -278,7 +298,10 @@ mod tests {
         let (_d, cfg, m) = setup_wired().await;
         save_command(&m, &cfg, "quick", quick_ok()).await;
 
-        let started = m.start_invocation("/t", "quick", serde_json::json!({})).await.unwrap();
+        let started = m
+            .start_invocation("/t", "quick", serde_json::json!({}))
+            .await
+            .unwrap();
         let id = started["invocation_id"].as_str().unwrap().to_string();
         assert_eq!(started["action_ref"], "/t/quick");
         assert_eq!(started["console_seq_start"], 1);
@@ -304,7 +327,10 @@ mod tests {
     #[serial]
     async fn stop_invocation_of_an_unknown_id_is_not_found() {
         let (_d, _cfg, m) = setup_wired().await;
-        let err = m.stop_invocation("no-such-id", false, None).await.unwrap_err();
+        let err = m
+            .stop_invocation("no-such-id", false, None)
+            .await
+            .unwrap_err();
         assert!(matches!(err, SolxError::NotFound(_)), "{err:?}");
     }
 
@@ -315,7 +341,10 @@ mod tests {
         let (_d, cfg, m) = setup_wired().await;
         save_command(&m, &cfg, "hangs", hangs_forever()).await;
 
-        let started = m.start_invocation("/t", "hangs", serde_json::json!({})).await.unwrap();
+        let started = m
+            .start_invocation("/t", "hangs", serde_json::json!({}))
+            .await
+            .unwrap();
         let id = started["invocation_id"].as_str().unwrap().to_string();
 
         // Give the child a moment to actually be spawned before stopping it.
@@ -325,7 +354,11 @@ mod tests {
         let stopped = m.stop_invocation(&id, true, None).await.unwrap();
         assert_eq!(stopped["status"], invocations::status::CANCELLED);
         // Force must not wait out the (effectively infinite) hang.
-        assert!(start.elapsed() < Duration::from_secs(10), "{:?}", start.elapsed());
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            start.elapsed()
+        );
 
         let polled = m.poll_invocation(&id, None).await.unwrap();
         assert_eq!(polled["status"], invocations::status::CANCELLED);
@@ -340,7 +373,10 @@ mod tests {
         let (_d, cfg, m) = setup_wired().await;
         save_command(&m, &cfg, "hangs", hangs_forever()).await;
 
-        let started = m.start_invocation("/t", "hangs", serde_json::json!({})).await.unwrap();
+        let started = m
+            .start_invocation("/t", "hangs", serde_json::json!({}))
+            .await
+            .unwrap();
         let id = started["invocation_id"].as_str().unwrap().to_string();
         tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -348,7 +384,11 @@ mod tests {
         // cooperative call itself does not block for it.
         let start = std::time::Instant::now();
         let stopped = m.stop_invocation(&id, false, Some(30)).await.unwrap();
-        assert!(start.elapsed() < Duration::from_secs(5), "{:?}", start.elapsed());
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            start.elapsed()
+        );
         assert_eq!(stopped["status"], invocations::status::CANCELLING);
         assert!(m.invocations().is_cancelled(&id).await.unwrap());
 

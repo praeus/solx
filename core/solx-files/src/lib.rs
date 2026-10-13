@@ -207,7 +207,9 @@ fn cleanup_empty_parents(root: &Path, mut dir: Option<&Path>) {
         if d == root || !d.starts_with(root) {
             break;
         }
-        let empty = fs::read_dir(d).map(|mut it| it.next().is_none()).unwrap_or(false);
+        let empty = fs::read_dir(d)
+            .map(|mut it| it.next().is_none())
+            .unwrap_or(false);
         if !empty {
             break;
         }

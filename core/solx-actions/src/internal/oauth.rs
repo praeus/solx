@@ -85,12 +85,21 @@ fn registry() -> &'static Mutex<HashMap<String, LoopbackHandle>> {
 /// to shut down. Synchronous (no `.await`) so it can run from `Drop`.
 /// Returns the server task's handle if a listener was registered.
 fn stop_listener(state_value: &str) -> Option<JoinHandle<()>> {
-    let handle = registry().lock().ok().and_then(|mut reg| reg.remove(state_value));
+    let handle = registry()
+        .lock()
+        .ok()
+        .and_then(|mut reg| reg.remove(state_value));
     inbox_drop(state_value);
-    handle.map(|LoopbackHandle { shutdown_tx, server_handle, .. }| {
-        let _ = shutdown_tx.send(());
-        server_handle
-    })
+    handle.map(
+        |LoopbackHandle {
+             shutdown_tx,
+             server_handle,
+             ..
+         }| {
+            let _ = shutdown_tx.send(());
+            server_handle
+        },
+    )
 }
 
 /// Stop every listener of ours bound to `port` and wait (bounded) for
@@ -106,7 +115,10 @@ async fn reclaim_port(port: u16) {
         })
         .unwrap_or_default();
     for state_value in stale {
-        tracing::info!(port, "oauth-start: superseding abandoned loopback listener on port {port}");
+        tracing::info!(
+            port,
+            "oauth-start: superseding abandoned loopback listener on port {port}"
+        );
         if let Some(server) = stop_listener(&state_value) {
             let _ = tokio::time::timeout(RECLAIM_WAIT, server).await;
         }
@@ -297,12 +309,17 @@ pub(super) async fn oauth_await(params: &Value, ctx: &InternalCtx) -> Result<Val
 
     // From here on, every way out of this function except our own timeout
     // releases the listener — including this future being dropped.
-    let mut guard = StopOnDrop { state_value: state_value.clone(), armed: true };
+    let mut guard = StopOnDrop {
+        state_value: state_value.clone(),
+        armed: true,
+    };
 
     // `None` means "no deadline": a sleep long enough never to fire in
     // practice (the listener's own max lifetime ends the wait long before).
     const NO_DEADLINE_SECS: u64 = 365 * 24 * 60 * 60;
-    let deadline = tokio::time::sleep(Duration::from_secs(timeout_secs.unwrap_or(NO_DEADLINE_SECS)));
+    let deadline = tokio::time::sleep(Duration::from_secs(
+        timeout_secs.unwrap_or(NO_DEADLINE_SECS),
+    ));
     tokio::pin!(deadline);
     let mut cancel_poll = tokio::time::interval(CANCEL_POLL_INTERVAL);
     cancel_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

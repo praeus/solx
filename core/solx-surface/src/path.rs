@@ -19,7 +19,10 @@ fn validate_segment(seg: &str) -> Result<()> {
     if seg == "." || seg == ".." {
         return Err(SolxError::Invalid(format!("reserved segment '{seg}'")));
     }
-    if let Some(bad) = seg.chars().find(|c| FORBIDDEN.contains(c) || c.is_control()) {
+    if let Some(bad) = seg
+        .chars()
+        .find(|c| FORBIDDEN.contains(c) || c.is_control())
+    {
         return Err(SolxError::Invalid(format!(
             "segment '{seg}' contains forbidden character {bad:?}"
         )));
@@ -112,13 +115,19 @@ mod tests {
 
     #[test]
     fn full_ref_and_split_roundtrip() {
-        assert_eq!(full_ref("/research/ai", "note").unwrap(), "/research/ai/note");
+        assert_eq!(
+            full_ref("/research/ai", "note").unwrap(),
+            "/research/ai/note"
+        );
         assert_eq!(full_ref("/", "note").unwrap(), "/note");
         assert_eq!(
             split_ref("/research/ai/note").unwrap(),
             ("/research/ai".to_string(), "note".to_string())
         );
-        assert_eq!(split_ref("/note").unwrap(), ("/".to_string(), "note".to_string()));
+        assert_eq!(
+            split_ref("/note").unwrap(),
+            ("/".to_string(), "note".to_string())
+        );
         assert!(split_ref("/").is_err());
     }
 }

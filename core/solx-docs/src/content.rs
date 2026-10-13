@@ -29,7 +29,10 @@ pub fn walk_contents(
         content_text_parts: Vec::new(),
     };
 
-    let props = match type_schema.pointer("/properties").and_then(|v| v.as_object()) {
+    let props = match type_schema
+        .pointer("/properties")
+        .and_then(|v| v.as_object())
+    {
         Some(m) => m,
         None => {
             // No schema properties — collect all leaf strings for full-text.
@@ -127,19 +130,16 @@ fn doc_ref_target_string(field_value: &serde_json::Value) -> Option<String> {
 }
 
 fn schema_ref_target(schema: &serde_json::Value) -> Option<&str> {
-    schema
-        .get("$ref")
-        .and_then(|v| v.as_str())
-        .or_else(|| {
-            schema
-                .get("allOf")
-                .and_then(|v| v.as_array())
-                .and_then(|items| {
-                    items
-                        .iter()
-                        .find_map(|item| item.get("$ref").and_then(|v| v.as_str()))
-                })
-        })
+    schema.get("$ref").and_then(|v| v.as_str()).or_else(|| {
+        schema
+            .get("allOf")
+            .and_then(|v| v.as_array())
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find_map(|item| item.get("$ref").and_then(|v| v.as_str()))
+            })
+    })
 }
 
 fn is_rich_text_field_schema(schema: &serde_json::Value) -> bool {

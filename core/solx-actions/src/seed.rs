@@ -83,7 +83,13 @@ const fn a_at(
     description: &'static str,
     param_type: Option<&'static str>,
 ) -> SeedAction {
-    SeedAction { path, name, fn_name, description, param_type }
+    SeedAction {
+        path,
+        name,
+        fn_name,
+        description,
+        param_type,
+    }
 }
 
 /// The built-in action catalogue.
@@ -210,7 +216,10 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(page.total > 0, "expected seeded built-in actions under /builtin");
+        assert!(
+            page.total > 0,
+            "expected seeded built-in actions under /builtin"
+        );
         let doc_get = page
             .items
             .iter()
@@ -222,7 +231,9 @@ mod tests {
         // Every built-in is native dispatch now — there's no more WASM
         // built-in catalogue (see solx-actions/src/seed.rs's module docs).
         assert!(
-            page.items.iter().all(|a| a.action_type == Some(ActionType::Internal)),
+            page.items
+                .iter()
+                .all(|a| a.action_type == Some(ActionType::Internal)),
             "every seeded /builtin action should be action_type=internal"
         );
     }

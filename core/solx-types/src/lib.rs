@@ -156,7 +156,10 @@ impl TypeManager for LocalTypeManager {
         let groups = if !input.groups.is_empty() {
             input.groups
         } else {
-            existing.as_ref().map(|e| e.groups.clone()).unwrap_or_default()
+            existing
+                .as_ref()
+                .map(|e| e.groups.clone())
+                .unwrap_or_default()
         };
         let groups_json = serde_json::to_string(&groups)?;
         let now = Utc::now().to_rfc3339();
@@ -233,8 +236,7 @@ impl TypeManager for LocalTypeManager {
         let offset = opts.offset_or_zero();
 
         let q = opts.to_sql(LIST_SCHEMA)?;
-        let binds: Vec<libsql::Value> =
-            q.binds.iter().cloned().map(libsql::Value::from).collect();
+        let binds: Vec<libsql::Value> = q.binds.iter().cloned().map(libsql::Value::from).collect();
 
         let total = {
             let sql = format!("SELECT COUNT(*) FROM types{}", q.where_clause);
@@ -261,8 +263,7 @@ impl TypeManager for LocalTypeManager {
         let offset = opts.offset_or_zero();
 
         let q = opts.to_sql(LIST_SCHEMA)?;
-        let binds: Vec<libsql::Value> =
-            q.binds.iter().cloned().map(libsql::Value::from).collect();
+        let binds: Vec<libsql::Value> = q.binds.iter().cloned().map(libsql::Value::from).collect();
         let dir = match opts.sort_order {
             SortOrder::Desc => "DESC",
             SortOrder::Asc => "ASC",
@@ -287,7 +288,10 @@ impl TypeManager for LocalTypeManager {
         while let Some(row) = rows.next().await.map_err(map_db)? {
             let path: String = row.get(0).map_err(map_db)?;
             let count: i64 = row.get(1).map_err(map_db)?;
-            items.push(PathFacet { path, count: count as usize });
+            items.push(PathFacet {
+                path,
+                count: count as usize,
+            });
         }
         Ok(Page::new(items, total, limit, offset))
     }
@@ -431,7 +435,10 @@ mod tests {
             for t in page.items {
                 // The (path,name) tiebreak keeps LIMIT/OFFSET stable even
                 // though every seeded row shares an updated_at.
-                assert!(seen.insert(full_ref(&t.path, &t.name).unwrap()), "row repeated across pages");
+                assert!(
+                    seen.insert(full_ref(&t.path, &t.name).unwrap()),
+                    "row repeated across pages"
+                );
             }
         }
         assert_eq!(seen.len(), 20);
@@ -464,7 +471,9 @@ mod tests {
         };
         m.save("/types/custom", "Alpha", input()).await.unwrap();
         m.save("/types/custom", "Beta", input()).await.unwrap();
-        m.save("/types/custom/nested", "Gamma", input()).await.unwrap();
+        m.save("/types/custom/nested", "Gamma", input())
+            .await
+            .unwrap();
 
         let page = m
             .paths(ListOptions {
@@ -477,9 +486,17 @@ mod tests {
         // Two distinct paths under the prefix -- /types/custom (2 rows) and
         // /types/custom/nested (1 row) -- so `total` counts paths, not rows.
         assert_eq!(page.total, 2);
-        let facet = page.items.iter().find(|f| f.path == "/types/custom").unwrap();
+        let facet = page
+            .items
+            .iter()
+            .find(|f| f.path == "/types/custom")
+            .unwrap();
         assert_eq!(facet.count, 2);
-        let nested = page.items.iter().find(|f| f.path == "/types/custom/nested").unwrap();
+        let nested = page
+            .items
+            .iter()
+            .find(|f| f.path == "/types/custom/nested")
+            .unwrap();
         assert_eq!(nested.count, 1);
     }
 }

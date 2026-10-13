@@ -107,7 +107,10 @@ impl Harness {
 
         // Publish the component where `load_wasm_bytes` looks for it.
         files
-            .put(&solx_files::shared_action_file_path("guest.wasm"), guest.to_vec())
+            .put(
+                &solx_files::shared_action_file_path("guest.wasm"),
+                guest.to_vec(),
+            )
             .await
             .unwrap();
 
@@ -233,11 +236,16 @@ async fn concurrent_chains_all_complete() {
 async fn a_spinning_guest_is_preempted_and_then_timed_out() {
     let guest = guest_or_skip!();
     let h = Arc::new(Harness::new(guest).await);
-    h.save_variant("spinner", json!({ "timeout_secs": 2 })).await;
+    h.save_variant("spinner", json!({ "timeout_secs": 2 }))
+        .await;
 
     let spinner = {
         let h = h.clone();
-        tokio::spawn(async move { h.actions.exec("/t", "spinner", json!({ "mode": "spin" })).await })
+        tokio::spawn(async move {
+            h.actions
+                .exec("/t", "spinner", json!({ "mode": "spin" }))
+                .await
+        })
     };
 
     // While the guest spins, the executor must still be responsive. Without
@@ -248,7 +256,10 @@ async fn a_spinning_guest_is_preempted_and_then_timed_out() {
         tokio::time::sleep(Duration::from_millis(50)).await;
         ticks += 1;
     }
-    assert!(ticks >= 5, "runtime was starved by the spinning guest (ticks={ticks})");
+    assert!(
+        ticks >= 5,
+        "runtime was starved by the spinning guest (ticks={ticks})"
+    );
 
     let res = tokio::time::timeout(Duration::from_secs(30), spinner)
         .await
@@ -257,7 +268,10 @@ async fn a_spinning_guest_is_preempted_and_then_timed_out() {
         .unwrap();
     assert!(!res.success, "a spinning guest should not report success");
     assert!(
-        res.message.as_deref().unwrap_or_default().contains("timed out"),
+        res.message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("timed out"),
         "expected a timeout message, got {:?}",
         res.message
     );

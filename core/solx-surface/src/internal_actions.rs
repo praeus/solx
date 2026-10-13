@@ -212,7 +212,11 @@ pub struct InternalCallCtx {
 /// injection) — `params`/`ctx` carry only what's genuinely per-call.
 #[async_trait]
 pub trait InternalActionHandler: Send + Sync {
-    async fn call(&self, params: &Value, ctx: &InternalCallCtx) -> std::result::Result<Value, String>;
+    async fn call(
+        &self,
+        params: &Value,
+        ctx: &InternalCallCtx,
+    ) -> std::result::Result<Value, String>;
 }
 
 /// The seam `action-start`/`action-stop`/`action-poll` need into
@@ -225,7 +229,12 @@ pub trait InternalActionHandler: Send + Sync {
 #[async_trait]
 pub trait ActionExecutor: Send + Sync {
     async fn start_invocation(&self, path: &str, name: &str, params: Value) -> Result<Value>;
-    async fn stop_invocation(&self, invocation_id: &str, force: bool, grace_secs: Option<u64>) -> Result<Value>;
+    async fn stop_invocation(
+        &self,
+        invocation_id: &str,
+        force: bool,
+        grace_secs: Option<u64>,
+    ) -> Result<Value>;
     async fn poll_invocation(&self, invocation_id: &str, wait_secs: Option<u64>) -> Result<Value>;
 }
 

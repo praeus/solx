@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  core:
+    name: core (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          # solx-actions' wasm_nesting tests build a guest for this target
+          # and skip (rather than fail) when it is missing.
+          targets: wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      # TODO: drop continue-on-error once the existing fmt/clippy findings are fixed.
+      - name: fmt
+        run: cargo fmt --all --check
+        continue-on-error: true
+      - name: clippy
+        run: cargo clippy --workspace --all-targets
+        continue-on-error: true
+      - name: test
+        run: cargo test --workspace
+
+  web:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: web/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run build

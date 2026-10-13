@@ -66,7 +66,10 @@ pub(super) async fn http_request(params: &Value, cfg: &ConfigService) -> Result<
         .redirect(crate::net::redirect_policy(cfg))
         .build()
         .map_err(|e| format!("failed to build http client: {e}"))?
-        .request(method.parse().map_err(|e| format!("invalid method: {e}"))?, url);
+        .request(
+            method.parse().map_err(|e| format!("invalid method: {e}"))?,
+            url,
+        );
 
     if let Some(headers_val) = params.get("headers") {
         let headers_obj = headers_val

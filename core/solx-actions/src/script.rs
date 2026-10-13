@@ -114,9 +114,9 @@ fn parse_exec_stage(tokens: &[String]) -> Result<(String, Option<String>)> {
         match tokens[i].as_str() {
             "--json" | "-j" => {
                 i += 1;
-                let value = tokens.get(i).ok_or_else(|| {
-                    SolxError::Invalid("exec: '--json' requires a value".into())
-                })?;
+                let value = tokens
+                    .get(i)
+                    .ok_or_else(|| SolxError::Invalid("exec: '--json' requires a value".into()))?;
                 json = Some(value.clone());
             }
             other => {
@@ -222,7 +222,10 @@ mod tests {
 
     #[test]
     fn stage_summary_covers_json_and_invalid_and_empty() {
-        assert_eq!(stage_summary(&["json".to_string(), "5".to_string()]), "json");
+        assert_eq!(
+            stage_summary(&["json".to_string(), "5".to_string()]),
+            "json"
+        );
         assert_eq!(stage_summary(&["exec".to_string()]), "exec (invalid)");
         assert_eq!(stage_summary(&["bogus".to_string()]), "bogus");
         assert_eq!(stage_summary(&[]), "(empty stage)");
@@ -231,12 +234,7 @@ mod tests {
     #[test]
     fn run_json_requires_exactly_one_arg() {
         assert!(run_json(&["json".to_string()]).is_err());
-        assert!(run_json(&[
-            "json".to_string(),
-            "1".to_string(),
-            "2".to_string()
-        ])
-        .is_err());
+        assert!(run_json(&["json".to_string(), "1".to_string(), "2".to_string()]).is_err());
     }
 
     #[test]
@@ -251,8 +249,7 @@ mod tests {
         // pass an object literal): the tokenizer strips '''...''' raw, with
         // no escaping needed, so an embedded apostrophe reaches serde_json
         // intact.
-        let tokens =
-            solx_scripts::tokenize_stage(r#"json '''{"text":"can't stop"}'''"#);
+        let tokens = solx_scripts::tokenize_stage(r#"json '''{"text":"can't stop"}'''"#);
         assert_eq!(
             run_json(&tokens).unwrap(),
             serde_json::json!({"text": "can't stop"})
@@ -261,9 +258,8 @@ mod tests {
 
     #[test]
     fn triple_quoted_json_with_apostrophe_reaches_exec_stage() {
-        let tokens = solx_scripts::tokenize_stage(
-            r#"exec /pkg/name --json '''{"text":"can't stop"}'''"#,
-        );
+        let tokens =
+            solx_scripts::tokenize_stage(r#"exec /pkg/name --json '''{"text":"can't stop"}'''"#);
         let (reference, json) = parse_exec_stage(&tokens).unwrap();
         assert_eq!(reference, "/pkg/name");
         assert_eq!(json.as_deref(), Some(r#"{"text":"can't stop"}"#));

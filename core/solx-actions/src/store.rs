@@ -119,7 +119,10 @@ impl ActionManager for LocalActionManager {
                 if !input.$field.is_empty() {
                     input.$field.clone()
                 } else {
-                    existing.as_ref().map(|a| a.$field.clone()).unwrap_or_default()
+                    existing
+                        .as_ref()
+                        .map(|a| a.$field.clone())
+                        .unwrap_or_default()
                 }
             };
         }
@@ -140,8 +143,11 @@ impl ActionManager for LocalActionManager {
         // "***" over a real key — see `crate::mask`.
         let action_config = match input.action_config {
             Some(incoming) => Some(
-                mask::unmask_merge(incoming, existing.as_ref().and_then(|a| a.action_config.as_ref()))
-                    .map_err(SolxError::Invalid)?,
+                mask::unmask_merge(
+                    incoming,
+                    existing.as_ref().and_then(|a| a.action_config.as_ref()),
+                )
+                .map_err(SolxError::Invalid)?,
             ),
             None => existing.as_ref().and_then(|a| a.action_config.clone()),
         };
@@ -238,8 +244,7 @@ impl ActionManager for LocalActionManager {
         let offset = opts.offset_or_zero();
 
         let q = opts.to_sql(LIST_SCHEMA)?;
-        let binds: Vec<libsql::Value> =
-            q.binds.iter().cloned().map(libsql::Value::from).collect();
+        let binds: Vec<libsql::Value> = q.binds.iter().cloned().map(libsql::Value::from).collect();
 
         let total = {
             let sql = format!("SELECT COUNT(*) FROM actions{}", q.where_clause);
@@ -271,8 +276,7 @@ impl ActionManager for LocalActionManager {
         let offset = opts.offset_or_zero();
 
         let q = opts.to_sql(LIST_SCHEMA)?;
-        let binds: Vec<libsql::Value> =
-            q.binds.iter().cloned().map(libsql::Value::from).collect();
+        let binds: Vec<libsql::Value> = q.binds.iter().cloned().map(libsql::Value::from).collect();
         let dir = match opts.sort_order {
             SortOrder::Desc => "DESC",
             SortOrder::Asc => "ASC",
@@ -297,7 +301,10 @@ impl ActionManager for LocalActionManager {
         while let Some(row) = rows.next().await.map_err(map_db)? {
             let path: String = row.get(0).map_err(map_db)?;
             let count: i64 = row.get(1).map_err(map_db)?;
-            items.push(PathFacet { path, count: count as usize });
+            items.push(PathFacet {
+                path,
+                count: count as usize,
+            });
         }
         Ok(Page::new(items, total, limit, offset))
     }
@@ -350,7 +357,11 @@ impl ActionManager for LocalActionManager {
                     " ORDER BY f.rank".to_string(),
                 )
             }
-            None => (String::new(), q.where_clause.clone(), q.order_clause.clone()),
+            None => (
+                String::new(),
+                q.where_clause.clone(),
+                q.order_clause.clone(),
+            ),
         };
 
         let total = {
@@ -487,7 +498,10 @@ mod tests {
         // /tools has two actions, /other has one -- `paths` groups by path,
         // so `total` counts distinct paths, not rows.
         let page = m
-            .paths(ListOptions { path_prefix: Some("/tools".into()), ..Default::default() })
+            .paths(ListOptions {
+                path_prefix: Some("/tools".into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert_eq!(page.total, 1);
@@ -504,8 +518,8 @@ mod tests {
             .search(ActionSearchQuery {
                 q: Some("Beta".into()),
                 list: ListOptions::default(),
-                        exclude_hidden: false,
-                    })
+                exclude_hidden: false,
+            })
             .await
             .unwrap();
         assert_eq!(page.total, 1);
@@ -600,8 +614,8 @@ mod tests {
             .search(ActionSearchQuery {
                 q: Some("livejournal".into()),
                 list: ListOptions::default(),
-                        exclude_hidden: false,
-                    })
+                exclude_hidden: false,
+            })
             .await
             .unwrap();
         assert_eq!(page.total, 1);
@@ -658,7 +672,10 @@ mod tests {
         let (_d, _c, m) = setup().await;
         seed_list_fixtures(&m).await;
         let names = |p: Page<Action>| -> Vec<String> {
-            p.items.into_iter().map(|a| format!("{}/{}", a.path, a.name)).collect()
+            p.items
+                .into_iter()
+                .map(|a| format!("{}/{}", a.path, a.name))
+                .collect()
         };
         let asc = names(
             m.list(ListOptions {
@@ -697,15 +714,28 @@ mod tests {
 
         // Outbound reads are redacted...
         let got = m.get("/tools", "s").await.unwrap();
-        assert_eq!(got.action_config.as_ref().unwrap()["secrets"]["API_TOKEN"], serde_json::json!("***"));
+        assert_eq!(
+            got.action_config.as_ref().unwrap()["secrets"]["API_TOKEN"],
+            serde_json::json!("***")
+        );
         // ...but non-secret fields survive, so the config stays inspectable.
-        assert_eq!(got.action_config.as_ref().unwrap()["cwd"], serde_json::json!("/work"));
+        assert_eq!(
+            got.action_config.as_ref().unwrap()["cwd"],
+            serde_json::json!("/work")
+        );
 
-        let page = m.list(ListOptions { path_prefix: Some("/tools".into()), ..Default::default() })
+        let page = m
+            .list(ListOptions {
+                path_prefix: Some("/tools".into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         let listed = page.items.iter().find(|a| a.name == "s").unwrap();
-        assert_eq!(listed.action_config.as_ref().unwrap()["secrets"]["API_TOKEN"], serde_json::json!("***"));
+        assert_eq!(
+            listed.action_config.as_ref().unwrap()["secrets"]["API_TOKEN"],
+            serde_json::json!("***")
+        );
 
         // Execution reads through `get_unmasked`, so it still sees the key.
         let raw = m.get_unmasked("/tools", "s").await.unwrap();
@@ -720,40 +750,61 @@ mod tests {
         // Opt-in: the CLI and admin routes inventory the registry and must
         // keep seeing everything.
         let (_d, _c, m) = setup().await;
-        m.save("/tools", "visible", ActionInput::default()).await.unwrap();
+        m.save("/tools", "visible", ActionInput::default())
+            .await
+            .unwrap();
         m.save(
             "/tools",
             "secret",
-            ActionInput { capabilities: vec![solx_config::CAP_HIDDEN.into()], ..Default::default() },
+            ActionInput {
+                capabilities: vec![solx_config::CAP_HIDDEN.into()],
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
 
         let page = m
             .search(ActionSearchQuery {
-                list: ListOptions { path_prefix: Some("/tools".into()), ..Default::default() },
+                list: ListOptions {
+                    path_prefix: Some("/tools".into()),
+                    ..Default::default()
+                },
                 ..Default::default()
             })
             .await
             .unwrap();
-        assert_eq!(page.items.len(), 2, "{:?}", page.items.iter().map(|a| &a.name).collect::<Vec<_>>());
+        assert_eq!(
+            page.items.len(),
+            2,
+            "{:?}",
+            page.items.iter().map(|a| &a.name).collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]
     async fn search_with_exclude_hidden_drops_tagged_actions() {
         let (_d, _c, m) = setup().await;
-        m.save("/tools", "visible", ActionInput::default()).await.unwrap();
+        m.save("/tools", "visible", ActionInput::default())
+            .await
+            .unwrap();
         m.save(
             "/tools",
             "secret",
-            ActionInput { capabilities: vec![solx_config::CAP_HIDDEN.into()], ..Default::default() },
+            ActionInput {
+                capabilities: vec![solx_config::CAP_HIDDEN.into()],
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
 
         let page = m
             .search(ActionSearchQuery {
-                list: ListOptions { path_prefix: Some("/tools".into()), ..Default::default() },
+                list: ListOptions {
+                    path_prefix: Some("/tools".into()),
+                    ..Default::default()
+                },
                 exclude_hidden: true,
                 ..Default::default()
             })
@@ -773,7 +824,10 @@ mod tests {
         m.save(
             "/tools",
             "b",
-            ActionInput { capabilities: vec![solx_config::CAP_HIDDEN.into()], ..Default::default() },
+            ActionInput {
+                capabilities: vec![solx_config::CAP_HIDDEN.into()],
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -822,8 +876,14 @@ mod tests {
             ..Default::default()
         };
         let saved = m.save("/tools", "flagged", input).await.unwrap();
-        assert!(saved.capabilities.iter().any(|c| c == solx_config::CAP_HIDDEN));
-        assert!(saved.capabilities.iter().any(|c| c == solx_config::CAP_DESTRUCTIVE));
+        assert!(saved
+            .capabilities
+            .iter()
+            .any(|c| c == solx_config::CAP_HIDDEN));
+        assert!(saved
+            .capabilities
+            .iter()
+            .any(|c| c == solx_config::CAP_DESTRUCTIVE));
     }
 
     /// Regression test: `save`'s own response must be redacted too, not just
@@ -841,8 +901,14 @@ mod tests {
             ..Default::default()
         };
         let saved = m.save("/tools", "s", input).await.unwrap();
-        assert_eq!(saved.action_config.as_ref().unwrap()["secrets"]["API_TOKEN"], serde_json::json!("***"));
-        assert_eq!(saved.action_config.as_ref().unwrap()["cwd"], serde_json::json!("/work"));
+        assert_eq!(
+            saved.action_config.as_ref().unwrap()["secrets"]["API_TOKEN"],
+            serde_json::json!("***")
+        );
+        assert_eq!(
+            saved.action_config.as_ref().unwrap()["cwd"],
+            serde_json::json!("/work")
+        );
     }
 
     /// The round trip that would otherwise destroy a key: fetch (redacted),
@@ -869,12 +935,20 @@ mod tests {
         m.save(
             "/tools",
             "s",
-            ActionInput { action_config: Some(fetched), ..Default::default() },
+            ActionInput {
+                action_config: Some(fetched),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
 
-        let raw = m.get_unmasked("/tools", "s").await.unwrap().action_config.unwrap();
+        let raw = m
+            .get_unmasked("/tools", "s")
+            .await
+            .unwrap()
+            .action_config
+            .unwrap();
         assert_eq!(raw["secrets"]["API_TOKEN"], serde_json::json!(real_key));
         assert_eq!(raw["cwd"], serde_json::json!("/elsewhere"));
     }
@@ -894,7 +968,10 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("no stored value to restore"), "{err}");
+        assert!(
+            err.to_string().contains("no stored value to restore"),
+            "{err}"
+        );
     }
 
     #[tokio::test]

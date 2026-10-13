@@ -17,15 +17,25 @@ use super::require_str;
 pub(super) async fn file_put(params: &Value, files: &Arc<dyn FileStore>) -> Result<Value, String> {
     let rel_path = require_str(params, "rel_path")?;
     let content = require_str(params, "content")?;
-    let encoding = params.get("encoding").and_then(Value::as_str).unwrap_or("utf8");
+    let encoding = params
+        .get("encoding")
+        .and_then(Value::as_str)
+        .unwrap_or("utf8");
     let bytes = match encoding {
         "utf8" => content.as_bytes().to_vec(),
         "base64" => base64::engine::general_purpose::STANDARD
             .decode(content)
             .map_err(|e| format!("invalid base64 content: {e}"))?,
-        other => return Err(format!("unknown encoding '{other}'; expected \"utf8\" or \"base64\"")),
+        other => {
+            return Err(format!(
+                "unknown encoding '{other}'; expected \"utf8\" or \"base64\""
+            ))
+        }
     };
-    let stored = files.put(rel_path, bytes).await.map_err(|e| e.to_string())?;
+    let stored = files
+        .put(rel_path, bytes)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(json!({ "rel_path": stored }))
 }
 
@@ -42,7 +52,10 @@ pub(super) async fn file_get(params: &Value, files: &Arc<dyn FileStore>) -> Resu
     Ok(json!({ "rel_path": rel_path, "encoding": encoding, "content": content }))
 }
 
-pub(super) async fn file_delete(params: &Value, files: &Arc<dyn FileStore>) -> Result<Value, String> {
+pub(super) async fn file_delete(
+    params: &Value,
+    files: &Arc<dyn FileStore>,
+) -> Result<Value, String> {
     let rel_path = require_str(params, "rel_path")?;
     files.delete(rel_path).await.map_err(|e| e.to_string())?;
     Ok(json!({ "deleted": true }))
@@ -72,10 +85,16 @@ pub(super) async fn dir_copy(params: &Value, files: &Arc<dyn FileStore>) -> Resu
     let entries = files.list(source).await.map_err(|e| e.to_string())?;
     let mut copied = Vec::with_capacity(entries.len());
     for entry in &entries {
-        let rel = entry.strip_prefix(source_prefix).unwrap_or(entry).trim_start_matches('/');
+        let rel = entry
+            .strip_prefix(source_prefix)
+            .unwrap_or(entry)
+            .trim_start_matches('/');
         let dest_entry = format!("{dest_prefix}/{rel}");
         let bytes = files.get(entry).await.map_err(|e| e.to_string())?;
-        files.put(&dest_entry, bytes).await.map_err(|e| e.to_string())?;
+        files
+            .put(&dest_entry, bytes)
+            .await
+            .map_err(|e| e.to_string())?;
         copied.push(dest_entry);
     }
     Ok(json!({ "copied": copied }))
@@ -87,7 +106,10 @@ pub(super) async fn dir_copy(params: &Value, files: &Arc<dyn FileStore>) -> Resu
 // needs a `list` + per-entry `delete`. This mirrors the structure of
 // `dir-copy` exactly, just inverted, so the two stay symmetric.
 
-pub(super) async fn dir_delete(params: &Value, files: &Arc<dyn FileStore>) -> Result<Value, String> {
+pub(super) async fn dir_delete(
+    params: &Value,
+    files: &Arc<dyn FileStore>,
+) -> Result<Value, String> {
     let rel_path = require_str(params, "rel_path")?;
     let prefix = rel_path.trim_end_matches('/');
     let entries = files.list(rel_path).await.map_err(|e| e.to_string())?;

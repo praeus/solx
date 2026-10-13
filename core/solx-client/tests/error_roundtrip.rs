@@ -28,7 +28,8 @@ async fn spawn_test_server(status: StatusCode, error: SolxError) -> String {
 
 #[tokio::test]
 async fn not_found_variant_round_trips() {
-    let base_url = spawn_test_server(StatusCode::NOT_FOUND, SolxError::NotFound("thing".into())).await;
+    let base_url =
+        spawn_test_server(StatusCode::NOT_FOUND, SolxError::NotFound("thing".into())).await;
     let client = RemoteTypeManager::new(base_url, "unused-token");
 
     let err = client.get("/a", "b").await.unwrap_err();

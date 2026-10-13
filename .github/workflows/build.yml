@@ -1,0 +1,131 @@
+name: Build
+
+# Builds the solx CLI, solx-server and the solx-browser Tauri app (server and
+# client variants) on Linux, macOS and Windows. Pushing a `v*` tag also
+# publishes the results as a draft GitHub release.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/build.yml"
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  core-binaries:
+    name: solx + solx-server (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, name: linux-x64, ext: "" }
+          - { os: macos-latest, name: macos-arm64, ext: "" }
+          - { os: windows-latest, name: windows-x64, ext: ".exe" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Build
+        working-directory: core
+        run: cargo build --release -p solx-cli -p solx-server
+      - name: Stage
+        shell: bash
+        run: |
+          mkdir dist
+          cp "core/target/release/solx${{ matrix.ext }}" dist/
+          cp "core/target/release/solx-server${{ matrix.ext }}" dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: solx-core-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  browser:
+    name: solx-browser ${{ matrix.variant }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+        variant: [server, client]
+    defaults:
+      run:
+        shell: bash
+        working-directory: browser
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux system dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libssl-dev libxdo-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: browser/src-tauri
+          key: ${{ matrix.variant }}
+      - uses: oven-sh/setup-bun@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      # tauri.conf.json's beforeBuildCommand builds ../web/web with bun.
+      - run: bun install --frozen-lockfile
+        working-directory: web/web
+      - name: Build (server)
+        if: matrix.variant == 'server'
+        run: pnpm build
+      - name: Build (client)
+        if: matrix.variant == 'client'
+        run: pnpm build:client
+      - uses: actions/upload-artifact@v4
+        with:
+          name: solx-browser-${{ matrix.variant }}-${{ runner.os }}
+          path: |
+            browser/src-tauri/target/release/bundle/**/*.msi
+            browser/src-tauri/target/release/bundle/**/*.exe
+            browser/src-tauri/target/release/bundle/**/*.dmg
+            browser/src-tauri/target/release/bundle/**/*.deb
+            browser/src-tauri/target/release/bundle/**/*.rpm
+            browser/src-tauri/target/release/bundle/**/*.AppImage
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [core-binaries, browser]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Package core binaries
+        run: |
+          cd artifacts
+          for d in solx-core-*; do
+            (cd "$d" && chmod +x * 2>/dev/null; tar -czf "../${d}.tar.gz" .)
+          done
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            artifacts/*.tar.gz
+            artifacts/solx-browser-*/**

@@ -39,26 +39,41 @@ async fn tools_list_and_call_tool_round_trip() -> anyhow::Result<()> {
 
     // file-put -> file-get round trip through two real tool calls.
     let put = client
-        .call_tool(CallToolRequestParams::new("act__builtin__file__file-put").with_arguments(
-            serde_json::json!({"rel_path": "notes/a.txt", "content": "hello from mcp"})
-                .as_object()
-                .unwrap()
-                .clone(),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("act__builtin__file__file-put").with_arguments(
+                serde_json::json!({"rel_path": "notes/a.txt", "content": "hello from mcp"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
         .await?;
     assert!(put.content[0].as_text().is_some());
 
     let got = client
-        .call_tool(CallToolRequestParams::new("act__builtin__file__file-get").with_arguments(
-            serde_json::json!({"rel_path": "notes/a.txt"}).as_object().unwrap().clone(),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("act__builtin__file__file-get").with_arguments(
+                serde_json::json!({"rel_path": "notes/a.txt"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
         .await?;
     let structured = got.structured_content.expect("structured_content present");
-    assert_eq!(structured.get("content").and_then(|v| v.as_str()), Some("hello from mcp"));
+    assert_eq!(
+        structured.get("content").and_then(|v| v.as_str()),
+        Some("hello from mcp")
+    );
 
     // An unparseable tool name is a hard protocol error, not an in-band one.
-    let err = client.call_tool(CallToolRequestParams::new("not_a_solx_tool")).await;
-    assert!(err.is_err(), "expected a protocol error for an unparseable tool name");
+    let err = client
+        .call_tool(CallToolRequestParams::new("not_a_solx_tool"))
+        .await;
+    assert!(
+        err.is_err(),
+        "expected a protocol error for an unparseable tool name"
+    );
 
     client.cancel().await?;
     server_task.await?;
@@ -74,7 +89,11 @@ struct ProgressCapture {
 }
 
 impl ClientHandler for ProgressCapture {
-    async fn on_progress(&self, params: ProgressNotificationParam, _context: NotificationContext<RoleClient>) {
+    async fn on_progress(
+        &self,
+        params: ProgressNotificationParam,
+        _context: NotificationContext<RoleClient>,
+    ) {
         self.received.lock().unwrap().push(params);
     }
 }
@@ -134,7 +153,9 @@ async fn call_tool_streams_console_entries_as_progress_notifications() -> anyhow
     // client does, but it does mean this test can't control *which* token
     // value arrives — only that one arrives, and that it's used
     // consistently across every notification for this call.
-    let result = client.call_tool(CallToolRequestParams::new("act__tools__count")).await?;
+    let result = client
+        .call_tool(CallToolRequestParams::new("act__tools__count"))
+        .await?;
     assert!(!result.is_error.unwrap_or(false), "{result:?}");
 
     // `notify_progress` hands off to the transport's own send loop rather
@@ -144,16 +165,26 @@ async fn call_tool_streams_console_entries_as_progress_notifications() -> anyhow
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     let received = capture.received.lock().unwrap().clone();
-    assert!(!received.is_empty(), "expected at least one progress notification");
+    assert!(
+        !received.is_empty(),
+        "expected at least one progress notification"
+    );
     let token = received[0].progress_token.clone();
-    assert!(received.iter().all(|p| p.progress_token == token), "{received:?}");
+    assert!(
+        received.iter().all(|p| p.progress_token == token),
+        "{received:?}"
+    );
     let messages: Vec<String> = received.iter().filter_map(|p| p.message.clone()).collect();
     assert!(
-        messages.iter().any(|m| m.contains("exec /builtin/action/entity-list-actions")),
+        messages
+            .iter()
+            .any(|m| m.contains("exec /builtin/action/entity-list-actions")),
         "expected a progress message naming the first stage, got: {messages:?}"
     );
     assert!(
-        messages.iter().any(|m| m.contains("exec /builtin/document/entity-list-documents")),
+        messages
+            .iter()
+            .any(|m| m.contains("exec /builtin/document/entity-list-documents")),
         "expected a progress message naming the second stage, got: {messages:?}"
     );
     // Progress must be non-decreasing per the MCP spec — using the
@@ -194,8 +225,12 @@ async fn router_list_all_respects_path_prefix() -> anyhow::Result<()> {
 
     let result = client
         .call_tool(
-            CallToolRequestParams::new("explore_tools")
-                .with_arguments(serde_json::json!({"discovery_mode": "list_all"}).as_object().unwrap().clone()),
+            CallToolRequestParams::new("explore_tools").with_arguments(
+                serde_json::json!({"discovery_mode": "list_all"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
         )
         .await?;
     let text = &result.content[0].as_text().expect("text content").text;

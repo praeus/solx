@@ -113,7 +113,12 @@ impl InvocationStore {
     /// console's `next_seq` at the moment of creation (see
     /// `ConsoleStore::current_next_seq`), captured by the caller before this
     /// call so a client can jump straight to this run's own output.
-    pub async fn create(&self, invocation_id: &str, action_ref: &str, console_seq_start: i64) -> Result<()> {
+    pub async fn create(
+        &self,
+        invocation_id: &str,
+        action_ref: &str,
+        console_seq_start: i64,
+    ) -> Result<()> {
         let conn = self.db.connect().await?;
         let now = Utc::now().to_rfc3339();
         conn.execute(
@@ -195,7 +200,13 @@ impl InvocationStore {
     /// whichever of a natural finish or a forced abort ([`Self::mark_aborted`])
     /// reaches the row first wins, and the loser's write is silently
     /// discarded rather than clobbering the winner's result.
-    pub async fn finish(&self, invocation_id: &str, status: &str, result: Option<Value>, error: Option<String>) -> Result<()> {
+    pub async fn finish(
+        &self,
+        invocation_id: &str,
+        status: &str,
+        result: Option<Value>,
+        error: Option<String>,
+    ) -> Result<()> {
         let conn = self.db.connect().await?;
         let now = Utc::now().to_rfc3339();
         conn.execute(
@@ -221,8 +232,13 @@ impl InvocationStore {
     /// if the task finished naturally just before the abort, this is a
     /// no-op.
     pub async fn mark_aborted(&self, invocation_id: &str) -> Result<()> {
-        self.finish(invocation_id, status::CANCELLED, None, Some("stopped (grace period expired)".into()))
-            .await
+        self.finish(
+            invocation_id,
+            status::CANCELLED,
+            None,
+            Some("stopped (grace period expired)".into()),
+        )
+        .await
     }
 
     /// List invocations, most recent first, optionally filtered by
@@ -231,26 +247,24 @@ impl InvocationStore {
         let conn = self.db.connect().await?;
         let limit = limit.clamp(1, 1000);
         let mut rows = match action_ref {
-            Some(a) => {
-                conn.query(
+            Some(a) => conn
+                .query(
                     "SELECT invocation_id, action_ref, status, cancel_requested, created_at, \
                      updated_at, finished_at, console_seq_start, result, error \
                      FROM invocations WHERE action_ref = ?1 ORDER BY created_at DESC LIMIT ?2",
                     libsql::params![a, limit],
                 )
                 .await
-                .map_err(map_db)?
-            }
-            None => {
-                conn.query(
+                .map_err(map_db)?,
+            None => conn
+                .query(
                     "SELECT invocation_id, action_ref, status, cancel_requested, created_at, \
                      updated_at, finished_at, console_seq_start, result, error \
                      FROM invocations ORDER BY created_at DESC LIMIT ?1",
                     libsql::params![limit],
                 )
                 .await
-                .map_err(map_db)?
-            }
+                .map_err(map_db)?,
         };
         let mut out = Vec::new();
         while let Some(row) = rows.next().await.map_err(map_db)? {
@@ -277,8 +291,13 @@ impl InvocationStore {
             orphaned.push(row.get::<String>(0).map_err(map_db)?);
         }
         for id in &orphaned {
-            self.finish(id, status::INTERRUPTED, None, Some("interrupted (process restarted while running)".into()))
-                .await?;
+            self.finish(
+                id,
+                status::INTERRUPTED,
+                None,
+                Some("interrupted (process restarted while running)".into()),
+            )
+            .await?;
         }
         Ok(orphaned.len() as i64)
     }
@@ -287,7 +306,8 @@ impl InvocationStore {
     /// `ConsoleStore::sweep_expired` — startup only, best-effort.
     pub async fn sweep_expired(&self) -> Result<i64> {
         let conn = self.db.connect().await?;
-        let cutoff = (Utc::now() - chrono::Duration::days(self.config.invocation_ttl_days())).to_rfc3339();
+        let cutoff =
+            (Utc::now() - chrono::Duration::days(self.config.invocation_ttl_days())).to_rfc3339();
         let mut rows = conn
             .query(
                 "SELECT invocation_id FROM invocations \
@@ -301,9 +321,12 @@ impl InvocationStore {
             expired.push(row.get::<String>(0).map_err(map_db)?);
         }
         for id in &expired {
-            conn.execute("DELETE FROM invocations WHERE invocation_id = ?1", libsql::params![id.clone()])
-                .await
-                .map_err(map_db)?;
+            conn.execute(
+                "DELETE FROM invocations WHERE invocation_id = ?1",
+                libsql::params![id.clone()],
+            )
+            .await
+            .map_err(map_db)?;
         }
         Ok(expired.len() as i64)
     }
@@ -332,7 +355,9 @@ mod tests {
 
     async fn test_store() -> (tempfile::TempDir, InvocationStore) {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::open(&dir.path().join("invocations_test.db")).await.unwrap();
+        let db = Db::open(&dir.path().join("invocations_test.db"))
+            .await
+            .unwrap();
         let config = Arc::new(ConfigService::open_in(dir.path()).unwrap());
         let store = InvocationStore::new(db, config);
         store.ensure_schema().await.unwrap();
@@ -392,7 +417,10 @@ mod tests {
     async fn request_cancel_does_not_disturb_an_already_terminal_status() {
         let (_d, store) = test_store().await;
         store.create("inv-1", "/pkg/a", 0).await.unwrap();
-        store.finish("inv-1", status::OK, Some(json!({"n": 1})), None).await.unwrap();
+        store
+            .finish("inv-1", status::OK, Some(json!({"n": 1})), None)
+            .await
+            .unwrap();
         let inv = store.request_cancel("inv-1").await.unwrap().unwrap();
         // Status stays 'ok', not clobbered to 'cancelling' — cancel_requested
         // is still set (harmless: nothing reads it once terminal).
@@ -404,7 +432,10 @@ mod tests {
     async fn to_json_carries_every_field() {
         let (_d, store) = test_store().await;
         store.create("inv-1", "/pkg/a", 3).await.unwrap();
-        store.finish("inv-1", status::OK, Some(json!({"n": 1})), None).await.unwrap();
+        store
+            .finish("inv-1", status::OK, Some(json!({"n": 1})), None)
+            .await
+            .unwrap();
         let inv = store.get("inv-1").await.unwrap().unwrap();
         let v = inv.to_json();
         assert_eq!(v["invocation_id"], "inv-1");
@@ -420,7 +451,10 @@ mod tests {
     async fn finish_sets_result_and_terminal_status() {
         let (_d, store) = test_store().await;
         store.create("inv-1", "/pkg/a", 0).await.unwrap();
-        store.finish("inv-1", status::OK, Some(json!({"n": 42})), None).await.unwrap();
+        store
+            .finish("inv-1", status::OK, Some(json!({"n": 42})), None)
+            .await
+            .unwrap();
         let inv = store.get("inv-1").await.unwrap().unwrap();
         assert_eq!(inv.status, status::OK);
         assert_eq!(inv.result, Some(json!({"n": 42})));
@@ -432,7 +466,10 @@ mod tests {
     async fn finish_sets_error_on_failure() {
         let (_d, store) = test_store().await;
         store.create("inv-1", "/pkg/a", 0).await.unwrap();
-        store.finish("inv-1", status::FAILED, None, Some("boom".into())).await.unwrap();
+        store
+            .finish("inv-1", status::FAILED, None, Some("boom".into()))
+            .await
+            .unwrap();
         let inv = store.get("inv-1").await.unwrap().unwrap();
         assert_eq!(inv.status, status::FAILED);
         assert_eq!(inv.result, None);
@@ -443,10 +480,16 @@ mod tests {
     async fn finish_is_idempotent_second_call_is_a_no_op() {
         let (_d, store) = test_store().await;
         store.create("inv-1", "/pkg/a", 0).await.unwrap();
-        store.finish("inv-1", status::OK, Some(json!("first")), None).await.unwrap();
+        store
+            .finish("inv-1", status::OK, Some(json!("first")), None)
+            .await
+            .unwrap();
         // A second finish (simulating a race with a force-abort) must not
         // clobber the already-terminal result.
-        store.finish("inv-1", status::CANCELLED, Some(json!("second")), None).await.unwrap();
+        store
+            .finish("inv-1", status::CANCELLED, Some(json!("second")), None)
+            .await
+            .unwrap();
         let inv = store.get("inv-1").await.unwrap().unwrap();
         assert_eq!(inv.status, status::OK);
         assert_eq!(inv.result, Some(json!("first")));
@@ -462,9 +505,15 @@ mod tests {
         store.mark_aborted("inv-1").await.unwrap();
         store.mark_aborted("inv-2").await.unwrap();
 
-        assert_eq!(store.get("inv-1").await.unwrap().unwrap().status, status::CANCELLED);
+        assert_eq!(
+            store.get("inv-1").await.unwrap().unwrap().status,
+            status::CANCELLED
+        );
         // inv-2 had already finished 'ok' — mark_aborted must not overwrite it.
-        assert_eq!(store.get("inv-2").await.unwrap().unwrap().status, status::OK);
+        assert_eq!(
+            store.get("inv-2").await.unwrap().unwrap().status,
+            status::OK
+        );
     }
 
     #[tokio::test]
@@ -489,14 +538,26 @@ mod tests {
         store.create("inv-cancelling", "/pkg/a", 0).await.unwrap();
         store.request_cancel("inv-cancelling").await.unwrap();
         store.create("inv-done", "/pkg/a", 0).await.unwrap();
-        store.finish("inv-done", status::OK, None, None).await.unwrap();
+        store
+            .finish("inv-done", status::OK, None, None)
+            .await
+            .unwrap();
 
         let n = store.mark_orphans().await.unwrap();
         assert_eq!(n, 2);
 
-        assert_eq!(store.get("inv-running").await.unwrap().unwrap().status, status::INTERRUPTED);
-        assert_eq!(store.get("inv-cancelling").await.unwrap().unwrap().status, status::INTERRUPTED);
-        assert_eq!(store.get("inv-done").await.unwrap().unwrap().status, status::OK);
+        assert_eq!(
+            store.get("inv-running").await.unwrap().unwrap().status,
+            status::INTERRUPTED
+        );
+        assert_eq!(
+            store.get("inv-cancelling").await.unwrap().unwrap().status,
+            status::INTERRUPTED
+        );
+        assert_eq!(
+            store.get("inv-done").await.unwrap().unwrap().status,
+            status::OK
+        );
     }
 
     #[tokio::test]
@@ -509,12 +570,21 @@ mod tests {
         store.ensure_schema().await.unwrap();
 
         store.create("inv-fresh", "/pkg/a", 0).await.unwrap();
-        store.finish("inv-fresh", status::OK, None, None).await.unwrap();
+        store
+            .finish("inv-fresh", status::OK, None, None)
+            .await
+            .unwrap();
 
         store.create("inv-stale", "/pkg/a", 0).await.unwrap();
-        store.finish("inv-stale", status::OK, None, None).await.unwrap();
+        store
+            .finish("inv-stale", status::OK, None, None)
+            .await
+            .unwrap();
 
-        store.create("inv-still-running", "/pkg/a", 0).await.unwrap();
+        store
+            .create("inv-still-running", "/pkg/a", 0)
+            .await
+            .unwrap();
 
         // Backdate /inv-stale's updated_at past the TTL directly.
         let conn = db.connect().await.unwrap();

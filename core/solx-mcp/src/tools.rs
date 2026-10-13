@@ -57,7 +57,8 @@ pub fn encode_tool_name(path: &str, name: &str) -> String {
     match pretty {
         Some(encoded) if encoded.len() <= MAX_PRETTY_LEN => encoded,
         _ => {
-            let full = solx_surface::path::full_ref(path, name).unwrap_or_else(|_| format!("{path}/{name}"));
+            let full = solx_surface::path::full_ref(path, name)
+                .unwrap_or_else(|_| format!("{path}/{name}"));
             format!("{PREFIX}{OPAQUE_MARKER}{}", base32_encode(full.as_bytes()))
         }
     }
@@ -147,7 +148,10 @@ mod tests {
     fn root_path_round_trips() {
         let name = encode_tool_name("/", "weather");
         assert_eq!(name, "act__weather");
-        assert_eq!(decode_tool_name(&name), Some(("/".to_string(), "weather".to_string())));
+        assert_eq!(
+            decode_tool_name(&name),
+            Some(("/".to_string(), "weather".to_string()))
+        );
     }
 
     #[test]
@@ -164,7 +168,10 @@ mod tests {
     fn double_underscore_in_segment_falls_back_to_opaque_and_still_round_trips() {
         let name = encode_tool_name("/a__b", "c");
         assert!(name.starts_with("act__b32_"));
-        assert_eq!(decode_tool_name(&name), Some(("/a__b".to_string(), "c".to_string())));
+        assert_eq!(
+            decode_tool_name(&name),
+            Some(("/a__b".to_string(), "c".to_string()))
+        );
 
         // The pathological pretty-encoding collision this fallback avoids:
         // (/a__b, c) and (/a, b__c) would otherwise both encode to
@@ -184,7 +191,10 @@ mod tests {
             encoded.starts_with("act__b32_"),
             "expected opaque fallback, got {encoded:?}"
         );
-        assert_eq!(decode_tool_name(&encoded), Some((path.to_string(), name.to_string())));
+        assert_eq!(
+            decode_tool_name(&encoded),
+            Some((path.to_string(), name.to_string()))
+        );
     }
 
     #[test]
@@ -194,7 +204,10 @@ mod tests {
         let encoded = encode_tool_name("/builtin", &name);
         assert_eq!(encoded.len(), MAX_PRETTY_LEN);
         assert!(!encoded.contains(OPAQUE_MARKER));
-        assert_eq!(decode_tool_name(&encoded), Some(("/builtin".to_string(), name)));
+        assert_eq!(
+            decode_tool_name(&encoded),
+            Some(("/builtin".to_string(), name))
+        );
     }
 
     #[test]

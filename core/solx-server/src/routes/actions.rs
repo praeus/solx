@@ -2,8 +2,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
-use serde_json::{json, Value};
 use serde::Deserialize;
+use serde_json::{json, Value};
 use solx_surface::entities::{Action, ActionExecResult, ActionInput};
 use solx_surface::managers::Solx;
 use solx_surface::query::{ActionSearchQuery, ListOptions, Page, PathFacet};
@@ -29,7 +29,10 @@ pub fn router() -> Router<AppState> {
         .route("/actions", get(list_actions))
         .route(
             "/actions/*ref",
-            get(get_action).put(save_action).delete(delete_action).post(exec_action),
+            get(get_action)
+                .put(save_action)
+                .delete(delete_action)
+                .post(exec_action),
         )
         .route("/actions-paths", get(action_paths))
         .route("/actions-search", get(search_actions))
@@ -93,7 +96,11 @@ async fn search_actions(
     let page = state
         .app
         .actions()
-        .search(ActionSearchQuery { list, q, exclude_hidden })
+        .search(ActionSearchQuery {
+            list,
+            q,
+            exclude_hidden,
+        })
         .await?;
     Ok(Json(page))
 }

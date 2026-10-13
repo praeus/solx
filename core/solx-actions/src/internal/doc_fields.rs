@@ -48,7 +48,10 @@ pub(super) async fn set_field(params: &Value, docs: &Arc<dyn DocManager>) -> Res
             input.contents = Value::Object(obj);
         }
     }
-    let doc = docs.save(&path, name, input).await.map_err(|e| e.to_string())?;
+    let doc = docs
+        .save(&path, name, input)
+        .await
+        .map_err(|e| e.to_string())?;
     to_value(&doc)
 }
 
@@ -200,7 +203,10 @@ fn create_missing_parents(value: &mut Value, segments: &[String]) -> Result<(), 
     Ok(())
 }
 
-pub(super) async fn get_field_at_path(params: &Value, docs: &Arc<dyn DocManager>) -> Result<Value, String> {
+pub(super) async fn get_field_at_path(
+    params: &Value,
+    docs: &Arc<dyn DocManager>,
+) -> Result<Value, String> {
     let name = require_str(params, "name")?;
     let path = require_str(params, "path")?;
     let segments = parse_path(path)?;
@@ -211,7 +217,10 @@ pub(super) async fn get_field_at_path(params: &Value, docs: &Arc<dyn DocManager>
     }
 }
 
-pub(super) async fn set_field_at_path(params: &Value, docs: &Arc<dyn DocManager>) -> Result<Value, String> {
+pub(super) async fn set_field_at_path(
+    params: &Value,
+    docs: &Arc<dyn DocManager>,
+) -> Result<Value, String> {
     let name = require_str(params, "name")?;
     let path = require_str(params, "path")?;
     let create = params
@@ -246,6 +255,9 @@ pub(super) async fn set_field_at_path(params: &Value, docs: &Arc<dyn DocManager>
     }
 
     let input = document_input_from(&existing);
-    let doc = docs.save(&doc_path, name, input).await.map_err(|e| e.to_string())?;
+    let doc = docs
+        .save(&doc_path, name, input)
+        .await
+        .map_err(|e| e.to_string())?;
     to_value(&doc)
 }

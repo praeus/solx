@@ -101,7 +101,11 @@ pub fn type_name_of(v: &Value) -> &'static str {
 ///
 /// `field_name` is used to build a helpful error message ("auth's
 /// 'private_key' is …") so callers don't need to interpolate.
-pub async fn resolve_in_field(parent: &str, field_name: &str, value: &Value) -> Result<String, String> {
+pub async fn resolve_in_field(
+    parent: &str,
+    field_name: &str,
+    value: &Value,
+) -> Result<String, String> {
     resolve(value)
         .await
         .map_err(|e| format!("{parent}'s '{field_name}' {e}"))
@@ -122,8 +126,12 @@ pub fn load_keyring(r: &KeyringRef) -> Result<String, String> {
             r.keyring_service, r.keyring_account
         ));
     }
-    let entry = keyring::Entry::new(&r.keyring_service, &r.keyring_account)
-        .map_err(|e| format!("keyring entry '{}/{}' open failed: {e}", r.keyring_service, r.keyring_account))?;
+    let entry = keyring::Entry::new(&r.keyring_service, &r.keyring_account).map_err(|e| {
+        format!(
+            "keyring entry '{}/{}' open failed: {e}",
+            r.keyring_service, r.keyring_account
+        )
+    })?;
     entry.get_password().map_err(|e| {
         let service = &r.keyring_service;
         let account = &r.keyring_account;
@@ -418,7 +426,9 @@ mod tests {
     #[tokio::test]
     async fn malformed_keyring_shape_errors_without_calling_loader() {
         // Single-field object — should not match the KeyringRef shape.
-        let err = resolve(&json!({"keyring_service": "sol"})).await.unwrap_err();
+        let err = resolve(&json!({"keyring_service": "sol"}))
+            .await
+            .unwrap_err();
         assert!(err.contains("missing field"), "{err}");
     }
 
@@ -441,7 +451,10 @@ mod tests {
             keyring_service: "sol".into(),
             keyring_account: "any".into(),
         };
-        assert_eq!(load_keyring_with_test_override(&r).await.unwrap(), "from-test-loader");
+        assert_eq!(
+            load_keyring_with_test_override(&r).await.unwrap(),
+            "from-test-loader"
+        );
         // Also covers the resolve path.
         assert_eq!(resolve(&v).await.unwrap(), "from-test-loader");
         // Restore.
@@ -451,7 +464,12 @@ mod tests {
     #[tokio::test]
     #[serial(secrets_loader)]
     async fn loader_test_seam_error_surfaces_in_resolve() {
-        set_secret_loader_for_tests(Some(|r| Err(format!("synthetic: {}/{}", r.keyring_service, r.keyring_account))));
+        set_secret_loader_for_tests(Some(|r| {
+            Err(format!(
+                "synthetic: {}/{}",
+                r.keyring_service, r.keyring_account
+            ))
+        }));
         let v = json!({"keyring_service": "sol", "keyring_account": "missing"});
         let err = resolve(&v).await.unwrap_err();
         assert!(err.contains("synthetic: sol/missing"), "{err}");
@@ -462,8 +480,9 @@ mod tests {
 
     /// In-memory fake keyring for the `SecretBackendOverride` seam. Fn
     /// pointers can't capture state, so the map lives in a static.
-    static FAKE_STORE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
-        std::sync::OnceLock::new();
+    static FAKE_STORE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, String>>,
+    > = std::sync::OnceLock::new();
 
     fn fake_store() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
         FAKE_STORE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
@@ -474,7 +493,10 @@ mod tests {
         set_secret_backend_for_tests(Some(SecretBackendOverride {
             get: |name| Ok(fake_store().lock().unwrap().get(name).cloned()),
             set: |name, blob| {
-                fake_store().lock().unwrap().insert(name.to_string(), blob.to_string());
+                fake_store()
+                    .lock()
+                    .unwrap()
+                    .insert(name.to_string(), blob.to_string());
                 Ok(())
             },
             delete: |name| {
@@ -496,7 +518,9 @@ mod tests {
     #[serial(secrets_backend)]
     async fn set_then_get_secret_round_trips_with_the_right_key() {
         install_fake_backend();
-        set_secret("MY_SECRET", "top-secret-value", &key_a()).await.unwrap();
+        set_secret("MY_SECRET", "top-secret-value", &key_a())
+            .await
+            .unwrap();
         assert_eq!(
             get_secret("MY_SECRET", &key_a()).await.unwrap(),
             Some("top-secret-value".to_string())
@@ -508,7 +532,9 @@ mod tests {
     #[serial(secrets_backend)]
     async fn get_secret_with_wrong_key_self_heals_by_clearing_entry() {
         install_fake_backend();
-        set_secret("MY_SECRET", "top-secret-value", &key_a()).await.unwrap();
+        set_secret("MY_SECRET", "top-secret-value", &key_a())
+            .await
+            .unwrap();
         assert_eq!(get_secret("MY_SECRET", &key_b()).await.unwrap(), None);
         // The corrupted entry was cleared, not just masked -- even the
         // originally-correct key now finds nothing.
@@ -520,7 +546,9 @@ mod tests {
     #[serial(secrets_backend)]
     async fn get_secret_with_malformed_key_errors_without_deleting_entry() {
         install_fake_backend();
-        set_secret("MY_SECRET", "top-secret-value", &key_a()).await.unwrap();
+        set_secret("MY_SECRET", "top-secret-value", &key_a())
+            .await
+            .unwrap();
         let bad_key = base64::engine::general_purpose::STANDARD.encode(b"not-32-bytes");
         let err = get_secret("MY_SECRET", &bad_key).await.unwrap_err();
         assert!(err.contains("must decode to"), "{err}");
@@ -556,7 +584,9 @@ mod tests {
     async fn short_key_is_rejected() {
         install_fake_backend();
         let short_key = base64::engine::general_purpose::STANDARD.encode([1u8; 16]);
-        let err = set_secret("MY_SECRET", "value", &short_key).await.unwrap_err();
+        let err = set_secret("MY_SECRET", "value", &short_key)
+            .await
+            .unwrap_err();
         assert!(err.contains("must decode to 32 bytes"), "{err}");
         set_secret_backend_for_tests(None);
     }

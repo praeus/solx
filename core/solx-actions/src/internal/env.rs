@@ -79,7 +79,10 @@ pub fn init_env_mappings(mappings: HashMap<String, String>) {
         }
     }
     if let Ok(mut store) = env_store().write() {
-        store.entry(DEFAULT_NAMESPACE.to_string()).or_default().extend(resolved);
+        store
+            .entry(DEFAULT_NAMESPACE.to_string())
+            .or_default()
+            .extend(resolved);
     }
 }
 
@@ -112,12 +115,24 @@ pub(super) fn get_env(params: &Value) -> Value {
 
 pub(super) fn set_env(params: &Value, config: &Arc<ConfigService>) -> Result<Value, String> {
     let namespace = namespace_of(params);
-    let key = params.get("key").and_then(Value::as_str).unwrap_or("").to_string();
-    let value = params.get("value").and_then(Value::as_str).unwrap_or("").to_string();
+    let key = params
+        .get("key")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let value = params
+        .get("value")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
 
     let id = persist_id(&namespace, &key);
     let already = persisted().read().map(|m| m.contains(&id)).unwrap_or(false);
-    let persist = params.get("persist").and_then(Value::as_bool).unwrap_or(false) || already;
+    let persist = params
+        .get("persist")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || already;
 
     // Persist first: if the config write fails the caller gets an error rather
     // than an in-memory value it wrongly believes will outlive the process.
@@ -130,7 +145,10 @@ pub(super) fn set_env(params: &Value, config: &Arc<ConfigService>) -> Result<Val
         }
     }
     if let Ok(mut store) = env_store().write() {
-        store.entry(namespace.clone()).or_default().insert(key, value);
+        store
+            .entry(namespace.clone())
+            .or_default()
+            .insert(key, value);
     }
     Ok(json!({ "set": true, "namespace": namespace, "persisted": persist }))
 }

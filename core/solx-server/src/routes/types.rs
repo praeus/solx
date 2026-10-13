@@ -24,7 +24,10 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/types", get(list_types))
-        .route("/types/*ref", get(get_type).put(save_type).delete(delete_type))
+        .route(
+            "/types/*ref",
+            get(get_type).put(save_type).delete(delete_type),
+        )
         .route("/types-paths", get(type_paths))
         .route("/validate", post(validate_type))
 }
@@ -77,6 +80,10 @@ async fn validate_type(
     State(state): State<AppState>,
     Json(req): Json<ValidateRequest>,
 ) -> Result<StatusCode, ApiError> {
-    state.app.types().validate(&req.value, &req.type_ref).await?;
+    state
+        .app
+        .types()
+        .validate(&req.value, &req.type_ref)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }

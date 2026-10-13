@@ -276,7 +276,10 @@ pub fn split_respecting_quotes(s: &str, sep: char) -> Vec<String> {
 /// matching `is_sep` (e.g. `char::is_whitespace`). `is_sep` sees every
 /// unquoted character in order (never a quoted one or a quote delimiter), so
 /// it may keep state — e.g. bracket depth.
-pub(crate) fn split_respecting_quotes_by(s: &str, mut is_sep: impl FnMut(char) -> bool) -> Vec<String> {
+pub(crate) fn split_respecting_quotes_by(
+    s: &str,
+    mut is_sep: impl FnMut(char) -> bool,
+) -> Vec<String> {
     let mut parts = Vec::new();
     let mut current = String::new();
     let mut in_single = false;
@@ -358,11 +361,7 @@ fn tokenize_stage_args(s: &str) -> Vec<StageArg> {
     let mut chars = s.chars().peekable();
 
     while let Some(ch) = chars.next() {
-        if current.is_empty()
-            && !in_single
-            && !in_double
-            && !in_triple
-            && (ch == '{' || ch == '[')
+        if current.is_empty() && !in_single && !in_double && !in_triple && (ch == '{' || ch == '[')
         {
             tokens.push(StageArg::Literal(scan_bracketed(ch, &mut chars)));
             continue;
@@ -600,7 +599,10 @@ mod tests {
     #[tokio::test]
     async fn quoted_and_mid_token_braces_stay_text() {
         let seen = seen_for(r#"exec /a --json '{"x": "$y"}' k={a}"#).await;
-        assert_eq!(seen[0], vec!["exec", "/a", "--json", r#"{"x": "$y"}"#, "k={a}"]);
+        assert_eq!(
+            seen[0],
+            vec!["exec", "/a", "--json", r#"{"x": "$y"}"#, "k={a}"]
+        );
     }
 
     #[tokio::test]
@@ -640,7 +642,8 @@ mod tests {
         let r = Recorder {
             seen: Mutex::new(Vec::new()),
         };
-        let src = r#"save doc /a --json '{"text":"can\'t stop"}'; save doc /b --json '{"text":"ok"}';"#;
+        let src =
+            r#"save doc /a --json '{"text":"can\'t stop"}'; save doc /b --json '{"text":"ok"}';"#;
         execute_script(&r, src).await.unwrap();
         let seen = r.seen.lock().unwrap();
         assert_eq!(seen.len(), 2);
@@ -661,7 +664,13 @@ mod tests {
         let toks = tokenize_stage(r#"save doc /a --json '''{"text":"can't stop; #1 \o/"}'''"#);
         assert_eq!(
             toks,
-            vec!["save", "doc", "/a", "--json", r#"{"text":"can't stop; #1 \o/"}"#]
+            vec![
+                "save",
+                "doc",
+                "/a",
+                "--json",
+                r#"{"text":"can't stop; #1 \o/"}"#
+            ]
         );
     }
 
@@ -703,7 +712,10 @@ mod tests {
     fn strip_comments_leaves_quoted_hash_alone() {
         // A `#` inside a quoted JSON body (e.g. a URL fragment) is not a comment.
         let src = r#"json '"https://host/path#section"' # now a real comment"#;
-        assert_eq!(strip_comments(src), r#"json '"https://host/path#section"' "#);
+        assert_eq!(
+            strip_comments(src),
+            r#"json '"https://host/path#section"' "#
+        );
     }
 
     #[tokio::test]

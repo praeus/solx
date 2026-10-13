@@ -92,7 +92,10 @@ impl Registration {
     pub fn url(&self) -> String {
         // Safe: a `Registration` only exists after `register` has already
         // awaited `ensure_started`, so `LOOPBACK` is populated.
-        let port = LOOPBACK.get().expect("loopback started before Registration exists").port;
+        let port = LOOPBACK
+            .get()
+            .expect("loopback started before Registration exists")
+            .port;
         format!("http://127.0.0.1:{port}/print")
     }
 
@@ -100,7 +103,10 @@ impl Registration {
     /// deliberately, rather than having the child string-munge `/print`
     /// into `/cancelled` itself.
     pub fn control_url(&self) -> String {
-        let port = LOOPBACK.get().expect("loopback started before Registration exists").port;
+        let port = LOOPBACK
+            .get()
+            .expect("loopback started before Registration exists")
+            .port;
         format!("http://127.0.0.1:{port}/cancelled")
     }
 
@@ -167,7 +173,10 @@ async fn ensure_started() -> Option<&'static Loopback> {
             std::thread::Builder::new()
                 .name("solx-console-loopback".into())
                 .spawn(move || {
-                    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                    let rt = match tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
                         Ok(rt) => rt,
                         Err(e) => {
                             let _ = tx.send(Err(e));
@@ -259,18 +268,32 @@ async fn print_handler(
     let data = body.data.filter(|v| !v.is_null());
     match target
         .console
-        .print(&target.action_ref, &target.invocation_id, None, &level, "command", body.message, data)
+        .print(
+            &target.action_ref,
+            &target.invocation_id,
+            None,
+            &level,
+            "command",
+            body.message,
+            data,
+        )
         .await
     {
         Ok(_) => StatusCode::OK,
         Err(e) => {
-            warn!("console loopback: print failed for {}: {e}", target.action_ref);
+            warn!(
+                "console loopback: print failed for {}: {e}",
+                target.action_ref
+            );
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
 }
 
-async fn cancelled_handler(AxumState(registry): AxumState<Registry>, headers: HeaderMap) -> Response {
+async fn cancelled_handler(
+    AxumState(registry): AxumState<Registry>,
+    headers: HeaderMap,
+) -> Response {
     let Some(token) = bearer_token(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
@@ -335,7 +358,9 @@ mod tests {
     #[tokio::test]
     async fn print_over_http_reaches_the_right_console() {
         let (_d, console, invocations) = test_console().await;
-        let reg = register(console.clone(), invocations, "/pkg/foo", "inv-1").await.unwrap();
+        let reg = register(console.clone(), invocations, "/pkg/foo", "inv-1")
+            .await
+            .unwrap();
 
         let client = reqwest::Client::new();
         let resp = client
@@ -359,7 +384,9 @@ mod tests {
     #[tokio::test]
     async fn print_defaults_level_to_info_and_tolerates_an_empty_body() {
         let (_d, console, invocations) = test_console().await;
-        let reg = register(console.clone(), invocations, "/pkg/foo", "inv-1").await.unwrap();
+        let reg = register(console.clone(), invocations, "/pkg/foo", "inv-1")
+            .await
+            .unwrap();
         let client = reqwest::Client::new();
         let resp = client
             .post(reg.url())
@@ -377,7 +404,9 @@ mod tests {
     #[tokio::test]
     async fn missing_token_is_rejected() {
         let (_d, console, invocations) = test_console().await;
-        let reg = register(console, invocations, "/pkg/foo", "inv-1").await.unwrap();
+        let reg = register(console, invocations, "/pkg/foo", "inv-1")
+            .await
+            .unwrap();
         let client = reqwest::Client::new();
         let resp = client
             .post(reg.url())
@@ -391,7 +420,9 @@ mod tests {
     #[tokio::test]
     async fn unknown_token_is_rejected() {
         let (_d, console, invocations) = test_console().await;
-        let reg = register(console, invocations, "/pkg/foo", "inv-1").await.unwrap();
+        let reg = register(console, invocations, "/pkg/foo", "inv-1")
+            .await
+            .unwrap();
         let client = reqwest::Client::new();
         let resp = client
             .post(reg.url())
@@ -406,7 +437,9 @@ mod tests {
     #[tokio::test]
     async fn dropping_the_registration_deregisters_the_token() {
         let (_d, console, invocations) = test_console().await;
-        let reg = register(console, invocations, "/pkg/foo", "inv-1").await.unwrap();
+        let reg = register(console, invocations, "/pkg/foo", "inv-1")
+            .await
+            .unwrap();
         let url = reg.url();
         let token = reg.token().to_string();
         drop(reg);
@@ -425,12 +458,28 @@ mod tests {
     #[tokio::test]
     async fn two_registrations_stay_isolated() {
         let (_d, console, invocations) = test_console().await;
-        let reg_a = register(console.clone(), invocations.clone(), "/pkg/a", "inv-a").await.unwrap();
-        let reg_b = register(console.clone(), invocations, "/pkg/b", "inv-b").await.unwrap();
+        let reg_a = register(console.clone(), invocations.clone(), "/pkg/a", "inv-a")
+            .await
+            .unwrap();
+        let reg_b = register(console.clone(), invocations, "/pkg/b", "inv-b")
+            .await
+            .unwrap();
 
         let client = reqwest::Client::new();
-        client.post(reg_a.url()).bearer_auth(reg_a.token()).json(&serde_json::json!({"message": "a"})).send().await.unwrap();
-        client.post(reg_b.url()).bearer_auth(reg_b.token()).json(&serde_json::json!({"message": "b"})).send().await.unwrap();
+        client
+            .post(reg_a.url())
+            .bearer_auth(reg_a.token())
+            .json(&serde_json::json!({"message": "a"}))
+            .send()
+            .await
+            .unwrap();
+        client
+            .post(reg_b.url())
+            .bearer_auth(reg_b.token())
+            .json(&serde_json::json!({"message": "b"}))
+            .send()
+            .await
+            .unwrap();
 
         let a = console.read("/pkg/a", None, 10).await.unwrap();
         let b = console.read("/pkg/b", None, 10).await.unwrap();
@@ -443,7 +492,9 @@ mod tests {
     #[tokio::test]
     async fn null_data_is_normalized_to_none() {
         let (_d, console, invocations) = test_console().await;
-        let reg = register(console.clone(), invocations, "/pkg/foo", "inv-1").await.unwrap();
+        let reg = register(console.clone(), invocations, "/pkg/foo", "inv-1")
+            .await
+            .unwrap();
         let client = reqwest::Client::new();
         client
             .post(reg.url())
@@ -462,9 +513,16 @@ mod tests {
         // No invocation row was ever created for "inv-1" (mirrors a plain
         // synchronous `exec`, which never calls `InvocationStore::create`) —
         // must fail closed to `false`, not error.
-        let reg = register(console, invocations, "/pkg/foo", "inv-1").await.unwrap();
+        let reg = register(console, invocations, "/pkg/foo", "inv-1")
+            .await
+            .unwrap();
         let client = reqwest::Client::new();
-        let resp = client.get(reg.control_url()).bearer_auth(reg.token()).send().await.unwrap();
+        let resp = client
+            .get(reg.control_url())
+            .bearer_auth(reg.token())
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp.status(), reqwest::StatusCode::OK);
         let body: serde_json::Value = resp.json().await.unwrap();
         assert_eq!(body, serde_json::json!({"cancelled": false}));
@@ -474,28 +532,53 @@ mod tests {
     async fn cancelled_reflects_a_requested_cancel() {
         let (_d, console, invocations) = test_console().await;
         invocations.create("inv-1", "/pkg/foo", 0).await.unwrap();
-        let reg = register(console, invocations.clone(), "/pkg/foo", "inv-1").await.unwrap();
+        let reg = register(console, invocations.clone(), "/pkg/foo", "inv-1")
+            .await
+            .unwrap();
 
         let client = reqwest::Client::new();
-        let before = client.get(reg.control_url()).bearer_auth(reg.token()).send().await.unwrap();
-        assert_eq!(before.json::<serde_json::Value>().await.unwrap(), serde_json::json!({"cancelled": false}));
+        let before = client
+            .get(reg.control_url())
+            .bearer_auth(reg.token())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            before.json::<serde_json::Value>().await.unwrap(),
+            serde_json::json!({"cancelled": false})
+        );
 
         invocations.request_cancel("inv-1").await.unwrap();
 
-        let after = client.get(reg.control_url()).bearer_auth(reg.token()).send().await.unwrap();
-        assert_eq!(after.json::<serde_json::Value>().await.unwrap(), serde_json::json!({"cancelled": true}));
+        let after = client
+            .get(reg.control_url())
+            .bearer_auth(reg.token())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            after.json::<serde_json::Value>().await.unwrap(),
+            serde_json::json!({"cancelled": true})
+        );
     }
 
     #[tokio::test]
     async fn cancelled_endpoint_rejects_missing_and_unknown_tokens() {
         let (_d, console, invocations) = test_console().await;
-        let reg = register(console, invocations, "/pkg/foo", "inv-1").await.unwrap();
+        let reg = register(console, invocations, "/pkg/foo", "inv-1")
+            .await
+            .unwrap();
         let client = reqwest::Client::new();
 
         let no_auth = client.get(reg.control_url()).send().await.unwrap();
         assert_eq!(no_auth.status(), reqwest::StatusCode::UNAUTHORIZED);
 
-        let bad_auth = client.get(reg.control_url()).bearer_auth("not-a-real-token").send().await.unwrap();
+        let bad_auth = client
+            .get(reg.control_url())
+            .bearer_auth("not-a-real-token")
+            .send()
+            .await
+            .unwrap();
         assert_eq!(bad_auth.status(), reqwest::StatusCode::UNAUTHORIZED);
     }
 }

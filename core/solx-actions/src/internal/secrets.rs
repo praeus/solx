@@ -41,8 +41,6 @@ fn caller_secret_key<'a>(caller: Option<&'a Caller>, name: &str) -> Result<&'a s
         )
     })?;
     caller.secret_key(name).ok_or_else(|| {
-        format!(
-            "no key configured for secret '{name}' in {caller}'s action_config.secrets"
-        )
+        format!("no key configured for secret '{name}' in {caller}'s action_config.secrets")
     })
 }

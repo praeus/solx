@@ -24,7 +24,11 @@ use solx_surface::path::{full_ref, split_ref};
 use solx_surface::query::{ListOptions, SearchQuery};
 
 #[derive(Parser)]
-#[command(name = "solx", about = "Structured documents and extensible actions via CLI", version)]
+#[command(
+    name = "solx",
+    about = "Structured documents and extensible actions via CLI",
+    version
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -196,7 +200,9 @@ async fn build_app() -> Result<Arc<App>> {
     let port = snap.server_port.unwrap_or(solx_config::DEFAULT_SERVER_PORT);
 
     if health_check(port).await {
-        let token = config.ensure_server_token().context("ensure server token")?;
+        let token = config
+            .ensure_server_token()
+            .context("ensure server token")?;
         std::env::set_var("SOLX_SERVER_URL", format!("http://127.0.0.1:{port}"));
         std::env::set_var("SOLX_SERVER_TOKEN", &token);
         return App::build().await;
@@ -241,12 +247,16 @@ async fn run_command(app: &Arc<App>, command: Commands, piped: Option<Value>) ->
             file,
         } => handle_save(app, entity, reference, json, type_ref, file, piped).await,
         Commands::Get { entity, reference } => handle_get(app, entity, reference).await,
-        Commands::Delete { entity, reference, if_exists } => {
-            handle_delete(app, entity, reference, if_exists).await
-        }
-        Commands::Exec { reference, json, no_console } => {
-            handle_exec(app, reference, json, piped, no_console).await
-        }
+        Commands::Delete {
+            entity,
+            reference,
+            if_exists,
+        } => handle_delete(app, entity, reference, if_exists).await,
+        Commands::Exec {
+            reference,
+            json,
+            no_console,
+        } => handle_exec(app, reference, json, piped, no_console).await,
         Commands::List {
             entity,
             path,
@@ -288,7 +298,9 @@ async fn run_command(app: &Arc<App>, command: Commands, piped: Option<Value>) ->
             use rand::RngCore;
             let mut buf = vec![0u8; bytes];
             rand::thread_rng().fill_bytes(&mut buf);
-            Ok(serde_json::json!(base64::engine::general_purpose::STANDARD.encode(&buf)))
+            Ok(serde_json::json!(
+                base64::engine::general_purpose::STANDARD.encode(&buf)
+            ))
         }
     }
 }
@@ -306,7 +318,11 @@ async fn handle_save(
     if let Entity::File = entity {
         let local = file.ok_or_else(|| anyhow!("save file requires --file <local path>"))?;
         let bytes = std::fs::read(&local).with_context(|| format!("read {local}"))?;
-        let stored = app.files().put(&reference, bytes).await.map_err(to_anyhow)?;
+        let stored = app
+            .files()
+            .put(&reference, bytes)
+            .await
+            .map_err(to_anyhow)?;
         return Ok(serde_json::json!({ "relPath": stored }));
     }
 
@@ -322,19 +338,28 @@ async fn handle_save(
             let input: DocumentInput =
                 serde_json::from_value(body).context("parse document input")?;
             Ok(serde_json::to_value(
-                app.docs().save(&path, &name, input).await.map_err(to_anyhow)?,
+                app.docs()
+                    .save(&path, &name, input)
+                    .await
+                    .map_err(to_anyhow)?,
             )?)
         }
         Entity::Action => {
             let input: ActionInput = serde_json::from_value(body).context("parse action input")?;
             Ok(serde_json::to_value(
-                app.actions().save(&path, &name, input).await.map_err(to_anyhow)?,
+                app.actions()
+                    .save(&path, &name, input)
+                    .await
+                    .map_err(to_anyhow)?,
             )?)
         }
         Entity::Type => {
             let input: TypeInput = serde_json::from_value(body).context("parse type input")?;
             Ok(serde_json::to_value(
-                app.types().save(&path, &name, input).await.map_err(to_anyhow)?,
+                app.types()
+                    .save(&path, &name, input)
+                    .await
+                    .map_err(to_anyhow)?,
             )?)
         }
         Entity::File => unreachable!(),
@@ -419,7 +444,10 @@ async fn handle_exec(
 
     if no_console {
         return Ok(serde_json::to_value(
-            app.actions().exec(&path, &name, params).await.map_err(to_anyhow)?,
+            app.actions()
+                .exec(&path, &name, params)
+                .await
+                .map_err(to_anyhow)?,
         )?);
     }
 
@@ -590,7 +618,11 @@ async fn handle_search(
     )?)
 }
 
-async fn handle_script(app: &Arc<App>, expr: Option<String>, file: Option<String>) -> Result<Value> {
+async fn handle_script(
+    app: &Arc<App>,
+    expr: Option<String>,
+    file: Option<String>,
+) -> Result<Value> {
     let source = if let Some(e) = expr {
         e
     } else if let Some(f) = file {
@@ -640,7 +672,9 @@ impl CommandRunner for AppRunner {
         let cli = Cli::try_parse_from(&argv)
             .map_err(|e| SolxError::Invalid(format!("script parse error: {e}")))?;
         if matches!(cli.command, Commands::Script { .. }) {
-            return Err(SolxError::Invalid("nested 'script' is not supported".into()));
+            return Err(SolxError::Invalid(
+                "nested 'script' is not supported".into(),
+            ));
         }
         run_command(&self.app, cli.command, piped)
             .await

@@ -85,9 +85,7 @@ async fn exec_for(
     ctx: &mut HashMap<String, Value>,
 ) -> Result<Value> {
     let items = match source {
-        ForSource::Range { start, end } => {
-            (*start..*end).map(Value::from).collect::<Vec<_>>()
-        }
+        ForSource::Range { start, end } => (*start..*end).map(Value::from).collect::<Vec<_>>(),
         ForSource::Pipeline(src) => {
             let resolved = if let Some(var_expr) = bare_var_ref(src) {
                 eval_expr(&parse_expr(&format!("${var_expr}"))?, ctx)?
@@ -117,9 +115,10 @@ async fn exec_for(
 
 async fn exec_wait(amount_src: &str, ctx: &HashMap<String, Value>) -> Result<Value> {
     let resolved = substitute_vars_in_token(amount_src, ctx);
-    let secs: f64 = resolved.trim().parse().map_err(|_| {
-        SolxError::Invalid(format!("invalid 'wait' amount: {resolved}"))
-    })?;
+    let secs: f64 = resolved
+        .trim()
+        .parse()
+        .map_err(|_| SolxError::Invalid(format!("invalid 'wait' amount: {resolved}")))?;
     if secs < 0.0 {
         return Err(SolxError::Invalid(format!(
             "'wait' amount must be non-negative, got: {secs}"
@@ -261,7 +260,10 @@ mod tests {
         assert_eq!(seen[0][..2], ["exec", "/a"]);
         assert_eq!(seen[0][2], "--json");
         let arg: Value = serde_json::from_str(&seen[0][3]).unwrap();
-        assert_eq!(arg, serde_json::json!({"state": "s 1", "n": 3, "q": "it's \"x\""}));
+        assert_eq!(
+            arg,
+            serde_json::json!({"state": "s 1", "n": 3, "q": "it's \"x\""})
+        );
         assert_eq!(seen[0].len(), 4);
     }
 
@@ -326,8 +328,7 @@ mod tests {
         let r = Recorder {
             seen: Mutex::new(Vec::new()),
         };
-        let program =
-            parse_program("for $i in 0..4; if $i > 1; json $i; endif; endfor").unwrap();
+        let program = parse_program("for $i in 0..4; if $i > 1; json $i; endif; endfor").unwrap();
         let mut ctx = HashMap::new();
         exec_block(&r, &program, &mut ctx).await.unwrap();
         let seen = r.seen.lock().unwrap();

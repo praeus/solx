@@ -15,28 +15,37 @@ use solx_surface::query::{ActionSearchQuery, ListOptions, SearchQuery};
 
 use solx_surface::entities::DocumentInput;
 
-use super::{
-    guard_executable_action, parse_input, path_or_root, require_str, to_value,
-};
+use super::{guard_executable_action, parse_input, path_or_root, require_str, to_value};
 
 // ── document CRUD ────────────────────────────────────────────────────────────
 
 pub(super) async fn doc_save(params: &Value, docs: &Arc<dyn DocManager>) -> Result<Value, String> {
     let name = require_str(params, "name")?;
     let input: DocumentInput = parse_input(params)?;
-    let doc = docs.save(path_or_root(params), name, input).await.map_err(|e| e.to_string())?;
+    let doc = docs
+        .save(path_or_root(params), name, input)
+        .await
+        .map_err(|e| e.to_string())?;
     to_value(&doc)
 }
 
 pub(super) async fn doc_get(params: &Value, docs: &Arc<dyn DocManager>) -> Result<Value, String> {
     let name = require_str(params, "name")?;
-    let doc = docs.get(path_or_root(params), name).await.map_err(|e| e.to_string())?;
+    let doc = docs
+        .get(path_or_root(params), name)
+        .await
+        .map_err(|e| e.to_string())?;
     to_value(&doc)
 }
 
-pub(super) async fn doc_delete(params: &Value, docs: &Arc<dyn DocManager>) -> Result<Value, String> {
+pub(super) async fn doc_delete(
+    params: &Value,
+    docs: &Arc<dyn DocManager>,
+) -> Result<Value, String> {
     let name = require_str(params, "name")?;
-    docs.delete(path_or_root(params), name).await.map_err(|e| e.to_string())?;
+    docs.delete(path_or_root(params), name)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(json!({ "deleted": true }))
 }
 
@@ -54,32 +63,56 @@ pub(super) async fn doc_paths(params: &Value, docs: &Arc<dyn DocManager>) -> Res
 
 // ── type CRUD ────────────────────────────────────────────────────────────────
 
-pub(super) async fn type_save(params: &Value, types: &Arc<dyn TypeManager>) -> Result<Value, String> {
+pub(super) async fn type_save(
+    params: &Value,
+    types: &Arc<dyn TypeManager>,
+) -> Result<Value, String> {
     let name = require_str(params, "name")?;
     let input: TypeInput = parse_input(params)?;
-    let ty = types.save(path_or_root(params), name, input).await.map_err(|e| e.to_string())?;
+    let ty = types
+        .save(path_or_root(params), name, input)
+        .await
+        .map_err(|e| e.to_string())?;
     to_value(&ty)
 }
 
-pub(super) async fn type_get(params: &Value, types: &Arc<dyn TypeManager>) -> Result<Value, String> {
+pub(super) async fn type_get(
+    params: &Value,
+    types: &Arc<dyn TypeManager>,
+) -> Result<Value, String> {
     let name = require_str(params, "name")?;
-    let ty = types.get(path_or_root(params), name).await.map_err(|e| e.to_string())?;
+    let ty = types
+        .get(path_or_root(params), name)
+        .await
+        .map_err(|e| e.to_string())?;
     to_value(&ty)
 }
 
-pub(super) async fn type_delete(params: &Value, types: &Arc<dyn TypeManager>) -> Result<Value, String> {
+pub(super) async fn type_delete(
+    params: &Value,
+    types: &Arc<dyn TypeManager>,
+) -> Result<Value, String> {
     let name = require_str(params, "name")?;
-    types.delete(path_or_root(params), name).await.map_err(|e| e.to_string())?;
+    types
+        .delete(path_or_root(params), name)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(json!({ "deleted": true }))
 }
 
-pub(super) async fn type_list(params: &Value, types: &Arc<dyn TypeManager>) -> Result<Value, String> {
+pub(super) async fn type_list(
+    params: &Value,
+    types: &Arc<dyn TypeManager>,
+) -> Result<Value, String> {
     let opts: ListOptions = parse_input(params)?;
     let page = types.list(opts).await.map_err(|e| e.to_string())?;
     to_value(&page)
 }
 
-pub(super) async fn type_paths(params: &Value, types: &Arc<dyn TypeManager>) -> Result<Value, String> {
+pub(super) async fn type_paths(
+    params: &Value,
+    types: &Arc<dyn TypeManager>,
+) -> Result<Value, String> {
     let opts: ListOptions = parse_input(params)?;
     let page = types.paths(opts).await.map_err(|e| e.to_string())?;
     to_value(&page)
@@ -106,7 +139,10 @@ pub(super) async fn type_paths(params: &Value, types: &Arc<dyn TypeManager>) -> 
 // there is nothing left for a guard on that route to protect. See
 // SECURITY.md — "Treat a solx instance as running with your own privileges."
 
-pub(super) async fn action_save(params: &Value, actions: &Arc<dyn ActionManager>) -> Result<Value, String> {
+pub(super) async fn action_save(
+    params: &Value,
+    actions: &Arc<dyn ActionManager>,
+) -> Result<Value, String> {
     let name = require_str(params, "name")?;
     let input: ActionInput = parse_input(params)?;
     let path = path_or_root(params);
@@ -121,7 +157,10 @@ pub(super) async fn action_save(params: &Value, actions: &Arc<dyn ActionManager>
     };
     guard_executable_action(existing, input.action_type, path, name, "create or modify")?;
 
-    let a = actions.save(path, name, input).await.map_err(|e| e.to_string())?;
+    let a = actions
+        .save(path, name, input)
+        .await
+        .map_err(|e| e.to_string())?;
     to_value(&a)
 }
 
@@ -161,7 +200,10 @@ fn exclude_hidden_flag(params: &Value) -> bool {
     params.get("exclude_hidden").and_then(Value::as_bool) == Some(true)
 }
 
-pub(super) async fn action_delete(params: &Value, actions: &Arc<dyn ActionManager>) -> Result<Value, String> {
+pub(super) async fn action_delete(
+    params: &Value,
+    actions: &Arc<dyn ActionManager>,
+) -> Result<Value, String> {
     let name = require_str(params, "name")?;
     let path = path_or_root(params);
     // Same reasoning as `action_save`: if these callers can't create or
@@ -173,17 +215,26 @@ pub(super) async fn action_delete(params: &Value, actions: &Arc<dyn ActionManage
         Err(e) => return Err(e.to_string()),
     };
     guard_executable_action(existing, None, path, name, "delete")?;
-    actions.delete(path, name).await.map_err(|e| e.to_string())?;
+    actions
+        .delete(path, name)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(json!({ "deleted": true }))
 }
 
-pub(super) async fn action_list(params: &Value, actions: &Arc<dyn ActionManager>) -> Result<Value, String> {
+pub(super) async fn action_list(
+    params: &Value,
+    actions: &Arc<dyn ActionManager>,
+) -> Result<Value, String> {
     let opts: ListOptions = parse_input(params)?;
     let page = actions.list(opts).await.map_err(|e| e.to_string())?;
     to_value(&page)
 }
 
-pub(super) async fn action_paths(params: &Value, actions: &Arc<dyn ActionManager>) -> Result<Value, String> {
+pub(super) async fn action_paths(
+    params: &Value,
+    actions: &Arc<dyn ActionManager>,
+) -> Result<Value, String> {
     let opts: ListOptions = parse_input(params)?;
     let page = actions.paths(opts).await.map_err(|e| e.to_string())?;
     to_value(&page)
@@ -191,7 +242,10 @@ pub(super) async fn action_paths(params: &Value, actions: &Arc<dyn ActionManager
 
 // ── search ───────────────────────────────────────────────────────────────────
 
-pub(super) async fn search_documents(params: &Value, docs: &Arc<dyn DocManager>) -> Result<Value, String> {
+pub(super) async fn search_documents(
+    params: &Value,
+    docs: &Arc<dyn DocManager>,
+) -> Result<Value, String> {
     let query: SearchQuery = parse_input(params)?;
     let results = docs.search(query).await.map_err(|e| e.to_string())?;
     to_value(&results)
@@ -201,7 +255,10 @@ pub(super) async fn search_documents(params: &Value, docs: &Arc<dyn DocManager>)
 /// `q` matches `path`/`name`/`caption`/`description`/`category`/`phrases`,
 /// ranked by relevance, and composes with the same `path_prefix`/
 /// `filter_field`/date filters as `entity-list-actions`.
-pub(super) async fn search_actions(params: &Value, actions: &Arc<dyn ActionManager>) -> Result<Value, String> {
+pub(super) async fn search_actions(
+    params: &Value,
+    actions: &Arc<dyn ActionManager>,
+) -> Result<Value, String> {
     let query: ActionSearchQuery = parse_input(params)?;
     let page = actions.search(query).await.map_err(|e| e.to_string())?;
     to_value(&page)

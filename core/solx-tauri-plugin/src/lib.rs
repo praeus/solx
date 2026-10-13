@@ -108,10 +108,23 @@ mod tests {
         let lib = include_str!("lib.rs");
         for cmd in COMMANDS {
             let perm = format!("\"allow-{}\"", cmd.replace('_', "-"));
-            let (home, other) = if cmd.starts_with("config_") { (config, default) } else { (default, config) };
-            assert!(home.contains(&perm), "{perm} is missing from its permission set");
-            assert!(!other.contains(&perm), "{perm} is in the wrong permission set");
-            assert!(lib.contains(&format!("commands::{cmd},")), "generate_handler! is missing {cmd}");
+            let (home, other) = if cmd.starts_with("config_") {
+                (config, default)
+            } else {
+                (default, config)
+            };
+            assert!(
+                home.contains(&perm),
+                "{perm} is missing from its permission set"
+            );
+            assert!(
+                !other.contains(&perm),
+                "{perm} is in the wrong permission set"
+            );
+            assert!(
+                lib.contains(&format!("commands::{cmd},")),
+                "generate_handler! is missing {cmd}"
+            );
         }
         let granted = default.matches("\"allow-").count() + config.matches("\"allow-").count();
         assert_eq!(granted, COMMANDS.len());

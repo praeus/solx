@@ -47,7 +47,11 @@ pub(crate) fn nested_url(base_url: &str, resource: &str, rel: &str) -> Result<Ur
 
 /// Build `{base_url}/{resource}` for a collection-level route.
 pub(crate) fn collection_url(base_url: &str, resource: &str) -> Result<Url, SolxError> {
-    let joined = format!("{}/{}", base_url.trim_end_matches('/'), resource.trim_start_matches('/'));
+    let joined = format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        resource.trim_start_matches('/')
+    );
     Url::parse(&joined).map_err(|e| SolxError::Invalid(format!("invalid server URL {joined}: {e}")))
 }
 
@@ -151,7 +155,12 @@ pub(crate) async fn get_bytes(
     token: &str,
     url: Url,
 ) -> Result<Vec<u8>, SolxError> {
-    let resp = http.get(url).bearer_auth(token).send().await.map_err(transport_err)?;
+    let resp = http
+        .get(url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(transport_err)?;
     read_bytes_response(resp).await
 }
 
@@ -177,7 +186,10 @@ mod tests {
     #[test]
     fn percent_encodes_awkward_names() {
         let u = entity_url("http://127.0.0.1:9000", "docs", "/a b", "100% #1?").unwrap();
-        assert_eq!(u.as_str(), "http://127.0.0.1:9000/docs/a%20b/100%25%20%231%3F");
+        assert_eq!(
+            u.as_str(),
+            "http://127.0.0.1:9000/docs/a%20b/100%25%20%231%3F"
+        );
     }
 
     #[test]

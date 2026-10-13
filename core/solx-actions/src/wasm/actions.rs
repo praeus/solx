@@ -63,22 +63,24 @@ pub async fn exec(
     // a wasmtime panic would unwind into whichever request happened to be
     // driving the future. `catch_unwind` keeps the old contract without
     // detaching the task, so cancellation still propagates into the guest.
-    let outcome = match tokio::time::timeout(timeout, std::panic::AssertUnwindSafe(run).catch_unwind()).await {
-        Ok(res) => res,
-        Err(_) => {
-            // Dropping the future here unwinds the fiber and tears down the
-            // store; the guest does not keep running in the background.
-            return Ok(ActionExecResult {
-                action: action_ref,
-                result: Value::Null,
-                success: false,
-                message: Some(format!(
-                    "wasm action timed out after {}s (fn_name={fn_name_owned:?})",
-                    timeout.as_secs()
-                )),
-            });
-        }
-    };
+    let outcome =
+        match tokio::time::timeout(timeout, std::panic::AssertUnwindSafe(run).catch_unwind()).await
+        {
+            Ok(res) => res,
+            Err(_) => {
+                // Dropping the future here unwinds the fiber and tears down the
+                // store; the guest does not keep running in the background.
+                return Ok(ActionExecResult {
+                    action: action_ref,
+                    result: Value::Null,
+                    success: false,
+                    message: Some(format!(
+                        "wasm action timed out after {}s (fn_name={fn_name_owned:?})",
+                        timeout.as_secs()
+                    )),
+                });
+            }
+        };
 
     outcome.unwrap_or_else(|e| {
         let msg = e
@@ -116,8 +118,11 @@ async fn run_guest(
     let mut linker = Linker::<HostState>::new(eng);
     wasmtime_wasi::p2::add_to_linker_async(&mut linker)
         .map_err(|e| SolxError::Exec(format!("failed to link WASI: {e:#}")))?;
-    CustomAction::add_to_linker::<HostState, HasSelf<HostState>>(&mut linker, |s: &mut HostState| s)
-        .map_err(|e| SolxError::Exec(format!("failed to link custom-action host: {e:#}")))?;
+    CustomAction::add_to_linker::<HostState, HasSelf<HostState>>(
+        &mut linker,
+        |s: &mut HostState| s,
+    )
+    .map_err(|e| SolxError::Exec(format!("failed to link custom-action host: {e:#}")))?;
     let instance = CustomAction::instantiate_async(&mut store, &component, &linker)
         .await
         .map_err(|e| SolxError::Exec(format!("failed to instantiate component: {e:#}")))?;

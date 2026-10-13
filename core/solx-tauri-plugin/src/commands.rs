@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use serde::Serialize;
-use solx_config::ConfigService;
 use serde_json::{json, Value};
+use solx_config::ConfigService;
 use solx_surface::entities::{
     Action, ActionExecResult, ActionInput, Document, DocumentInput, TypeEntity, TypeInput,
 };
@@ -53,14 +53,22 @@ pub(crate) async fn types_save(
 
 /// `GET /types/{*ref}`
 #[command]
-pub(crate) async fn types_get(state: State<'_, SolxState>, path: String, name: String) -> Result<TypeEntity> {
+pub(crate) async fn types_get(
+    state: State<'_, SolxState>,
+    path: String,
+    name: String,
+) -> Result<TypeEntity> {
     let (path, name) = entity(&path, &name)?;
     state.app()?.types().get(&path, &name).await
 }
 
 /// `DELETE /types/{*ref}`
 #[command]
-pub(crate) async fn types_delete(state: State<'_, SolxState>, path: String, name: String) -> Result<()> {
+pub(crate) async fn types_delete(
+    state: State<'_, SolxState>,
+    path: String,
+    name: String,
+) -> Result<()> {
     let (path, name) = entity(&path, &name)?;
     state.app()?.types().delete(&path, &name).await
 }
@@ -85,7 +93,10 @@ pub(crate) async fn types_paths(
 
 /// No route of its own — `@solx/http` resolves via `GET /types/{*ref}`.
 #[command]
-pub(crate) async fn types_resolve(state: State<'_, SolxState>, type_ref: String) -> Result<TypeEntity> {
+pub(crate) async fn types_resolve(
+    state: State<'_, SolxState>,
+    type_ref: String,
+) -> Result<TypeEntity> {
     state.app()?.types().resolve(&type_ref).await
 }
 
@@ -115,21 +126,32 @@ pub(crate) async fn docs_save(
 
 /// `GET /docs/{*ref}`
 #[command]
-pub(crate) async fn docs_get(state: State<'_, SolxState>, path: String, name: String) -> Result<Document> {
+pub(crate) async fn docs_get(
+    state: State<'_, SolxState>,
+    path: String,
+    name: String,
+) -> Result<Document> {
     let (path, name) = entity(&path, &name)?;
     state.app()?.docs().get(&path, &name).await
 }
 
 /// `DELETE /docs/{*ref}`
 #[command]
-pub(crate) async fn docs_delete(state: State<'_, SolxState>, path: String, name: String) -> Result<()> {
+pub(crate) async fn docs_delete(
+    state: State<'_, SolxState>,
+    path: String,
+    name: String,
+) -> Result<()> {
     let (path, name) = entity(&path, &name)?;
     state.app()?.docs().delete(&path, &name).await
 }
 
 /// `GET /docs`
 #[command]
-pub(crate) async fn docs_list(state: State<'_, SolxState>, opts: Option<ListOptions>) -> Result<Page<Document>> {
+pub(crate) async fn docs_list(
+    state: State<'_, SolxState>,
+    opts: Option<ListOptions>,
+) -> Result<Page<Document>> {
     state.app()?.docs().list(opts.unwrap_or_default()).await
 }
 
@@ -167,21 +189,32 @@ pub(crate) async fn actions_save(
 
 /// `GET /actions/{*ref}`
 #[command]
-pub(crate) async fn actions_get(state: State<'_, SolxState>, path: String, name: String) -> Result<Action> {
+pub(crate) async fn actions_get(
+    state: State<'_, SolxState>,
+    path: String,
+    name: String,
+) -> Result<Action> {
     let (path, name) = entity(&path, &name)?;
     state.app()?.actions().get(&path, &name).await
 }
 
 /// `DELETE /actions/{*ref}`
 #[command]
-pub(crate) async fn actions_delete(state: State<'_, SolxState>, path: String, name: String) -> Result<()> {
+pub(crate) async fn actions_delete(
+    state: State<'_, SolxState>,
+    path: String,
+    name: String,
+) -> Result<()> {
     let (path, name) = entity(&path, &name)?;
     state.app()?.actions().delete(&path, &name).await
 }
 
 /// `GET /actions`
 #[command]
-pub(crate) async fn actions_list(state: State<'_, SolxState>, opts: Option<ListOptions>) -> Result<Page<Action>> {
+pub(crate) async fn actions_list(
+    state: State<'_, SolxState>,
+    opts: Option<ListOptions>,
+) -> Result<Page<Action>> {
     state.app()?.actions().list(opts.unwrap_or_default()).await
 }
 
@@ -200,7 +233,11 @@ pub(crate) async fn actions_search(
     state: State<'_, SolxState>,
     query: Option<ActionSearchQuery>,
 ) -> Result<Page<Action>> {
-    state.app()?.actions().search(query.unwrap_or_default()).await
+    state
+        .app()?
+        .actions()
+        .search(query.unwrap_or_default())
+        .await
 }
 
 /// `POST /actions/{*ref}` — `params` defaults to `{}`, like an empty POST body.
@@ -227,15 +264,21 @@ pub(crate) async fn files_put(state: State<'_, SolxState>, request: Request<'_>)
         .headers()
         .get(FILE_PATH_HEADER)
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| SolxError::Invalid(format!("files_put: missing {FILE_PATH_HEADER} header")))?;
+        .ok_or_else(|| {
+            SolxError::Invalid(format!("files_put: missing {FILE_PATH_HEADER} header"))
+        })?;
     let rel_path = percent_encoding::percent_decode_str(rel_path)
         .decode_utf8()
-        .map_err(|e| SolxError::Invalid(format!("files_put: {FILE_PATH_HEADER} is not UTF-8: {e}")))?
+        .map_err(|e| {
+            SolxError::Invalid(format!("files_put: {FILE_PATH_HEADER} is not UTF-8: {e}"))
+        })?
         .into_owned();
     let bytes = match request.body() {
         InvokeBody::Raw(bytes) => bytes.clone(),
         InvokeBody::Json(_) => {
-            return Err(SolxError::Invalid("files_put: expected a raw byte body".into()));
+            return Err(SolxError::Invalid(
+                "files_put: expected a raw byte body".into(),
+            ));
         }
     };
     state.app()?.files().put(&rel_path, bytes).await
@@ -256,8 +299,15 @@ pub(crate) async fn files_delete(state: State<'_, SolxState>, rel_path: String) 
 
 /// `GET /files?prefix=` — the bare path list (HTTP wraps it as `{paths}`).
 #[command]
-pub(crate) async fn files_list(state: State<'_, SolxState>, prefix: Option<String>) -> Result<Vec<String>> {
-    state.app()?.files().list(prefix.as_deref().unwrap_or("")).await
+pub(crate) async fn files_list(
+    state: State<'_, SolxState>,
+    prefix: Option<String>,
+) -> Result<Vec<String>> {
+    state
+        .app()?
+        .files()
+        .list(prefix.as_deref().unwrap_or(""))
+        .await
 }
 
 // ── host ── (no HTTP equivalent, beyond `/health`)
@@ -288,7 +338,9 @@ pub(crate) fn info(state: State<'_, SolxState>) -> HostInfo {
         mode,
         client: matches!(state.backend, Backend::Client { .. }),
         version: env!("CARGO_PKG_VERSION"),
-        server_url: app.as_ref().and_then(|a| a.remote_url().map(str::to_string)),
+        server_url: app
+            .as_ref()
+            .and_then(|a| a.remote_url().map(str::to_string)),
         embedded_server: state.embedded(),
     }
 }
@@ -297,18 +349,31 @@ pub(crate) fn info(state: State<'_, SolxState>) -> HostInfo {
 /// (one cheap authenticated call) before it's persisted, so a wrong URL or
 /// token is reported here rather than on the next unrelated request.
 #[command]
-pub(crate) async fn connect(state: State<'_, SolxState>, server_url: String, token: String) -> Result<()> {
+pub(crate) async fn connect(
+    state: State<'_, SolxState>,
+    server_url: String,
+    token: String,
+) -> Result<()> {
     let Backend::Client { config } = &state.backend else {
-        return Err(SolxError::Invalid("this build runs solx locally; there is nothing to connect to".into()));
+        return Err(SolxError::Invalid(
+            "this build runs solx locally; there is nothing to connect to".into(),
+        ));
     };
     let server_url = server_url.trim().trim_end_matches('/').to_string();
     let token = token.trim().to_string();
     if server_url.is_empty() || token.is_empty() {
-        return Err(SolxError::Invalid("both a server URL and a token are required".into()));
+        return Err(SolxError::Invalid(
+            "both a server URL and a token are required".into(),
+        ));
     }
     let app = solx_manager::App::remote(config.clone(), server_url.clone(), token.clone())
         .map_err(|e| SolxError::Config(format!("{e:#}")))?;
-    app.docs().list(ListOptions { limit: Some(1), ..Default::default() }).await?;
+    app.docs()
+        .list(ListOptions {
+            limit: Some(1),
+            ..Default::default()
+        })
+        .await?;
 
     config.patch(json!({ "server_url": server_url, "server_token": token }))?;
     state.replace(Some(app));
@@ -319,7 +384,9 @@ pub(crate) async fn connect(state: State<'_, SolxState>, server_url: String, tok
 #[command]
 pub(crate) fn disconnect(state: State<'_, SolxState>) -> Result<()> {
     let Backend::Client { config } = &state.backend else {
-        return Err(SolxError::Invalid("this build runs solx locally; there is nothing to disconnect".into()));
+        return Err(SolxError::Invalid(
+            "this build runs solx locally; there is nothing to disconnect".into(),
+        ));
     };
     config.mutate(|obj| {
         obj.remove("server_url");
@@ -419,7 +486,11 @@ pub(crate) fn config_update(
         .filter(|k| solx_config::RESTART_KEYS.contains(&k.as_str()))
         .cloned()
         .collect();
-    Ok(ConfigUpdateResult { config: config_view(&config), changed_keys, restart_required })
+    Ok(ConfigUpdateResult {
+        config: config_view(&config),
+        changed_keys,
+        restart_required,
+    })
 }
 
 /// Build the client-mode `App` from a previously persisted URL/token, if any.
@@ -437,8 +508,14 @@ mod tests {
     #[test]
     fn entity_normalizes_like_a_url_ref() {
         assert_eq!(entity("/", "note").unwrap(), ("/".into(), "note".into()));
-        assert_eq!(entity("/research/ai/", "note").unwrap(), ("/research/ai".into(), "note".into()));
-        assert_eq!(entity("research/ai", "note").unwrap(), ("/research/ai".into(), "note".into()));
+        assert_eq!(
+            entity("/research/ai/", "note").unwrap(),
+            ("/research/ai".into(), "note".into())
+        );
+        assert_eq!(
+            entity("research/ai", "note").unwrap(),
+            ("/research/ai".into(), "note".into())
+        );
         assert!(entity("/a", "").is_err());
         assert!(entity("/a", "b/c").is_err());
         assert!(entity("/a/../b", "c").is_err());

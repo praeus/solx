@@ -34,7 +34,7 @@
 //! import's future returns `Pending` the fiber suspends and the OS thread
 //! goes back to the executor.
 
-mod host;
 pub mod actions;
+mod host;
 
 pub use actions::exec;

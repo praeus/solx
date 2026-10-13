@@ -5,7 +5,9 @@ use solx_surface::error::Result;
 use solx_surface::managers::ActionManager;
 use solx_surface::query::{ActionSearchQuery, ListOptions, Page, PathFacet};
 
-use crate::http::{collection_url, delete, entity_url, get_json, get_json_query, post_json, put_json};
+use crate::http::{
+    collection_url, delete, entity_url, get_json, get_json_query, post_json, put_json,
+};
 
 /// HTTP-proxy [`ActionManager`] talking to a `solx-server`. `exec()` runs
 /// entirely server-side — including WASM execution and every `Internal`

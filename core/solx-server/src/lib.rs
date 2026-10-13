@@ -26,10 +26,10 @@ pub mod state;
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use axum::http::HeaderValue;
 use axum::middleware;
 use axum::routing::get;
 use axum::Router;
-use axum::http::HeaderValue;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 use state::AppState;
@@ -60,8 +60,10 @@ pub fn build_router(state: AppState) -> Router {
 /// reaches `require_bearer`. That matters for ordinary calls too, since
 /// browsers always preflight `PUT`/`DELETE`.
 pub fn build_router_with_cors(state: AppState, cors: CorsLayer) -> Router {
-    let protected = routes::router(&state)
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_bearer));
+    let protected = routes::router(&state).route_layer(middleware::from_fn_with_state(
+        state.clone(),
+        auth::require_bearer,
+    ));
 
     Router::new()
         // Stays unauthenticated, and deliberately reports only what the
@@ -135,7 +137,10 @@ pub async fn serve(
     let bound = listener.local_addr()?;
     let router = build_router_with_cors(state, cors);
     tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, router).with_graceful_shutdown(shutdown).await {
+        if let Err(e) = axum::serve(listener, router)
+            .with_graceful_shutdown(shutdown)
+            .await
+        {
             tracing::warn!("embedded solx-server on {bound} exited: {e}");
         }
     });
@@ -152,13 +157,20 @@ pub fn bind_addr(
 ) -> anyhow::Result<SocketAddr> {
     let host = match host {
         Some(host) => host,
-        None => match snap.server_host.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        None => match snap
+            .server_host
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             Some(s) => s
                 .parse::<IpAddr>()
                 .map_err(|_| anyhow::anyhow!("config server_host {s:?} is not an IP address"))?,
             None => IpAddr::V4(Ipv4Addr::LOCALHOST),
         },
     };
-    let port = port.or(snap.server_port).unwrap_or(solx_config::DEFAULT_SERVER_PORT);
+    let port = port
+        .or(snap.server_port)
+        .unwrap_or(solx_config::DEFAULT_SERVER_PORT);
     Ok(SocketAddr::new(host, port))
 }

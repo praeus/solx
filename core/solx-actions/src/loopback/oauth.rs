@@ -185,7 +185,11 @@ async fn callback_handler(
     // but we log a warning and fire no sender.
     let fired = match q.state.as_deref() {
         Some(state_value) if !state_value.is_empty() => {
-            let tx_opt = state.pending.lock().ok().and_then(|mut p| p.remove(state_value));
+            let tx_opt = state
+                .pending
+                .lock()
+                .ok()
+                .and_then(|mut p| p.remove(state_value));
             match tx_opt {
                 Some(tx) => {
                     if result.succeeded() {
@@ -314,10 +318,7 @@ pub fn router(state: Arc<LoopbackState>) -> Router {
 
 /// Bind to `127.0.0.1:{port}` and serve the loopback until the process
 /// exits or the listener fails.
-pub async fn serve_loopback(
-    state: Arc<LoopbackState>,
-    addr: SocketAddr,
-) -> std::io::Result<()> {
+pub async fn serve_loopback(state: Arc<LoopbackState>, addr: SocketAddr) -> std::io::Result<()> {
     let app = router(state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!(%addr, "oauth loopback listening");
@@ -356,7 +357,9 @@ where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
     let app = router(state);
-    axum::serve(listener, app).with_graceful_shutdown(shutdown).await
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
+        .await
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -367,10 +370,7 @@ mod tests {
 
     #[test]
     fn redirect_uri_includes_callback_path() {
-        assert_eq!(
-            redirect_uri(8765),
-            "http://127.0.0.1:8765/callback"
-        );
+        assert_eq!(redirect_uri(8765), "http://127.0.0.1:8765/callback");
     }
 
     #[test]
@@ -404,7 +404,10 @@ mod tests {
     async fn register_and_deregister_round_trip() {
         let state = LoopbackState::new();
         let rx = state.register("state-1".into()).unwrap();
-        assert!(state.deregister("state-1").is_some(), "should remove the registered sender");
+        assert!(
+            state.deregister("state-1").is_some(),
+            "should remove the registered sender"
+        );
         // rx should resolve to Err because the sender was dropped
         let outcome = rx.await;
         assert!(outcome.is_err(), "rx should fail when sender is dropped");
@@ -437,12 +440,9 @@ mod tests {
             error: None,
             error_description: None,
         };
-        let resp = callback_handler(
-            AxumState(Arc::clone(&state)),
-            Query(q),
-        )
-        .await
-        .into_response();
+        let resp = callback_handler(AxumState(Arc::clone(&state)), Query(q))
+            .await
+            .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let result = rx.await.expect("sender should yield");
@@ -536,9 +536,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let redirect_uri = redirect_uri(addr.port());
-        let url = format!(
-            "{redirect_uri}?code=the_code&state=e2e-state"
-        );
+        let url = format!("{redirect_uri}?code=the_code&state=e2e-state");
         let resp = reqwest::get(&url).await.expect("GET /callback over HTTP");
         assert!(resp.status().is_success(), "callback should respond 2xx");
         let body = resp.text().await.unwrap();

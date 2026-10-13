@@ -247,7 +247,10 @@ impl SolxMcpServer {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    async fn explore_list_all(&self, args: &Map<String, Value>) -> Result<CallToolResult, ErrorData> {
+    async fn explore_list_all(
+        &self,
+        args: &Map<String, Value>,
+    ) -> Result<CallToolResult, ErrorData> {
         let all = self.all_actions(self.effective_prefix(args)).await?;
         let start = args
             .get("cursor")
@@ -366,9 +369,10 @@ impl ServerHandler for SolxMcpServer {
         // progress updates (attached a `progressToken`) — most callers of
         // short builtin actions won't, and skipping this is free for them.
         let tail_handle = match (progress_token, full_ref(&path, &name)) {
-            (Some(token), Ok(action_ref)) => {
-                Some(self.spawn_console_tail(action_ref, token, ctx.peer.clone()).await)
-            }
+            (Some(token), Ok(action_ref)) => Some(
+                self.spawn_console_tail(action_ref, token, ctx.peer.clone())
+                    .await,
+            ),
             _ => None,
         };
 
@@ -493,9 +497,13 @@ async fn send_progress(
                 text.push(' ');
                 text.push_str(&data.to_string());
             }
-            let param = ProgressNotificationParam::new(token.clone(), seq as f64).with_message(text);
+            let param =
+                ProgressNotificationParam::new(token.clone(), seq as f64).with_message(text);
             let _ = peer.notify_progress(param).await;
         }
     }
-    res.result.get("next_cursor").and_then(Value::as_i64).unwrap_or(fallback_cursor)
+    res.result
+        .get("next_cursor")
+        .and_then(Value::as_i64)
+        .unwrap_or(fallback_cursor)
 }

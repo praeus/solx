@@ -138,7 +138,10 @@ struct Stamp {
 }
 
 fn stamp_of(meta: &fs::Metadata) -> Option<Stamp> {
-    Some(Stamp { mtime: meta.modified().ok()?, len: meta.len() })
+    Some(Stamp {
+        mtime: meta.modified().ok()?,
+        len: meta.len(),
+    })
 }
 
 struct Cached {
@@ -150,7 +153,11 @@ struct Cached {
 
 impl Cached {
     fn new(value: Value, stamp: Option<Stamp>) -> Self {
-        Cached { value, stamp, loaded_at: SystemTime::now() }
+        Cached {
+            value,
+            stamp,
+            loaded_at: SystemTime::now(),
+        }
     }
 
     /// Whether this cache still describes a file currently stamped `disk`.
@@ -330,13 +337,19 @@ impl ConfigService {
     }
 
     pub fn docs_db_path(&self) -> PathBuf {
-        self.db_dir()
-            .join(self.snapshot().docs_db.unwrap_or_else(|| "solx-docs.db".into()))
+        self.db_dir().join(
+            self.snapshot()
+                .docs_db
+                .unwrap_or_else(|| "solx-docs.db".into()),
+        )
     }
 
     pub fn actions_db_path(&self) -> PathBuf {
-        self.db_dir()
-            .join(self.snapshot().actions_db.unwrap_or_else(|| "solx-actions.db".into()))
+        self.db_dir().join(
+            self.snapshot()
+                .actions_db
+                .unwrap_or_else(|| "solx-actions.db".into()),
+        )
     }
 
     /// Separate physical file from `actions_db_path()` — consoles and
@@ -348,8 +361,11 @@ impl ConfigService {
     }
 
     pub fn types_db_path(&self) -> PathBuf {
-        self.db_dir()
-            .join(self.snapshot().types_db.unwrap_or_else(|| "solx-types.db".into()))
+        self.db_dir().join(
+            self.snapshot()
+                .types_db
+                .unwrap_or_else(|| "solx-types.db".into()),
+        )
     }
 
     pub fn files_dir(&self) -> PathBuf {
@@ -639,7 +655,8 @@ impl ConfigService {
                 obj.remove(*legacy);
             }
             validate(&Value::Object(obj.clone()))?;
-            let keys: std::collections::BTreeSet<&String> = before.keys().chain(obj.keys()).collect();
+            let keys: std::collections::BTreeSet<&String> =
+                before.keys().chain(obj.keys()).collect();
             changed = keys
                 .into_iter()
                 .filter(|k| before.get(*k) != obj.get(*k))
@@ -698,7 +715,10 @@ pub const RESTART_KEYS: &[&str] = &[
 ];
 
 /// Legacy key pairs `update` folds together: (current, former).
-const LEGACY_KEYS: &[(&str, &str)] = &[(KEY_BASE_URLS, KEY_BASE_URLS_LEGACY), ("tool_exclude", "mcp_exclude")];
+const LEGACY_KEYS: &[(&str, &str)] = &[
+    (KEY_BASE_URLS, KEY_BASE_URLS_LEGACY),
+    ("tool_exclude", "mcp_exclude"),
+];
 
 /// Strictly validate a whole raw config object.
 ///
@@ -713,7 +733,12 @@ pub fn validate(value: &Value) -> Result<SolxConfig> {
         .map_err(|e| SolxError::Validation(format!("solx-config.json: {e}")))?;
     let invalid = |msg: String| Err(SolxError::Validation(msg));
 
-    if let Some(host) = cfg.server_host.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(host) = cfg
+        .server_host
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         if host.parse::<std::net::IpAddr>().is_err() {
             return invalid(format!("server_host {host:?} is not an IP address"));
         }
@@ -723,7 +748,9 @@ pub fn validate(value: &Value) -> Result<SolxConfig> {
     }
     for origin in cfg.server_cors_origins.iter().flatten() {
         if origin.trim().is_empty() || !origin.trim().chars().all(|c| c.is_ascii_graphic()) {
-            return invalid(format!("server_cors_origins entry {origin:?} is not a valid origin"));
+            return invalid(format!(
+                "server_cors_origins entry {origin:?} is not a valid origin"
+            ));
         }
     }
     for (key, def) in cfg.command_actions.iter().flatten() {
@@ -742,8 +769,16 @@ pub fn validate(value: &Value) -> Result<SolxConfig> {
             ));
         }
     }
-    let rules = merged_exclude(&cfg).into_iter().map(|r| ("tool_exclude", r));
-    let rules = rules.chain(cfg.tool_destructive.clone().unwrap_or_default().into_iter().map(|r| ("tool_destructive", r)));
+    let rules = merged_exclude(&cfg)
+        .into_iter()
+        .map(|r| ("tool_exclude", r));
+    let rules = rules.chain(
+        cfg.tool_destructive
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| ("tool_destructive", r)),
+    );
     for (field, rule) in rules {
         if rule.path.trim().is_empty() {
             return invalid(format!("{field} rules need a non-empty path"));
@@ -757,12 +792,20 @@ pub fn validate(value: &Value) -> Result<SolxConfig> {
 /// check so this crate doesn't take a URL-parsing dependency.
 fn is_base_url(prefix: &str) -> bool {
     let rest = match prefix.trim().split_once("://") {
-        Some((scheme, rest)) if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") => rest,
+        Some((scheme, rest))
+            if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") =>
+        {
+            rest
+        }
         _ => return false,
     };
     let host = rest.split(['/', '?', '#']).next().unwrap_or("");
     let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
-    let host = if host.starts_with('[') { host } else { host.split(':').next().unwrap_or("") };
+    let host = if host.starts_with('[') {
+        host
+    } else {
+        host.split(':').next().unwrap_or("")
+    };
     !host.is_empty() && !host.chars().any(char::is_whitespace)
 }
 
@@ -775,9 +818,7 @@ fn read_file(path: &Path) -> Result<(Value, Option<Stamp>)> {
     match fs::read_to_string(path) {
         Ok(s) if !s.trim().is_empty() => Ok((serde_json::from_str(&s)?, stamp)),
         Ok(_) => Ok((Value::Object(Map::new()), stamp)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Ok((Value::Object(Map::new()), None))
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((Value::Object(Map::new()), None)),
         Err(e) => Err(e.into()),
     }
 }
@@ -810,7 +851,8 @@ mod tests {
         let cfg = ConfigService::open_in(dir.path()).unwrap();
         assert_eq!(cfg.snapshot().data_directory.as_deref(), Some("/x"));
 
-        cfg.set("files_directory", Value::String("/f".into())).unwrap();
+        cfg.set("files_directory", Value::String("/f".into()))
+            .unwrap();
 
         // Unknown field must survive the write.
         let raw = cfg.raw_snapshot();
@@ -824,7 +866,8 @@ mod tests {
         let a = ConfigService::open_in(dir.path()).unwrap();
         let b = ConfigService::open_in(dir.path()).unwrap();
 
-        a.set("data_directory", Value::String("/from-a".into())).unwrap();
+        a.set("data_directory", Value::String("/from-a".into()))
+            .unwrap();
         // b must observe a's write on next read (simulates a second process).
         // Ensure mtime differs even on coarse-resolution clocks.
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -840,7 +883,8 @@ mod tests {
         let b = ConfigService::open_in(dir.path()).unwrap();
 
         for value in ["/skip=10", "/skip=20", "/skip=30"] {
-            a.set("data_directory", Value::String(value.into())).unwrap();
+            a.set("data_directory", Value::String(value.into()))
+                .unwrap();
             assert_eq!(b.snapshot().data_directory.as_deref(), Some(value));
         }
     }
@@ -886,7 +930,10 @@ mod tests {
 
         cfg.set_allowed_base_urls(vec!["https://hooks.example.com".into()])
             .unwrap();
-        assert_eq!(cfg.allowed_base_urls(), vec!["https://hooks.example.com".to_string()]);
+        assert_eq!(
+            cfg.allowed_base_urls(),
+            vec!["https://hooks.example.com".to_string()]
+        );
     }
 
     /// A config written before the rename must keep working untouched — the
@@ -896,12 +943,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = ConfigService::open_in(dir.path()).unwrap();
 
-        cfg.set("allowed_webhook_base_urls", serde_json::json!(["https://legacy.example.com/"]))
-            .unwrap();
-        assert_eq!(cfg.allowed_base_urls(), vec!["https://legacy.example.com/".to_string()]);
+        cfg.set(
+            "allowed_webhook_base_urls",
+            serde_json::json!(["https://legacy.example.com/"]),
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.allowed_base_urls(),
+            vec!["https://legacy.example.com/".to_string()]
+        );
 
-        cfg.set("allowed_base_urls", serde_json::json!(["https://current.example.com/"]))
-            .unwrap();
+        cfg.set(
+            "allowed_base_urls",
+            serde_json::json!(["https://current.example.com/"]),
+        )
+        .unwrap();
         let merged = cfg.allowed_base_urls();
         assert!(merged.contains(&"https://current.example.com/".to_string()));
         assert!(merged.contains(&"https://legacy.example.com/".to_string()));
@@ -915,19 +971,30 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = ConfigService::open_in(dir.path()).unwrap();
 
-        cfg.set("allowed_webhook_base_urls", serde_json::json!(["https://legacy.example.com/"]))
+        cfg.set(
+            "allowed_webhook_base_urls",
+            serde_json::json!(["https://legacy.example.com/"]),
+        )
+        .unwrap();
+        cfg.add_allowed_base_url("https://added.example.com/")
             .unwrap();
-        cfg.add_allowed_base_url("https://added.example.com/").unwrap();
 
         let snap = cfg.snapshot();
-        assert!(snap.allowed_webhook_base_urls.is_none(), "legacy key should be gone");
+        assert!(
+            snap.allowed_webhook_base_urls.is_none(),
+            "legacy key should be gone"
+        );
         let current = snap.allowed_base_urls.unwrap();
         assert!(current.contains(&"https://legacy.example.com/".to_string()));
         assert!(current.contains(&"https://added.example.com/".to_string()));
 
         // The fold is what makes this revoke reach a legacy-written prefix.
-        cfg.remove_allowed_base_url("https://legacy.example.com/").unwrap();
-        assert_eq!(cfg.allowed_base_urls(), vec!["https://added.example.com/".to_string()]);
+        cfg.remove_allowed_base_url("https://legacy.example.com/")
+            .unwrap();
+        assert_eq!(
+            cfg.allowed_base_urls(),
+            vec!["https://added.example.com/".to_string()]
+        );
     }
 
     /// Package rows recorded before the rename must still deserialize, or
@@ -939,7 +1006,10 @@ mod tests {
             "granted_webhook_prefixes": ["https://legacy.example.com/"],
         }))
         .unwrap();
-        assert_eq!(row.granted_base_urls, vec!["https://legacy.example.com/".to_string()]);
+        assert_eq!(
+            row.granted_base_urls,
+            vec!["https://legacy.example.com/".to_string()]
+        );
     }
 
     #[test]
@@ -971,7 +1041,8 @@ mod tests {
     #[test]
     fn tool_exclude_reads_the_new_key() {
         let (_d, c) = svc();
-        c.set("tool_exclude", serde_json::json!([{ "path": "/a" }])).unwrap();
+        c.set("tool_exclude", serde_json::json!([{ "path": "/a" }]))
+            .unwrap();
         let rules = c.tool_exclude();
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].path, "/a");
@@ -982,7 +1053,8 @@ mod tests {
         // An existing solx-config.json must keep working untouched — nothing
         // rewrites the file, so the old key has to stay readable indefinitely.
         let (_d, c) = svc();
-        c.set("mcp_exclude", serde_json::json!([{ "path": "/legacy" }])).unwrap();
+        c.set("mcp_exclude", serde_json::json!([{ "path": "/legacy" }]))
+            .unwrap();
         let rules = c.tool_exclude();
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].path, "/legacy");
@@ -996,8 +1068,10 @@ mod tests {
         // adding the new key beside the old one would silently blank the
         // whole config instead of merging the lists.
         let (_d, c) = svc();
-        c.set("tool_exclude", serde_json::json!([{ "path": "/new" }])).unwrap();
-        c.set("mcp_exclude", serde_json::json!([{ "path": "/legacy" }])).unwrap();
+        c.set("tool_exclude", serde_json::json!([{ "path": "/new" }]))
+            .unwrap();
+        c.set("mcp_exclude", serde_json::json!([{ "path": "/legacy" }]))
+            .unwrap();
 
         let paths: Vec<String> = c.tool_exclude().into_iter().map(|r| r.path).collect();
         assert_eq!(paths.len(), 2, "{paths:?}");
@@ -1014,7 +1088,8 @@ mod tests {
     #[test]
     fn tool_policy_sees_rules_from_either_key() {
         let (_d, c) = svc();
-        c.set("mcp_exclude", serde_json::json!([{ "path": "/legacy" }])).unwrap();
+        c.set("mcp_exclude", serde_json::json!([{ "path": "/legacy" }]))
+            .unwrap();
         let policy = c.tool_policy();
         let a: solx_surface::entities::Action = serde_json::from_value(serde_json::json!({
             "id": "00000000-0000-0000-0000-000000000000",
@@ -1035,10 +1110,16 @@ mod tests {
     #[test]
     fn update_rejects_a_bad_value_and_leaves_the_file_untouched() {
         let (_d, c) = svc();
-        c.set("allowed_base_urls", serde_json::json!(["https://a.example"])).unwrap();
+        c.set(
+            "allowed_base_urls",
+            serde_json::json!(["https://a.example"]),
+        )
+        .unwrap();
         let before = fs::read_to_string(c.config_path()).unwrap();
 
-        let err = c.update(changes(serde_json::json!({ "server_port": "abc" }))).unwrap_err();
+        let err = c
+            .update(changes(serde_json::json!({ "server_port": "abc" })))
+            .unwrap_err();
         assert!(matches!(err, SolxError::Validation(_)), "{err:?}");
         for bad in [
             serde_json::json!({ "server_host": "not-an-ip" }),
@@ -1047,7 +1128,10 @@ mod tests {
             serde_json::json!({ "command_actions": { "x": { "command": " " } } }),
             serde_json::json!({ "tool_destructive": [{ "path": "" }] }),
         ] {
-            assert!(c.update(changes(bad.clone())).is_err(), "{bad} should be rejected");
+            assert!(
+                c.update(changes(bad.clone())).is_err(),
+                "{bad} should be rejected"
+            );
         }
         assert_eq!(fs::read_to_string(c.config_path()).unwrap(), before);
     }
@@ -1066,33 +1150,55 @@ mod tests {
             })))
             .unwrap();
         let changed: Vec<&str> = changed.iter().map(String::as_str).collect();
-        assert_eq!(changed, ["console_ttl_days", "server_port", "stop_grace_secs"]);
+        assert_eq!(
+            changed,
+            ["console_ttl_days", "server_port", "stop_grace_secs"]
+        );
         assert_eq!(c.snapshot().server_port, Some(9000));
         assert!(c.get("console_ttl_days").is_none());
         assert_eq!(c.get("unknown_tool_key"), Some(serde_json::json!(1)));
 
         // Re-sending the same values changes nothing.
-        assert!(c.update(changes(serde_json::json!({ "server_port": 9000 }))).unwrap().is_empty());
+        assert!(c
+            .update(changes(serde_json::json!({ "server_port": 9000 })))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
     fn update_folds_legacy_keys() {
         let (_d, c) = svc();
-        c.set("allowed_webhook_base_urls", serde_json::json!(["https://old.example"])).unwrap();
-        c.set("mcp_exclude", serde_json::json!([{ "path": "/legacy" }])).unwrap();
+        c.set(
+            "allowed_webhook_base_urls",
+            serde_json::json!(["https://old.example"]),
+        )
+        .unwrap();
+        c.set("mcp_exclude", serde_json::json!([{ "path": "/legacy" }]))
+            .unwrap();
 
         // Unaware of the legacy key: its entries are kept, under the new key.
-        c.update(changes(serde_json::json!({ "allowed_base_urls": ["https://new.example"] }))).unwrap();
+        c.update(changes(
+            serde_json::json!({ "allowed_base_urls": ["https://new.example"] }),
+        ))
+        .unwrap();
         assert_eq!(
             c.get("allowed_base_urls"),
-            Some(serde_json::json!(["https://new.example", "https://old.example"]))
+            Some(serde_json::json!([
+                "https://new.example",
+                "https://old.example"
+            ]))
         );
         assert!(c.get("allowed_webhook_base_urls").is_none());
 
         // Legacy key named explicitly: the caller's list is taken as-is.
-        c.update(changes(serde_json::json!({ "tool_exclude": [{ "path": "/new" }], "mcp_exclude": null })))
-            .unwrap();
-        assert_eq!(c.get("tool_exclude"), Some(serde_json::json!([{ "path": "/new" }])));
+        c.update(changes(
+            serde_json::json!({ "tool_exclude": [{ "path": "/new" }], "mcp_exclude": null }),
+        ))
+        .unwrap();
+        assert_eq!(
+            c.get("tool_exclude"),
+            Some(serde_json::json!([{ "path": "/new" }]))
+        );
         assert!(c.get("mcp_exclude").is_none());
     }
 

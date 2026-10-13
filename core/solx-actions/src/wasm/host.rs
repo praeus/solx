@@ -131,7 +131,10 @@ pub(super) async fn compile_component(bytes: Arc<Vec<u8>>) -> Result<Component> 
 
     // A concurrent miss on the same artifact may have compiled it too;
     // last writer wins and both handles are equivalent.
-    component_cache().lock().unwrap().insert(key, component.clone());
+    component_cache()
+        .lock()
+        .unwrap()
+        .insert(key, component.clone());
     Ok(component)
 }
 
@@ -149,7 +152,11 @@ pub(super) struct HostState {
 }
 
 impl HostState {
-    pub(super) fn new(actions: Arc<LocalActionManager>, files: Arc<dyn FileStore>, caller: Caller) -> Self {
+    pub(super) fn new(
+        actions: Arc<LocalActionManager>,
+        files: Arc<dyn FileStore>,
+        caller: Caller,
+    ) -> Self {
         HostState {
             actions,
             files,
@@ -162,7 +169,10 @@ impl HostState {
 
 impl WasiView for HostState {
     fn ctx(&mut self) -> WasiCtxView<'_> {
-        WasiCtxView { ctx: &mut self.wasi, table: &mut self.table }
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
     }
 }
 
@@ -208,7 +218,8 @@ impl sol::actions::action_exec::Host for HostState {
         payload: String,
     ) -> std::result::Result<sol::actions::types::ActionResult, String> {
         let (path, name) = split_ref(&action_name).map_err(|e| e.to_string())?;
-        let params: Value = serde_json::from_str(&payload).map_err(|e| format!("invalid params: {e}"))?;
+        let params: Value =
+            serde_json::from_str(&payload).map_err(|e| format!("invalid params: {e}"))?;
         let result: solx_surface::entities::ActionExecResult = self
             .actions
             .exec_as(&path, &name, params, Some(&self.caller))
@@ -227,4 +238,3 @@ impl sol::actions::artifact_read::Host for HostState {
         self.files.get(&name).await.map_err(|e| e.to_string())
     }
 }
-

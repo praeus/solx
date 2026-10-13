@@ -22,8 +22,8 @@ pub mod net;
 mod row;
 mod schema;
 pub mod script;
-mod seed;
 pub mod secrets;
+mod seed;
 mod store;
 #[cfg(test)]
 mod test_support;
@@ -95,7 +95,12 @@ impl ActionExecutor for LocalActionManager {
         LocalActionManager::start_invocation(self, path, name, params).await
     }
 
-    async fn stop_invocation(&self, invocation_id: &str, force: bool, grace_secs: Option<u64>) -> Result<Value> {
+    async fn stop_invocation(
+        &self,
+        invocation_id: &str,
+        force: bool,
+        grace_secs: Option<u64>,
+    ) -> Result<Value> {
         LocalActionManager::stop_invocation(self, invocation_id, force, grace_secs).await
     }
 
@@ -193,7 +198,11 @@ impl LocalActionManager {
     pub fn set_self_ref(&self, self_ref: Weak<LocalActionManager>) {
         if let Some(strong) = self_ref.upgrade() {
             let executor: Arc<dyn ActionExecutor> = strong;
-            let plugin = solx_console::actions::plugin(self.console.clone(), self.invocations.clone(), executor);
+            let plugin = solx_console::actions::plugin(
+                self.console.clone(),
+                self.invocations.clone(),
+                executor,
+            );
             let _ = self.internal_registry.set(Arc::new(plugin));
         }
         let _ = self.self_ref.set(self_ref);

@@ -43,7 +43,9 @@ pub fn exec_result_to_tool_result(r: ActionExecResult) -> CallToolResult {
         result
     } else {
         let mut result = CallToolResult::structured_error(r.result);
-        let text = r.message.unwrap_or_else(|| format!("action '{}' failed", r.action));
+        let text = r
+            .message
+            .unwrap_or_else(|| format!("action '{}' failed", r.action));
         result.content.insert(0, ContentBlock::text(text));
         result
     }

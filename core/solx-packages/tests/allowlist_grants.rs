@@ -17,7 +17,11 @@ struct NoopRunner;
 
 #[async_trait]
 impl CommandRunner for NoopRunner {
-    async fn run(&self, _tokens: Vec<String>, _piped: Option<Value>) -> solx_surface::error::Result<Value> {
+    async fn run(
+        &self,
+        _tokens: Vec<String>,
+        _piped: Option<Value>,
+    ) -> solx_surface::error::Result<Value> {
         Ok(Value::Null)
     }
 }
@@ -56,9 +60,14 @@ async fn install_grants_declared_command_and_webhook_entries() {
         }),
     );
 
-    let outcome = install_package(&runner, &cfg, pkg_dir.path()).await.unwrap();
+    let outcome = install_package(&runner, &cfg, pkg_dir.path())
+        .await
+        .unwrap();
     assert!(outcome.warnings.is_empty());
-    assert_eq!(outcome.package.granted_commands, vec!["pkg-a-cmd".to_string()]);
+    assert_eq!(
+        outcome.package.granted_commands,
+        vec!["pkg-a-cmd".to_string()]
+    );
     assert_eq!(
         outcome.package.granted_base_urls,
         vec!["https://pkg-a.example.com".to_string()]
@@ -79,7 +88,9 @@ async fn install_with_no_manifest_grants_is_unaffected() {
     let pkg_dir = tempfile::tempdir().unwrap();
     write_package(pkg_dir.path(), "pkg-plain", json!({}));
 
-    let outcome = install_package(&runner, &cfg, pkg_dir.path()).await.unwrap();
+    let outcome = install_package(&runner, &cfg, pkg_dir.path())
+        .await
+        .unwrap();
     assert!(outcome.warnings.is_empty());
     assert!(outcome.package.granted_commands.is_empty());
     assert!(outcome.package.granted_base_urls.is_empty());
@@ -99,7 +110,9 @@ async fn uninstall_revokes_grants_no_other_package_claims() {
         "pkg-solo",
         json!({ "command_actions": { "solo-cmd": { "command": "echo 1" } } }),
     );
-    install_package(&runner, &cfg, pkg_dir.path()).await.unwrap();
+    install_package(&runner, &cfg, pkg_dir.path())
+        .await
+        .unwrap();
     assert!(cfg.command_actions().contains_key("solo-cmd"));
 
     uninstall_package(&runner, &cfg, "pkg-solo").await.unwrap();
@@ -119,7 +132,10 @@ async fn colliding_key_warns_and_overwrites_but_survives_the_original_owners_uni
         json!({ "command_actions": { "shared-key": { "command": "echo from-a" } } }),
     );
     let outcome_a = install_package(&runner, &cfg, dir_a.path()).await.unwrap();
-    assert!(outcome_a.warnings.is_empty(), "first installer should see no collision");
+    assert!(
+        outcome_a.warnings.is_empty(),
+        "first installer should see no collision"
+    );
 
     let dir_b = tempfile::tempdir().unwrap();
     write_package(
@@ -129,7 +145,11 @@ async fn colliding_key_warns_and_overwrites_but_survives_the_original_owners_uni
     );
     let outcome_b = install_package(&runner, &cfg, dir_b.path()).await.unwrap();
     assert_eq!(outcome_b.warnings.len(), 1, "{:?}", outcome_b.warnings);
-    assert!(outcome_b.warnings[0].contains("pkg-a"), "{:?}", outcome_b.warnings);
+    assert!(
+        outcome_b.warnings[0].contains("pkg-a"),
+        "{:?}",
+        outcome_b.warnings
+    );
 
     // Last-write-wins: the key now points at pkg-b's command.
     assert_eq!(cfg.command_actions()["shared-key"].command, "echo from-b");
@@ -159,7 +179,9 @@ async fn reinstalling_the_same_package_is_not_a_collision() {
         "pkg-a",
         json!({ "command_actions": { "own-key": { "command": "echo v1" } } }),
     );
-    install_package(&runner, &cfg, pkg_dir.path()).await.unwrap();
+    install_package(&runner, &cfg, pkg_dir.path())
+        .await
+        .unwrap();
 
     // Bump the manifest and reinstall over itself.
     write_package(
@@ -167,8 +189,13 @@ async fn reinstalling_the_same_package_is_not_a_collision() {
         "pkg-a",
         json!({ "command_actions": { "own-key": { "command": "echo v2" } } }),
     );
-    let outcome = install_package(&runner, &cfg, pkg_dir.path()).await.unwrap();
-    assert!(outcome.warnings.is_empty(), "reinstalling your own package must not warn");
+    let outcome = install_package(&runner, &cfg, pkg_dir.path())
+        .await
+        .unwrap();
+    assert!(
+        outcome.warnings.is_empty(),
+        "reinstalling your own package must not warn"
+    );
     assert_eq!(cfg.command_actions()["own-key"].command, "echo v2");
 }
 
@@ -188,9 +215,15 @@ async fn a_legacy_package_json_manifest_still_installs_but_warns() {
         json!({ "allowed_base_urls": ["https://legacy.example.com/"] }),
     );
 
-    let outcome = install_package(&runner, &cfg, pkg_dir.path()).await.unwrap();
+    let outcome = install_package(&runner, &cfg, pkg_dir.path())
+        .await
+        .unwrap();
     assert_eq!(outcome.warnings.len(), 1, "{:?}", outcome.warnings);
-    assert!(outcome.warnings[0].contains("solx-package.json"), "{:?}", outcome.warnings);
+    assert!(
+        outcome.warnings[0].contains("solx-package.json"),
+        "{:?}",
+        outcome.warnings
+    );
     // It still installs and still grants — the warning is advisory.
     assert!(cfg
         .allowed_base_urls()
@@ -217,7 +250,9 @@ async fn solx_package_json_wins_when_both_manifests_are_present() {
         json!({ "allowed_base_urls": ["https://from-solx-manifest.example.com/"] }),
     );
 
-    let outcome = install_package(&runner, &cfg, pkg_dir.path()).await.unwrap();
+    let outcome = install_package(&runner, &cfg, pkg_dir.path())
+        .await
+        .unwrap();
     assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
     assert_eq!(outcome.package.name, "pkg-solx-name");
     assert_eq!(
@@ -240,7 +275,9 @@ async fn the_legacy_allowed_webhook_base_urls_manifest_key_still_grants() {
         json!({ "allowed_webhook_base_urls": ["https://legacy-key.example.com/"] }),
     );
 
-    let outcome = install_package(&runner, &cfg, pkg_dir.path()).await.unwrap();
+    let outcome = install_package(&runner, &cfg, pkg_dir.path())
+        .await
+        .unwrap();
     assert_eq!(
         outcome.package.granted_base_urls,
         vec!["https://legacy-key.example.com/".to_string()]
@@ -250,7 +287,9 @@ async fn the_legacy_allowed_webhook_base_urls_manifest_key_still_grants() {
         .contains(&"https://legacy-key.example.com/".to_string()));
 
     // And revoking still reaches it.
-    uninstall_package(&runner, &cfg, "pkg-legacy-key").await.unwrap();
+    uninstall_package(&runner, &cfg, "pkg-legacy-key")
+        .await
+        .unwrap();
     assert!(cfg.allowed_base_urls().is_empty());
 }
 
@@ -277,14 +316,29 @@ async fn a_relative_command_cwd_resolves_against_the_package_directory() {
         }),
     );
 
-    let outcome = install_package(&runner, &cfg, pkg_dir.path()).await.unwrap();
+    let outcome = install_package(&runner, &cfg, pkg_dir.path())
+        .await
+        .unwrap();
     let recorded = Path::new(&outcome.package.path);
-    assert!(!outcome.package.path.starts_with(r"\?\"), "{}", outcome.package.path);
-    assert_eq!(recorded.canonicalize().unwrap(), pkg_dir.path().canonicalize().unwrap());
+    assert!(
+        !outcome.package.path.starts_with(r"\?\"),
+        "{}",
+        outcome.package.path
+    );
+    assert_eq!(
+        recorded.canonicalize().unwrap(),
+        pkg_dir.path().canonicalize().unwrap()
+    );
 
     let commands = cfg.command_actions();
-    assert_eq!(Path::new(commands["rel-cmd"].cwd.as_deref().unwrap()), recorded.join("target/release"));
-    assert_eq!(Path::new(commands["dot-cmd"].cwd.as_deref().unwrap()), recorded);
+    assert_eq!(
+        Path::new(commands["rel-cmd"].cwd.as_deref().unwrap()),
+        recorded.join("target/release")
+    );
+    assert_eq!(
+        Path::new(commands["dot-cmd"].cwd.as_deref().unwrap()),
+        recorded
+    );
     assert_eq!(commands["abs-cmd"].cwd.as_deref(), Some(absolute.as_str()));
     assert_eq!(commands["no-cwd"].cwd, None);
 }

@@ -124,9 +124,12 @@ impl LocalDocManager {
             // pre-existing rows is this one-time `'rebuild'` command (same
             // as solx-actions's backfill), run *before* any trigger-driven
             // write touches those rows.
-            conn.execute("INSERT INTO documents_fts(documents_fts) VALUES('rebuild')", ())
-                .await
-                .map_err(map_db)?;
+            conn.execute(
+                "INSERT INTO documents_fts(documents_fts) VALUES('rebuild')",
+                (),
+            )
+            .await
+            .map_err(map_db)?;
         }
         // Done with this connection before handing off to `reindex_all`,
         // which opens its own — an unfinished statement left open here would
@@ -192,7 +195,12 @@ impl LocalDocManager {
             content_text.push(' ');
         }
 
-        let type_schema = self.types.resolve(&doc.type_ref).await.ok().map(|t| t.schema);
+        let type_schema = self
+            .types
+            .resolve(&doc.type_ref)
+            .await
+            .ok()
+            .map(|t| t.schema);
         let doc_ref_names = match type_schema {
             Some(ref schema) => {
                 let extract = walk_contents(&doc.contents, schema);
@@ -362,7 +370,9 @@ impl DocManager for LocalDocManager {
         let type_ref = input
             .type_ref
             .or_else(|| existing.as_ref().map(|d| d.type_ref.clone()))
-            .ok_or_else(|| SolxError::Invalid("a type_ref is required to create a document".into()))?;
+            .ok_or_else(|| {
+                SolxError::Invalid("a type_ref is required to create a document".into())
+            })?;
 
         // Coerce absent contents: keep existing, else default to {}.
         let contents = if input.contents.is_null() {
@@ -376,20 +386,36 @@ impl DocManager for LocalDocManager {
         // Validate against the type's schema (cross-database call).
         self.types.validate(&contents, &type_ref).await?;
 
-        let title = input.title.or_else(|| existing.as_ref().and_then(|d| d.title.clone()));
-        let summary = input.summary.or_else(|| existing.as_ref().and_then(|d| d.summary.clone()));
-        let author = input.author.or_else(|| existing.as_ref().and_then(|d| d.author.clone()));
-        let pub_date = input.pub_date.or_else(|| existing.as_ref().and_then(|d| d.pub_date.clone()));
-        let confidence = input.confidence.or_else(|| existing.as_ref().and_then(|d| d.confidence));
+        let title = input
+            .title
+            .or_else(|| existing.as_ref().and_then(|d| d.title.clone()));
+        let summary = input
+            .summary
+            .or_else(|| existing.as_ref().and_then(|d| d.summary.clone()));
+        let author = input
+            .author
+            .or_else(|| existing.as_ref().and_then(|d| d.author.clone()));
+        let pub_date = input
+            .pub_date
+            .or_else(|| existing.as_ref().and_then(|d| d.pub_date.clone()));
+        let confidence = input
+            .confidence
+            .or_else(|| existing.as_ref().and_then(|d| d.confidence));
         let links = if !input.links.is_empty() {
             input.links
         } else {
-            existing.as_ref().map(|d| d.links.clone()).unwrap_or_default()
+            existing
+                .as_ref()
+                .map(|d| d.links.clone())
+                .unwrap_or_default()
         };
         let files = if !input.files.is_empty() {
             input.files
         } else {
-            existing.as_ref().map(|d| d.files.clone()).unwrap_or_default()
+            existing
+                .as_ref()
+                .map(|d| d.files.clone())
+                .unwrap_or_default()
         };
 
         let now = Utc::now();
@@ -499,8 +525,7 @@ impl DocManager for LocalDocManager {
         let offset = opts.offset_or_zero();
 
         let q = opts.to_sql(LIST_SCHEMA)?;
-        let values: Vec<libsql::Value> =
-            q.binds.iter().cloned().map(libsql::Value::from).collect();
+        let values: Vec<libsql::Value> = q.binds.iter().cloned().map(libsql::Value::from).collect();
 
         // Total count.
         let count_sql = format!("SELECT COUNT(*) FROM documents{}", q.where_clause);
@@ -535,15 +560,17 @@ impl DocManager for LocalDocManager {
         let offset = opts.offset_or_zero();
 
         let q = opts.to_sql(LIST_SCHEMA)?;
-        let binds: Vec<libsql::Value> =
-            q.binds.iter().cloned().map(libsql::Value::from).collect();
+        let binds: Vec<libsql::Value> = q.binds.iter().cloned().map(libsql::Value::from).collect();
         let dir = match opts.sort_order {
             SortOrder::Desc => "DESC",
             SortOrder::Asc => "ASC",
         };
 
         let total = {
-            let sql = format!("SELECT COUNT(DISTINCT path) FROM documents{}", q.where_clause);
+            let sql = format!(
+                "SELECT COUNT(DISTINCT path) FROM documents{}",
+                q.where_clause
+            );
             let mut rows = conn.query(&sql, binds.clone()).await.map_err(map_db)?;
             rows.next()
                 .await
@@ -561,7 +588,10 @@ impl DocManager for LocalDocManager {
         while let Some(row) = rows.next().await.map_err(map_db)? {
             let path: String = row.get(0).map_err(map_db)?;
             let count: i64 = row.get(1).map_err(map_db)?;
-            items.push(PathFacet { path, count: count as usize });
+            items.push(PathFacet {
+                path,
+                count: count as usize,
+            });
         }
         Ok(Page::new(items, total, limit, offset))
     }
@@ -599,7 +629,12 @@ impl DocManager for LocalDocManager {
             binds.push(libsql::Value::from(tr.to_string()));
             conditions.push(format!("d.type_ref=?{}", binds.len()));
         }
-        if let Some(target) = query.linked_to.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(target) = query
+            .linked_to
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             binds.push(libsql::Value::from(target.to_string()));
             conditions.push(format!(
                 "EXISTS (SELECT 1 FROM document_refs r WHERE r.document_id = d.id AND r.target = ?{})",
@@ -623,7 +658,10 @@ impl DocManager for LocalDocManager {
                     " ORDER BY f.rank".to_string(),
                 )
             }
-            None => (String::new(), " ORDER BY d.path ASC, d.name ASC".to_string()),
+            None => (
+                String::new(),
+                " ORDER BY d.path ASC, d.name ASC".to_string(),
+            ),
         };
 
         let total: usize = {
@@ -663,7 +701,9 @@ mod tests {
 
     async fn setup() -> (tempfile::TempDir, LocalDocManager) {
         let dir = tempfile::tempdir().unwrap();
-        let types = LocalTypeManager::open(&dir.path().join("types.db")).await.unwrap();
+        let types = LocalTypeManager::open(&dir.path().join("types.db"))
+            .await
+            .unwrap();
         let m = LocalDocManager::open(&dir.path().join("docs.db"), Arc::new(types))
             .await
             .unwrap();
@@ -687,13 +727,19 @@ mod tests {
         assert_eq!(got.title.as_deref(), Some("AI note"));
 
         let page = m
-            .list(ListOptions { path_prefix: Some("/research".into()), ..Default::default() })
+            .list(ListOptions {
+                path_prefix: Some("/research".into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert_eq!(page.total, 1);
 
         let res = m
-            .search(SearchQuery { q: Some("transform".into()), ..Default::default() })
+            .search(SearchQuery {
+                q: Some("transform".into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert_eq!(res.total, 1);
@@ -701,12 +747,18 @@ mod tests {
 
         // path-facet search
         let res2 = m
-            .search(SearchQuery { path_prefix: Some("/research/ai".into()), ..Default::default() })
+            .search(SearchQuery {
+                path_prefix: Some("/research/ai".into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert_eq!(res2.total, 1);
         let res3 = m
-            .search(SearchQuery { path_prefix: Some("/other".into()), ..Default::default() })
+            .search(SearchQuery {
+                path_prefix: Some("/other".into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert_eq!(res3.total, 0);
@@ -714,7 +766,10 @@ mod tests {
         m.delete("/research/ai", "note").await.unwrap();
         assert!(m.get("/research/ai", "note").await.is_err());
         let res4 = m
-            .search(SearchQuery { q: Some("transform".into()), ..Default::default() })
+            .search(SearchQuery {
+                q: Some("transform".into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert_eq!(res4.total, 0);
@@ -725,7 +780,9 @@ mod tests {
         let (_d, m) = setup().await;
         // Person type requires "name".
         let ty = solx_surface::entities::TypeInput {
-            schema: Some(json!({"type":"object","required":["name"],"properties":{"name":{"type":"string"}}})),
+            schema: Some(
+                json!({"type":"object","required":["name"],"properties":{"name":{"type":"string"}}}),
+            ),
             ..Default::default()
         };
         m.types().save("/types/custom", "Person", ty).await.unwrap();
@@ -749,7 +806,10 @@ mod tests {
             })),
             ..Default::default()
         };
-        m.types().save("/types/custom", "Employee", ty).await.unwrap();
+        m.types()
+            .save("/types/custom", "Employee", ty)
+            .await
+            .unwrap();
 
         m.save(
             "/people",
@@ -803,7 +863,11 @@ mod tests {
     #[tokio::test]
     async fn a_pre_content_text_database_is_backfilled_on_open() {
         let dir = tempfile::tempdir().unwrap();
-        let types = Arc::new(LocalTypeManager::open(&dir.path().join("types.db")).await.unwrap());
+        let types = Arc::new(
+            LocalTypeManager::open(&dir.path().join("types.db"))
+                .await
+                .unwrap(),
+        );
         let db_path = dir.path().join("docs.db");
 
         // Seed a `documents` table shaped like the pre-migration schema (no
@@ -870,7 +934,10 @@ mod tests {
         for i in 0..5 {
             save_doc(&m, "/rw", &format!("doc{i}"), "quixotic").await;
             let res = m
-                .search(SearchQuery { q: Some("quixotic".into()), ..Default::default() })
+                .search(SearchQuery {
+                    q: Some("quixotic".into()),
+                    ..Default::default()
+                })
                 .await
                 .unwrap();
             assert_eq!(
@@ -887,14 +954,20 @@ mod tests {
         let (_d, m) = setup().await;
         save_doc(&m, "/rw", "gone", "ephemeral").await;
         let before = m
-            .search(SearchQuery { q: Some("ephemeral".into()), ..Default::default() })
+            .search(SearchQuery {
+                q: Some("ephemeral".into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert_eq!(before.total, 1);
 
         m.delete("/rw", "gone").await.unwrap();
         let after = m
-            .search(SearchQuery { q: Some("ephemeral".into()), ..Default::default() })
+            .search(SearchQuery {
+                q: Some("ephemeral".into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert_eq!(after.total, 0);
@@ -951,7 +1024,10 @@ mod tests {
         m.save("/blog/drafts", "three", input()).await.unwrap();
 
         let page = m
-            .paths(ListOptions { path_prefix: Some("/blog".into()), ..Default::default() })
+            .paths(ListOptions {
+                path_prefix: Some("/blog".into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
 
@@ -960,7 +1036,11 @@ mod tests {
         assert_eq!(page.total, 2);
         let blog = page.items.iter().find(|f| f.path == "/blog").unwrap();
         assert_eq!(blog.count, 2);
-        let drafts = page.items.iter().find(|f| f.path == "/blog/drafts").unwrap();
+        let drafts = page
+            .items
+            .iter()
+            .find(|f| f.path == "/blog/drafts")
+            .unwrap();
         assert_eq!(drafts.count, 1);
     }
 }

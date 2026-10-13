@@ -37,7 +37,10 @@ fn validator_for(enriched: &Value) -> Result<Arc<jsonschema::Validator>> {
         jsonschema::validator_for(enriched)
             .map_err(|e| SolxError::Validation(format!("invalid schema: {e}")))?,
     );
-    validator_cache().lock().unwrap().insert(key, compiled.clone());
+    validator_cache()
+        .lock()
+        .unwrap()
+        .insert(key, compiled.clone());
     Ok(compiled)
 }
 
@@ -96,8 +99,10 @@ pub fn enrich_schema(schema: &Value) -> Value {
     if let Some(map) = defs.as_object_mut() {
         map.entry("DocRef").or_insert_with(|| doc_ref_def.clone());
         map.entry("Link").or_insert_with(|| link_def.clone());
-        map.entry("ArtifactRef").or_insert_with(|| artifact_ref_def.clone());
-        map.entry("RichTextDoc").or_insert_with(|| rich_text_def.clone());
+        map.entry("ArtifactRef")
+            .or_insert_with(|| artifact_ref_def.clone());
+        map.entry("RichTextDoc")
+            .or_insert_with(|| rich_text_def.clone());
     }
     enriched
 }
@@ -117,10 +122,11 @@ mod tests {
             }
         });
         assert!(validate_against_schema(&json!({"name": "x"}), &schema).is_ok());
-        assert!(
-            validate_against_schema(&json!({"name": "x", "manager": {"path": "/p/m"}}), &schema)
-                .is_ok()
-        );
+        assert!(validate_against_schema(
+            &json!({"name": "x", "manager": {"path": "/p/m"}}),
+            &schema
+        )
+        .is_ok());
         assert!(validate_against_schema(&json!({}), &schema).is_err());
     }
 }

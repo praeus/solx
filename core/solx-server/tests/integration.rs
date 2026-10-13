@@ -7,19 +7,27 @@ use std::sync::Arc;
 
 use serde_json::json;
 use solx_client::{RemoteActionManager, RemoteDocManager, RemoteFileStore, RemoteTypeManager};
+use solx_server::state::AppState;
 use solx_surface::entities::{ActionInput, ActionType, DocumentInput, TypeInput};
 use solx_surface::error::SolxError;
 use solx_surface::managers::{ActionManager, DocManager, FileStore, TypeManager};
 use solx_surface::query::{ListOptions, SearchQuery};
-use solx_server::state::AppState;
 
-async fn spawn_server() -> (tempfile::TempDir, Arc<solx_config::ConfigService>, String, String) {
+async fn spawn_server() -> (
+    tempfile::TempDir,
+    Arc<solx_config::ConfigService>,
+    String,
+    String,
+) {
     let dir = tempfile::tempdir().unwrap();
     let app = solx_manager::App::build_local_in(dir.path()).await.unwrap();
     let cfg = app.config.clone();
     let token = cfg.ensure_server_token().unwrap();
 
-    let state = AppState { app, token: Arc::from(token.as_str()) };
+    let state = AppState {
+        app,
+        token: Arc::from(token.as_str()),
+    };
     let router = solx_server::build_router(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -36,7 +44,11 @@ async fn types_docs_actions_files_round_trip_over_http() {
     let (_dir, cfg, base_url, token) = spawn_server().await;
     cfg.register_command(
         "echo-42",
-        solx_config::CommandDef { command: "echo 42".into(), description: None, cwd: None },
+        solx_config::CommandDef {
+            command: "echo 42".into(),
+            description: None,
+            cwd: None,
+        },
     )
     .unwrap();
 
@@ -60,12 +72,24 @@ async fn types_docs_actions_files_round_trip_over_http() {
     assert_eq!(ty.path, "/types/custom");
     let fetched_ty = types.get("/types/custom", "Person").await.unwrap();
     assert_eq!(fetched_ty.name, "Person");
-    let ty_page = types.list(ListOptions { path_prefix: Some("/types/custom".into()), ..Default::default() }).await.unwrap();
+    let ty_page = types
+        .list(ListOptions {
+            path_prefix: Some("/types/custom".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     assert_eq!(ty_page.total, 1);
     let resolved = types.resolve("/types/custom/Person").await.unwrap();
     assert_eq!(resolved.id, ty.id);
-    types.validate(&json!({"name": "Ada"}), "/types/custom/Person").await.unwrap();
-    let bad = types.validate(&json!({}), "/types/custom/Person").await.unwrap_err();
+    types
+        .validate(&json!({"name": "Ada"}), "/types/custom/Person")
+        .await
+        .unwrap();
+    let bad = types
+        .validate(&json!({}), "/types/custom/Person")
+        .await
+        .unwrap_err();
     assert!(matches!(bad, SolxError::Validation(_)));
 
     // Docs.
@@ -85,7 +109,13 @@ async fn types_docs_actions_files_round_trip_over_http() {
     assert_eq!(doc.path, "/research/ai");
     let fetched_doc = docs.get("/research/ai", "note").await.unwrap();
     assert_eq!(fetched_doc.contents["name"], "Ada");
-    let search_results = docs.search(SearchQuery { q: Some("Ada".into()), ..Default::default() }).await.unwrap();
+    let search_results = docs
+        .search(SearchQuery {
+            q: Some("Ada".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     assert!(search_results.total >= 1);
     let missing = docs.get("/nope", "nope").await.unwrap_err();
     assert!(matches!(missing, SolxError::NotFound(_)));
@@ -117,22 +147,47 @@ async fn types_docs_actions_files_round_trip_over_http() {
 
     let fetched = actions.get("/tools", "echo").await.unwrap();
     let cfg = fetched.action_config.as_ref().unwrap();
-    assert_eq!(cfg["secrets"]["API_TOKEN"], json!("***"), "secret key crossed the wire");
-    assert_eq!(cfg["cwd"], json!("."), "non-secret config should stay readable");
+    assert_eq!(
+        cfg["secrets"]["API_TOKEN"],
+        json!("***"),
+        "secret key crossed the wire"
+    );
+    assert_eq!(
+        cfg["cwd"],
+        json!("."),
+        "non-secret config should stay readable"
+    );
 
     // Round-tripping the redacted config back must not destroy the key.
     let mut edited = cfg.clone();
     edited["cwd"] = json!("..");
     actions
-        .save("/tools", "echo", ActionInput { action_config: Some(edited), ..Default::default() })
+        .save(
+            "/tools",
+            "echo",
+            ActionInput {
+                action_config: Some(edited),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert!(
-        actions.exec("/tools", "echo", json!({})).await.unwrap().success,
+        actions
+            .exec("/tools", "echo", json!({}))
+            .await
+            .unwrap()
+            .success,
         "action should still execute after a redacted round trip"
     );
 
-    let action_page = actions.list(ListOptions { path_prefix: Some("/tools".into()), ..Default::default() }).await.unwrap();
+    let action_page = actions
+        .list(ListOptions {
+            path_prefix: Some("/tools".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     assert_eq!(action_page.total, 1);
     assert_eq!(
         action_page.items[0].action_config.as_ref().unwrap()["secrets"]["API_TOKEN"],
@@ -142,7 +197,10 @@ async fn types_docs_actions_files_round_trip_over_http() {
     actions.delete("/tools", "echo").await.unwrap();
 
     // Files.
-    let stored = files.put("notes/a.txt", b"hello over http".to_vec()).await.unwrap();
+    let stored = files
+        .put("notes/a.txt", b"hello over http".to_vec())
+        .await
+        .unwrap();
     assert_eq!(stored, "notes/a.txt");
     let bytes = files.get("notes/a.txt").await.unwrap();
     assert_eq!(bytes, b"hello over http");
@@ -176,9 +234,15 @@ async fn rest_surface_over_raw_http() {
     assert_eq!(body["path"], "/research/ai");
     assert_eq!(body["name"], "note");
 
-    let fetched = auth(http.get(format!("{base_url}/docs/research/ai/note"))).send().await.unwrap();
+    let fetched = auth(http.get(format!("{base_url}/docs/research/ai/note")))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(fetched.status(), 200);
-    assert_eq!(fetched.json::<serde_json::Value>().await.unwrap()["title"], "Nested");
+    assert_eq!(
+        fetched.json::<serde_json::Value>().await.unwrap()["title"],
+        "Nested"
+    );
 
     // A root-level entity is just one segment: `/docs/{name}`.
     auth(http.put(format!("{base_url}/docs/rootnote")))
@@ -186,8 +250,13 @@ async fn rest_surface_over_raw_http() {
         .send()
         .await
         .unwrap();
-    let root: serde_json::Value =
-        auth(http.get(format!("{base_url}/docs/rootnote"))).send().await.unwrap().json().await.unwrap();
+    let root: serde_json::Value = auth(http.get(format!("{base_url}/docs/rootnote")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(root["path"], "/", "a single segment means the root path");
     assert_eq!(root["name"], "rootnote");
 
@@ -215,7 +284,10 @@ async fn rest_surface_over_raw_http() {
         .json()
         .await
         .unwrap();
-    assert_eq!(listed["total"], 1, "pathPrefix should exclude the root-level docs");
+    assert_eq!(
+        listed["total"], 1,
+        "pathPrefix should exclude the root-level docs"
+    );
 
     // Search is top-level, so a doc named `search` at the root stays reachable.
     auth(http.put(format!("{base_url}/docs/search")))
@@ -223,7 +295,10 @@ async fn rest_surface_over_raw_http() {
         .send()
         .await
         .unwrap();
-    let shadowed = auth(http.get(format!("{base_url}/docs/search"))).send().await.unwrap();
+    let shadowed = auth(http.get(format!("{base_url}/docs/search")))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(shadowed.status(), 200);
     assert_eq!(
         shadowed.json::<serde_json::Value>().await.unwrap()["title"],
@@ -240,31 +315,57 @@ async fn rest_surface_over_raw_http() {
     assert!(hits["total"].as_u64().unwrap() >= 1);
 
     // Delete answers 204 with an empty body.
-    let deleted = auth(http.delete(format!("{base_url}/docs/rootnote"))).send().await.unwrap();
+    let deleted = auth(http.delete(format!("{base_url}/docs/rootnote")))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(deleted.status(), 204);
     assert!(deleted.bytes().await.unwrap().is_empty());
 
     // A missing entity still returns a body that deserializes as SolxError.
-    let missing = auth(http.get(format!("{base_url}/docs/research/ai/gone"))).send().await.unwrap();
+    let missing = auth(http.get(format!("{base_url}/docs/research/ai/gone")))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(missing.status(), 404);
-    assert!(matches!(missing.json::<SolxError>().await.unwrap(), SolxError::NotFound(_)));
+    assert!(matches!(
+        missing.json::<SolxError>().await.unwrap(),
+        SolxError::NotFound(_)
+    ));
 
     // A malformed reference is a 400, not a 500. `:` is one of the characters
     // `solx_surface::path` forbids in a segment. (Traversal is not testable
     // from here — any conformant URL parser strips `..` segments, encoded or
     // not, long before the request is sent; `refs::tests` covers the server
     // side of that directly.)
-    let bad = auth(http.get(format!("{base_url}/docs/a%3Ab"))).send().await.unwrap();
+    let bad = auth(http.get(format!("{base_url}/docs/a%3Ab")))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(bad.status(), 400);
-    assert!(matches!(bad.json::<SolxError>().await.unwrap(), SolxError::Invalid(_)));
+    assert!(matches!(
+        bad.json::<SolxError>().await.unwrap(),
+        SolxError::Invalid(_)
+    ));
 
     // Files: raw bytes in, raw bytes out, with a guessed Content-Type.
     let png = b"\x89PNG\r\n\x1a\nnot-really".to_vec();
-    let put = auth(http.put(format!("{base_url}/files/media/pic.png"))).body(png.clone()).send().await.unwrap();
+    let put = auth(http.put(format!("{base_url}/files/media/pic.png")))
+        .body(png.clone())
+        .send()
+        .await
+        .unwrap();
     assert_eq!(put.status(), 200);
-    let got = auth(http.get(format!("{base_url}/files/media/pic.png"))).send().await.unwrap();
+    let got = auth(http.get(format!("{base_url}/files/media/pic.png")))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(got.headers()["content-type"], "image/png");
-    assert_eq!(got.bytes().await.unwrap().to_vec(), png, "bytes must survive unencoded");
+    assert_eq!(
+        got.bytes().await.unwrap().to_vec(),
+        png,
+        "bytes must survive unencoded"
+    );
 
     let files_listed: serde_json::Value = auth(http.get(format!("{base_url}/files")))
         .query(&[("prefix", "media")])
@@ -280,7 +381,11 @@ async fn rest_surface_over_raw_http() {
     // `Content-Type`, no literal `{}`.
     _cfg.register_command(
         "echo-42",
-        solx_config::CommandDef { command: "echo 42".into(), description: None, cwd: None },
+        solx_config::CommandDef {
+            command: "echo 42".into(),
+            description: None,
+            cwd: None,
+        },
     )
     .unwrap();
     auth(http.put(format!("{base_url}/actions/tools/echo")))
@@ -288,7 +393,10 @@ async fn rest_surface_over_raw_http() {
         .send()
         .await
         .unwrap();
-    let execed = auth(http.post(format!("{base_url}/actions/tools/echo"))).send().await.unwrap();
+    let execed = auth(http.post(format!("{base_url}/actions/tools/echo")))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(execed.status(), 200);
     let exec_body: serde_json::Value = execed.json().await.unwrap();
     assert_eq!(exec_body["success"], true);

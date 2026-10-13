@@ -65,7 +65,9 @@ fn auth_key_is_visible(key: &str) -> bool {
 ///
 /// Anything else (`cwd`, `headers`, custom fields) is left alone.
 pub fn mask_action_config(cfg: &mut Value) {
-    let Some(obj) = cfg.as_object_mut() else { return };
+    let Some(obj) = cfg.as_object_mut() else {
+        return;
+    };
     if let Some(secrets) = obj.get_mut("secrets") {
         mask_all_strings(secrets);
     }
@@ -124,7 +126,11 @@ pub fn unmask_merge(incoming: Value, existing: Option<&Value>) -> Result<Value, 
     walk(incoming, existing, &mut path)
 }
 
-fn walk(incoming: Value, existing: Option<&Value>, path: &mut Vec<String>) -> Result<Value, String> {
+fn walk(
+    incoming: Value,
+    existing: Option<&Value>,
+    path: &mut Vec<String>,
+) -> Result<Value, String> {
     match incoming {
         Value::String(ref s) if s == MASK => existing.cloned().ok_or_else(|| {
             format!(
@@ -262,7 +268,10 @@ mod tests {
         let stored = json!({ "cwd": "/old", "secrets": { "A": "k" } });
         let incoming = json!({ "secrets": { "A": MASK } });
         let merged = unmask_merge(incoming, Some(&stored)).unwrap();
-        assert!(merged.get("cwd").is_none(), "dropped key should not be resurrected");
+        assert!(
+            merged.get("cwd").is_none(),
+            "dropped key should not be resurrected"
+        );
         assert_eq!(merged["secrets"]["A"], json!("k"));
     }
 

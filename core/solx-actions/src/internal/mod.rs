@@ -118,7 +118,11 @@ impl InternalCtx {
 
 /// Dispatch an internal action by `fn_name`. Returns the JSON result value
 /// (the caller wraps it in `ActionExecResult`).
-pub async fn run_internal(fn_name: &str, params: &Value, ctx: &InternalCtx) -> Result<Value, String> {
+pub async fn run_internal(
+    fn_name: &str,
+    params: &Value,
+    ctx: &InternalCtx,
+) -> Result<Value, String> {
     let params = &normalize_params(params);
     match fn_name {
         // ── OAuth 2.0 authorization-code loopback ────────────────────────
@@ -286,7 +290,10 @@ pub(super) fn path_or_root(params: &Value) -> &str {
 /// document, and `doc_path` for the entity-store path. This helper picks
 /// up the latter, defaulting to root when absent.
 pub(super) fn doc_path_or_root(params: &Value) -> &str {
-    params.get("doc_path").and_then(Value::as_str).unwrap_or("/")
+    params
+        .get("doc_path")
+        .and_then(Value::as_str)
+        .unwrap_or("/")
 }
 
 pub(super) fn parse_input<T: serde::de::DeserializeOwned>(params: &Value) -> Result<T, String> {
@@ -358,11 +365,11 @@ mod tests {
     use super::*;
     use crate::caller::Caller;
 
+    use base64::Engine as _;
+    use serde_json::json;
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
-    use base64::Engine as _;
-    use serde_json::json;
     use tokio::sync::oneshot;
 
     use crate::loopback::oauth::LoopbackResult;
@@ -386,7 +393,10 @@ mod tests {
         crate::secrets::SecretBackendOverride {
             get: |name| Ok(fake_secrets().lock().unwrap().get(name).cloned()),
             set: |name, blob| {
-                fake_secrets().lock().unwrap().insert(name.to_string(), blob.to_string());
+                fake_secrets()
+                    .lock()
+                    .unwrap()
+                    .insert(name.to_string(), blob.to_string());
                 Ok(())
             },
             delete: |name| {
@@ -420,14 +430,16 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let files: Arc<dyn FileStore> = Arc::new(solx_files::LocalFileStore::new(dir.path().join("files")));
+        let files: Arc<dyn FileStore> =
+            Arc::new(solx_files::LocalFileStore::new(dir.path().join("files")));
         let cfg = Arc::new(solx_config::ConfigService::open_in(dir.path()).unwrap());
         // Every HTTP fixture below binds a random port on 127.0.0.1, and
         // outbound requests are gated by `crate::net::check_outbound_url`.
         // Granting the loopback prefix once here keeps the gate real
         // everywhere else while letting the fixtures reach their own servers;
         // a test that wants to exercise a *denial* clears this first.
-        cfg.set_allowed_base_urls(vec!["http://127.0.0.1:".into()]).unwrap();
+        cfg.set_allowed_base_urls(vec!["http://127.0.0.1:".into()])
+            .unwrap();
         let actions_concrete = Arc::new(
             crate::LocalActionManager::open(
                 &dir.path().join("actions.db"),
@@ -469,7 +481,9 @@ mod tests {
     #[tokio::test]
     async fn oauth_await_missing_state_value_errors() {
         let (_d, ctx) = test_ctx(None).await;
-        let err = run_internal("oauth-await", &json!({}), &ctx).await.unwrap_err();
+        let err = run_internal("oauth-await", &json!({}), &ctx)
+            .await
+            .unwrap_err();
         assert!(err.contains("missing required param: state_value"), "{err}");
     }
 
@@ -495,13 +509,9 @@ mod tests {
             },
         );
 
-        let v = run_internal(
-            "oauth-await",
-            &json!({"state_value": "test-state"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+        let v = run_internal("oauth-await", &json!({"state_value": "test-state"}), &ctx)
+            .await
+            .unwrap();
 
         assert_eq!(v.get("code").and_then(Value::as_str), Some("the-code"));
         assert_eq!(
@@ -542,16 +552,22 @@ mod tests {
     #[tokio::test]
     async fn oauth_stop_missing_state_value_errors() {
         let (_d, ctx) = test_ctx(None).await;
-        let err = run_internal("oauth-stop", &json!({}), &ctx).await.unwrap_err();
+        let err = run_internal("oauth-stop", &json!({}), &ctx)
+            .await
+            .unwrap_err();
         assert!(err.contains("missing required param: state_value"), "{err}");
     }
 
     #[tokio::test]
     async fn oauth_stop_unknown_state_value_succeeds_with_message() {
         let (_d, ctx) = test_ctx(None).await;
-        let v = run_internal("oauth-stop", &json!({"state_value": "never-registered"}), &ctx)
-            .await
-            .unwrap();
+        let v = run_internal(
+            "oauth-stop",
+            &json!({"state_value": "never-registered"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         assert_eq!(v.get("stopped").and_then(Value::as_bool), Some(false));
     }
 
@@ -565,7 +581,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(created.get("path").and_then(Value::as_str), Some("/research/ai"));
+        assert_eq!(
+            created.get("path").and_then(Value::as_str),
+            Some("/research/ai")
+        );
 
         // Wrong path must not find it — this is exactly the bug being fixed.
         let missing = run_internal(
@@ -619,9 +638,13 @@ mod tests {
         .unwrap();
 
         // Without the flag it reads back normally.
-        run_internal("entity-get-action", &json!({"path": "/tools", "name": "secret"}), &ctx)
-            .await
-            .unwrap();
+        run_internal(
+            "entity-get-action",
+            &json!({"path": "/tools", "name": "secret"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
 
         for key in ["excludeHidden", "exclude_hidden"] {
             let err = run_internal(
@@ -649,7 +672,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(saved.get("typeRef").and_then(Value::as_str), Some("/types/core/Object"));
+        assert_eq!(
+            saved.get("typeRef").and_then(Value::as_str),
+            Some("/types/core/Object")
+        );
     }
 
     /// And a raw-key utility handler accepts the camelCase spelling of its
@@ -657,9 +683,13 @@ mod tests {
     #[tokio::test]
     async fn file_put_accepts_camel_case_rel_path() {
         let (_d, ctx) = test_ctx(None).await;
-        run_internal("file-put", &json!({"relPath": "notes/a.txt", "content": "hello"}), &ctx)
-            .await
-            .unwrap();
+        run_internal(
+            "file-put",
+            &json!({"relPath": "notes/a.txt", "content": "hello"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         let got = run_internal("file-get", &json!({"rel_path": "notes/a.txt"}), &ctx)
             .await
             .unwrap();
@@ -755,31 +785,62 @@ mod tests {
         let listed = run_internal("file-list", &json!({"prefix": "notes"}), &ctx)
             .await
             .unwrap();
-        assert!(listed.get("files").and_then(Value::as_array).map(|a| !a.is_empty()).unwrap_or(false));
+        assert!(listed
+            .get("files")
+            .and_then(Value::as_array)
+            .map(|a| !a.is_empty())
+            .unwrap_or(false));
 
         run_internal("file-delete", &json!({"rel_path": "notes/a.txt"}), &ctx)
             .await
             .unwrap();
-        assert!(run_internal("file-get", &json!({"rel_path": "notes/a.txt"}), &ctx).await.is_err());
+        assert!(
+            run_internal("file-get", &json!({"rel_path": "notes/a.txt"}), &ctx)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
     async fn file_copy_and_dir_copy_work() {
         let (_d, ctx) = test_ctx(None).await;
-        run_internal("file-put", &json!({"rel_path": "src/a.txt", "content": "a"}), &ctx).await.unwrap();
-        run_internal("file-put", &json!({"rel_path": "src/sub/b.txt", "content": "b"}), &ctx).await.unwrap();
+        run_internal(
+            "file-put",
+            &json!({"rel_path": "src/a.txt", "content": "a"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        run_internal(
+            "file-put",
+            &json!({"rel_path": "src/sub/b.txt", "content": "b"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
 
-        run_internal("file-copy", &json!({"source": "src/a.txt", "dest": "dst/a.txt"}), &ctx)
+        run_internal(
+            "file-copy",
+            &json!({"source": "src/a.txt", "dest": "dst/a.txt"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        let copied = run_internal("file-get", &json!({"rel_path": "dst/a.txt"}), &ctx)
             .await
             .unwrap();
-        let copied = run_internal("file-get", &json!({"rel_path": "dst/a.txt"}), &ctx).await.unwrap();
         assert_eq!(copied.get("content").and_then(Value::as_str), Some("a"));
 
-        run_internal("dir-copy", &json!({"source": "src", "dest": "dst2"}), &ctx).await.unwrap();
+        run_internal("dir-copy", &json!({"source": "src", "dest": "dst2"}), &ctx)
+            .await
+            .unwrap();
         let copied_nested = run_internal("file-get", &json!({"rel_path": "dst2/sub/b.txt"}), &ctx)
             .await
             .unwrap();
-        assert_eq!(copied_nested.get("content").and_then(Value::as_str), Some("b"));
+        assert_eq!(
+            copied_nested.get("content").and_then(Value::as_str),
+            Some("b")
+        );
     }
 
     #[tokio::test]
@@ -793,27 +854,47 @@ mod tests {
         .await
         .unwrap();
 
-        let a = run_internal("get-field", &json!({"name": "note", "field": "a"}), &ctx).await.unwrap();
-        assert_eq!(a, Value::from(1));
-
-        run_internal("set-field", &json!({"name": "note", "field": "b", "value": "two"}), &ctx)
+        let a = run_internal("get-field", &json!({"name": "note", "field": "a"}), &ctx)
             .await
             .unwrap();
-        let b = run_internal("get-field", &json!({"name": "note", "field": "b"}), &ctx).await.unwrap();
+        assert_eq!(a, Value::from(1));
+
+        run_internal(
+            "set-field",
+            &json!({"name": "note", "field": "b", "value": "two"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        let b = run_internal("get-field", &json!({"name": "note", "field": "b"}), &ctx)
+            .await
+            .unwrap();
         assert_eq!(b, Value::String("two".into()));
         // The untouched field must survive the shallow-merge write.
-        let a_again = run_internal("get-field", &json!({"name": "note", "field": "a"}), &ctx).await.unwrap();
+        let a_again = run_internal("get-field", &json!({"name": "note", "field": "a"}), &ctx)
+            .await
+            .unwrap();
         assert_eq!(a_again, Value::from(1));
     }
 
     #[tokio::test]
     async fn get_env_set_env_round_trip() {
         let (_d, ctx) = test_ctx(None).await;
-        let missing = run_internal("get-env", &json!({"key": "SOLX_TEST_NOPE"}), &ctx).await.unwrap();
+        let missing = run_internal("get-env", &json!({"key": "SOLX_TEST_NOPE"}), &ctx)
+            .await
+            .unwrap();
         assert_eq!(missing.get("value").cloned(), Some(Value::Null));
 
-        run_internal("set-env", &json!({"key": "SOLX_TEST_KEY", "value": "hi"}), &ctx).await.unwrap();
-        let got = run_internal("get-env", &json!({"key": "SOLX_TEST_KEY"}), &ctx).await.unwrap();
+        run_internal(
+            "set-env",
+            &json!({"key": "SOLX_TEST_KEY", "value": "hi"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        let got = run_internal("get-env", &json!({"key": "SOLX_TEST_KEY"}), &ctx)
+            .await
+            .unwrap();
         assert_eq!(got.get("value").and_then(Value::as_str), Some("hi"));
     }
 
@@ -824,16 +905,38 @@ mod tests {
         let (_d, ctx) = test_ctx(None).await;
         let set = |ns: &str, v: &str| json!({"namespace": ns, "key": "cursor", "value": v});
 
-        run_internal("set-env", &set("ns_iso_a", "alpha"), &ctx).await.unwrap();
-        run_internal("set-env", &set("ns_iso_b", "beta"), &ctx).await.unwrap();
+        run_internal("set-env", &set("ns_iso_a", "alpha"), &ctx)
+            .await
+            .unwrap();
+        run_internal("set-env", &set("ns_iso_b", "beta"), &ctx)
+            .await
+            .unwrap();
 
-        let a = run_internal("get-env", &json!({"namespace": "ns_iso_a", "key": "cursor"}), &ctx).await.unwrap();
-        let b = run_internal("get-env", &json!({"namespace": "ns_iso_b", "key": "cursor"}), &ctx).await.unwrap();
+        let a = run_internal(
+            "get-env",
+            &json!({"namespace": "ns_iso_a", "key": "cursor"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        let b = run_internal(
+            "get-env",
+            &json!({"namespace": "ns_iso_b", "key": "cursor"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         assert_eq!(a.get("value").and_then(Value::as_str), Some("alpha"));
         assert_eq!(b.get("value").and_then(Value::as_str), Some("beta"));
 
         // A namespace nobody wrote to resolves to null, not to another's value.
-        let miss = run_internal("get-env", &json!({"namespace": "ns_iso_c", "key": "cursor"}), &ctx).await.unwrap();
+        let miss = run_internal(
+            "get-env",
+            &json!({"namespace": "ns_iso_c", "key": "cursor"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         assert_eq!(miss.get("value").cloned(), Some(Value::Null));
     }
 
@@ -854,7 +957,10 @@ mod tests {
         .unwrap();
         assert_eq!(res.get("persisted").and_then(Value::as_bool), Some(true));
         assert_eq!(
-            cfg.env_vars().get("ns_sticky").and_then(|m| m.get("cursor")).map(String::as_str),
+            cfg.env_vars()
+                .get("ns_sticky")
+                .and_then(|m| m.get("cursor"))
+                .map(String::as_str),
             Some("/?skip=10")
         );
 
@@ -868,7 +974,10 @@ mod tests {
         .unwrap();
         assert_eq!(res.get("persisted").and_then(Value::as_bool), Some(true));
         assert_eq!(
-            cfg.env_vars().get("ns_sticky").and_then(|m| m.get("cursor")).map(String::as_str),
+            cfg.env_vars()
+                .get("ns_sticky")
+                .and_then(|m| m.get("cursor"))
+                .map(String::as_str),
             Some("/?skip=20")
         );
 
@@ -880,7 +989,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(cfg.env_vars().get("ns_sticky").and_then(|m| m.get("scratch")).is_none());
+        assert!(cfg
+            .env_vars()
+            .get("ns_sticky")
+            .and_then(|m| m.get("scratch"))
+            .is_none());
     }
 
     /// What makes a cursor survive a restart: startup reloads `env_vars` into
@@ -894,7 +1007,13 @@ mod tests {
         vars.insert("ns_reload".to_string(), ns);
         init_persisted_env(vars);
 
-        let got = run_internal("get-env", &json!({"namespace": "ns_reload", "key": "cursor"}), &ctx).await.unwrap();
+        let got = run_internal(
+            "get-env",
+            &json!({"namespace": "ns_reload", "key": "cursor"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         assert_eq!(got.get("value").and_then(Value::as_str), Some("/?skip=90"));
 
         // Reloaded variables are persistent, so a plain write still writes through.
@@ -917,7 +1036,9 @@ mod tests {
         let (_d, ctx) = test_ctx(None).await;
         assert!(ctx.caller.is_none());
 
-        let err = run_internal("get-secret", &json!({"name": "FOO"}), &ctx).await.unwrap_err();
+        let err = run_internal("get-secret", &json!({"name": "FOO"}), &ctx)
+            .await
+            .unwrap_err();
         assert!(err.contains("no action caller"), "{err}");
         let err = run_internal("set-secret", &json!({"name": "FOO", "value": "x"}), &ctx)
             .await
@@ -937,14 +1058,22 @@ mod tests {
         ));
 
         crate::secrets::set_secret_backend_for_tests(Some(fake_secret_backend()));
-        run_internal("set-secret", &json!({"name": "FOO", "value": "s3cret"}), &ctx)
+        run_internal(
+            "set-secret",
+            &json!({"name": "FOO", "value": "s3cret"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        let got = run_internal("get-secret", &json!({"name": "FOO"}), &ctx)
             .await
             .unwrap();
-        let got = run_internal("get-secret", &json!({"name": "FOO"}), &ctx).await.unwrap();
         assert_eq!(got.get("value").and_then(Value::as_str), Some("s3cret"));
 
         // A secret the caller has no key for stays out of reach.
-        let err = run_internal("get-secret", &json!({"name": "BAR"}), &ctx).await.unwrap_err();
+        let err = run_internal("get-secret", &json!({"name": "BAR"}), &ctx)
+            .await
+            .unwrap_err();
         assert!(err.contains("no key configured"), "{err}");
         assert!(err.contains("action://pkg/foo"), "{err}");
         crate::secrets::set_secret_backend_for_tests(None);
@@ -1021,42 +1150,74 @@ mod tests {
     #[tokio::test]
     async fn dir_delete_recursively_removes_tree() {
         let (_d, ctx) = test_ctx(None).await;
-        run_internal("file-put", &json!({"rel_path": "tree/a.txt", "content": "a"}), &ctx)
-            .await
-            .unwrap();
-        run_internal("file-put", &json!({"rel_path": "tree/sub/b.txt", "content": "b"}), &ctx)
-            .await
-            .unwrap();
-        run_internal("file-put", &json!({"rel_path": "tree/sub/deeper/c.txt", "content": "c"}), &ctx)
-            .await
-            .unwrap();
+        run_internal(
+            "file-put",
+            &json!({"rel_path": "tree/a.txt", "content": "a"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        run_internal(
+            "file-put",
+            &json!({"rel_path": "tree/sub/b.txt", "content": "b"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        run_internal(
+            "file-put",
+            &json!({"rel_path": "tree/sub/deeper/c.txt", "content": "c"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
 
         let v = run_internal("dir-delete", &json!({"rel_path": "tree"}), &ctx)
             .await
             .unwrap();
-        let deleted = v.get("deleted").and_then(Value::as_array).expect("deleted array");
+        let deleted = v
+            .get("deleted")
+            .and_then(Value::as_array)
+            .expect("deleted array");
         assert_eq!(deleted.len(), 3, "{deleted:?}");
         assert!(deleted.iter().any(|e| e.as_str() == Some("tree/a.txt")));
         assert!(deleted.iter().any(|e| e.as_str() == Some("tree/sub/b.txt")));
-        assert!(deleted.iter().any(|e| e.as_str() == Some("tree/sub/deeper/c.txt")));
+        assert!(deleted
+            .iter()
+            .any(|e| e.as_str() == Some("tree/sub/deeper/c.txt")));
 
         // Confirm the subtree is gone (list is empty for the prefix).
         let listed = run_internal("file-list", &json!({"prefix": "tree"}), &ctx)
             .await
             .unwrap();
-        let files = listed.get("files").and_then(Value::as_array).cloned().unwrap_or_default();
-        assert!(files.is_empty(), "expected no files under 'tree' after dir-delete, got {files:?}");
+        let files = listed
+            .get("files")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            files.is_empty(),
+            "expected no files under 'tree' after dir-delete, got {files:?}"
+        );
     }
 
     #[tokio::test]
     async fn dir_delete_does_not_delete_siblings() {
         let (_d, ctx) = test_ctx(None).await;
-        run_internal("file-put", &json!({"rel_path": "keep/x.txt", "content": "k"}), &ctx)
-            .await
-            .unwrap();
-        run_internal("file-put", &json!({"rel_path": "drop/y.txt", "content": "d"}), &ctx)
-            .await
-            .unwrap();
+        run_internal(
+            "file-put",
+            &json!({"rel_path": "keep/x.txt", "content": "k"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        run_internal(
+            "file-put",
+            &json!({"rel_path": "drop/y.txt", "content": "d"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
 
         run_internal("dir-delete", &json!({"rel_path": "drop"}), &ctx)
             .await
@@ -1068,9 +1229,11 @@ mod tests {
             .unwrap();
         assert_eq!(still.get("content").and_then(Value::as_str), Some("k"));
         // And the drop subtree is gone.
-        assert!(run_internal("file-get", &json!({"rel_path": "drop/y.txt"}), &ctx)
-            .await
-            .is_err());
+        assert!(
+            run_internal("file-get", &json!({"rel_path": "drop/y.txt"}), &ctx)
+                .await
+                .is_err()
+        );
     }
 
     // ── get-field-at-path / set-field-at-path ─────────────────────────────
@@ -1094,10 +1257,17 @@ mod tests {
         .unwrap();
 
         // Object key.
-        let v = run_internal("get-field-at-path", &json!({"name": "doc", "path": "metadata"}), &ctx)
-            .await
-            .unwrap();
-        assert_eq!(v.get("tags").and_then(Value::as_array).map(|a| a.len()), Some(2));
+        let v = run_internal(
+            "get-field-at-path",
+            &json!({"name": "doc", "path": "metadata"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            v.get("tags").and_then(Value::as_array).map(|a| a.len()),
+            Some(2)
+        );
 
         // Nested object key.
         let v = run_internal(
@@ -1108,7 +1278,8 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            v.as_array().map(|a| a.first().and_then(Value::as_str).unwrap_or_default()),
+            v.as_array()
+                .map(|a| a.first().and_then(Value::as_str).unwrap_or_default()),
             Some("alpha")
         );
 
@@ -1123,9 +1294,13 @@ mod tests {
         assert_eq!(v, Value::from("beta"));
 
         // Top-level scalar.
-        let v = run_internal("get-field-at-path", &json!({"name": "doc", "path": "score"}), &ctx)
-            .await
-            .unwrap();
+        let v = run_internal(
+            "get-field-at-path",
+            &json!({"name": "doc", "path": "score"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         assert_eq!(v, Value::from(7));
 
         // Missing path -> null (not an error).
@@ -1169,14 +1344,19 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            tags.as_array().map(|a| a.iter().map(|v| v.as_str().unwrap()).collect::<Vec<_>>()),
+            tags.as_array()
+                .map(|a| a.iter().map(|v| v.as_str().unwrap()).collect::<Vec<_>>()),
             Some(vec!["a", "B", "c"])
         );
 
         // The untouched top-level field must survive.
-        let score = run_internal("get-field-at-path", &json!({"name": "doc", "path": "score"}), &ctx)
-            .await
-            .unwrap();
+        let score = run_internal(
+            "get-field-at-path",
+            &json!({"name": "doc", "path": "score"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         assert_eq!(score, Value::from(1));
     }
 
@@ -1234,9 +1414,13 @@ mod tests {
         )
         .await
         .unwrap();
-        let v = run_internal("get-field-at-path", &json!({"name": "doc", "path": "metadata/foo"}), &ctx)
-            .await
-            .unwrap();
+        let v = run_internal(
+            "get-field-at-path",
+            &json!({"name": "doc", "path": "metadata/foo"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         assert_eq!(v, Value::from("bar"));
 
         // Numeric segment into an existing object creates an array and
@@ -1253,9 +1437,13 @@ mod tests {
         )
         .await
         .unwrap();
-        let arr = run_internal("get-field-at-path", &json!({"name": "doc", "path": "arr"}), &ctx)
-            .await
-            .unwrap();
+        let arr = run_internal(
+            "get-field-at-path",
+            &json!({"name": "doc", "path": "arr"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
         let arr = arr.as_array().expect("array");
         assert_eq!(arr.len(), 3);
         assert_eq!(arr[2], Value::from("third"));
@@ -1294,11 +1482,7 @@ mod tests {
                         .and_then(|l| l.split_whitespace().next())
                         .unwrap_or("GET")
                         .to_string();
-                    let body = req
-                        .split("\r\n\r\n")
-                        .nth(1)
-                        .unwrap_or("")
-                        .to_string();
+                    let body = req.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
                     let has_json = req
                         .to_ascii_lowercase()
                         .contains("content-type: application/json");
@@ -1348,7 +1532,10 @@ mod tests {
         let parsed: Value = serde_json::from_str(body).expect("body is JSON");
         assert_eq!(parsed.get("method").and_then(Value::as_str), Some("GET"));
         assert_eq!(parsed.get("body").and_then(Value::as_str), Some(""));
-        let headers = v.get("headers").and_then(Value::as_object).expect("headers");
+        let headers = v
+            .get("headers")
+            .and_then(Value::as_object)
+            .expect("headers");
         assert_eq!(
             headers.get("x-echo").and_then(Value::as_str),
             Some("1"),
@@ -1377,8 +1564,14 @@ mod tests {
         let body = v.get("body").and_then(Value::as_str).expect("body");
         let parsed: Value = serde_json::from_str(body).expect("body is JSON");
         assert_eq!(parsed.get("method").and_then(Value::as_str), Some("POST"));
-        assert_eq!(parsed.get("body").and_then(Value::as_str), Some(r#"{"hi":"there"}"#));
-        assert_eq!(parsed.get("saw_json_header").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            parsed.get("body").and_then(Value::as_str),
+            Some(r#"{"hi":"there"}"#)
+        );
+        assert_eq!(
+            parsed.get("saw_json_header").and_then(Value::as_bool),
+            Some(true)
+        );
         server.abort();
     }
 
@@ -1388,13 +1581,9 @@ mod tests {
         let (base, server) = start_echo_server().await;
         // Crucial difference from the old `fetch_html`: a 503 is *not* an
         // error — the response is returned and the caller decides.
-        let v = run_internal(
-            "http-request",
-            &json!({"url": format!("{base}/bad")}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+        let v = run_internal("http-request", &json!({"url": format!("{base}/bad")}), &ctx)
+            .await
+            .unwrap();
         assert_eq!(v.get("status").and_then(Value::as_u64), Some(503));
         assert_eq!(v.get("body_encoding").and_then(Value::as_str), Some("utf8"));
         let body = v.get("body").and_then(Value::as_str).expect("body");
@@ -1443,9 +1632,13 @@ mod tests {
         let (_d, ctx) = test_ctx(None).await;
         let (base, server) = start_stream_server(vec![r#"{"n":1}"#.to_string()]).await;
         deny_everything(&ctx);
-        let err = run_internal("http-stream-start", &json!({"url": format!("{base}/s")}), &ctx)
-            .await
-            .unwrap_err();
+        let err = run_internal(
+            "http-stream-start",
+            &json!({"url": format!("{base}/s")}),
+            &ctx,
+        )
+        .await
+        .unwrap_err();
         assert!(err.contains("allowed_base_urls"), "{err}");
         server.abort();
     }
@@ -1466,10 +1659,16 @@ mod tests {
     async fn open_url_refuses_non_http_schemes_however_wide_the_allowlist() {
         let (_d, ctx) = test_ctx(None).await;
         ctx.config
-            .set_allowed_base_urls(vec!["about:".into(), "file:///".into(), "javascript:".into()])
+            .set_allowed_base_urls(vec![
+                "about:".into(),
+                "file:///".into(),
+                "javascript:".into(),
+            ])
             .unwrap();
         for url in ["about:blank", "file:///etc/passwd", "javascript:alert(1)"] {
-            let err = run_internal("open-url", &json!({ "url": url }), &ctx).await.unwrap_err();
+            let err = run_internal("open-url", &json!({ "url": url }), &ctx)
+                .await
+                .unwrap_err();
             assert!(err.contains("http:// or https://"), "{url}: {err}");
         }
     }
@@ -1556,11 +1755,8 @@ mod tests {
     #[tokio::test]
     async fn http_stream_start_returns_immediately_with_status() {
         let (_d, ctx) = test_ctx(None).await;
-        let (base, server) = start_stream_server(vec![
-            r#"{"n":1}"#.to_string(),
-            r#"{"n":2}"#.to_string(),
-        ])
-        .await;
+        let (base, server) =
+            start_stream_server(vec![r#"{"n":1}"#.to_string(), r#"{"n":2}"#.to_string()]).await;
 
         let v = run_internal(
             "http-stream-start",
@@ -1606,7 +1802,12 @@ mod tests {
             )
             .await
             .unwrap();
-            chunks.extend(v.get("chunks").and_then(Value::as_array).cloned().unwrap_or_default());
+            chunks.extend(
+                v.get("chunks")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+            );
             cursor = v.get("next_cursor").and_then(Value::as_i64).unwrap();
             if v.get("done").and_then(Value::as_bool) == Some(true) {
                 break;
@@ -1645,7 +1846,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let chunks = v.get("chunks").and_then(Value::as_array).cloned().unwrap_or_default();
+        let chunks = v
+            .get("chunks")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].get("n").and_then(Value::as_i64), Some(1));
 
@@ -1676,7 +1881,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let stream_id = started.get("stream_id").and_then(Value::as_str).unwrap().to_string();
+        let stream_id = started
+            .get("stream_id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
 
         let closed = run_internal("http-stream-close", &json!({"stream_id": stream_id}), &ctx)
             .await
@@ -1689,10 +1898,14 @@ mod tests {
         assert!(err.contains("no stream registered"), "{err}");
 
         // Closing again is a no-op, not an error.
-        let closed_again = run_internal("http-stream-close", &json!({"stream_id": stream_id}), &ctx)
-            .await
-            .unwrap();
-        assert_eq!(closed_again.get("closed").and_then(Value::as_bool), Some(false));
+        let closed_again =
+            run_internal("http-stream-close", &json!({"stream_id": stream_id}), &ctx)
+                .await
+                .unwrap();
+        assert_eq!(
+            closed_again.get("closed").and_then(Value::as_bool),
+            Some(false)
+        );
 
         server.abort();
     }
@@ -1701,7 +1914,8 @@ mod tests {
     async fn http_stream_reports_dropped_chunks_once_over_the_buffer_cap() {
         let (dir, ctx) = test_ctx(None).await;
         let cfg = solx_config::ConfigService::open_in(dir.path()).unwrap();
-        cfg.patch(json!({ "http_stream_max_buffer_bytes": 1 })).unwrap();
+        cfg.patch(json!({ "http_stream_max_buffer_bytes": 1 }))
+            .unwrap();
         // `test_ctx`'s InternalCtx holds its own Arc<ConfigService> over the
         // same directory; reopening and patching here mutates the same
         // on-disk config, which the handler reads fresh via `snapshot()`.
@@ -1750,7 +1964,8 @@ mod tests {
     async fn http_stream_self_terminates_after_idle_ttl() {
         let (dir, ctx) = test_ctx(None).await;
         let cfg = solx_config::ConfigService::open_in(dir.path()).unwrap();
-        cfg.patch(json!({ "http_stream_idle_ttl_secs": 1 })).unwrap();
+        cfg.patch(json!({ "http_stream_idle_ttl_secs": 1 }))
+            .unwrap();
 
         let (base, server) = start_stream_server(vec![r#"{"n":1}"#.to_string()]).await;
 
@@ -1761,7 +1976,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let stream_id = started.get("stream_id").and_then(Value::as_str).unwrap().to_string();
+        let stream_id = started
+            .get("stream_id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
 
         // Poll once so the reader task starts, then don't poll again until
         // past the (patched, 1s) idle TTL.
@@ -1816,9 +2035,18 @@ mod tests {
             .unwrap();
         let entries = read.get("entries").and_then(Value::as_array).unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].get("message").and_then(Value::as_str), Some("hello"));
-        assert_eq!(entries[0].get("source").and_then(Value::as_str), Some("guest"));
-        assert_eq!(entries[0].get("level").and_then(Value::as_str), Some("info"));
+        assert_eq!(
+            entries[0].get("message").and_then(Value::as_str),
+            Some("hello")
+        );
+        assert_eq!(
+            entries[0].get("source").and_then(Value::as_str),
+            Some("guest")
+        );
+        assert_eq!(
+            entries[0].get("level").and_then(Value::as_str),
+            Some("info")
+        );
     }
 
     #[tokio::test]
@@ -1826,33 +2054,54 @@ mod tests {
         let (_d, mut ctx) = test_ctx(None).await;
         ctx.caller = Some(Caller::from_action("/pkg/foo", None));
 
-        run_internal("console-print", &json!({"message": "a"}), &ctx).await.unwrap();
-        run_internal("console-print", &json!({"level": "warn", "message": "b"}), &ctx)
+        run_internal("console-print", &json!({"message": "a"}), &ctx)
             .await
             .unwrap();
+        run_internal(
+            "console-print",
+            &json!({"level": "warn", "message": "b"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
 
         let read = run_internal("console-read", &json!({"action_ref": "/pkg/foo"}), &ctx)
             .await
             .unwrap();
         let entries = read.get("entries").and_then(Value::as_array).unwrap();
-        assert_eq!(entries[0].get("level").and_then(Value::as_str), Some("info"));
-        assert_eq!(entries[1].get("level").and_then(Value::as_str), Some("warn"));
+        assert_eq!(
+            entries[0].get("level").and_then(Value::as_str),
+            Some("info")
+        );
+        assert_eq!(
+            entries[1].get("level").and_then(Value::as_str),
+            Some("warn")
+        );
     }
 
     #[tokio::test]
     async fn console_read_requires_action_ref() {
         let (_d, ctx) = test_ctx(None).await;
-        let err = run_internal("console-read", &json!({}), &ctx).await.unwrap_err();
+        let err = run_internal("console-read", &json!({}), &ctx)
+            .await
+            .unwrap_err();
         assert!(err.contains("missing required param: action_ref"), "{err}");
     }
 
     #[tokio::test]
     async fn console_read_of_an_unwritten_console_is_empty_not_an_error() {
         let (_d, ctx) = test_ctx(None).await;
-        let v = run_internal("console-read", &json!({"action_ref": "/never/printed"}), &ctx)
-            .await
-            .unwrap();
-        assert_eq!(v.get("entries").and_then(Value::as_array).map(Vec::len), Some(0));
+        let v = run_internal(
+            "console-read",
+            &json!({"action_ref": "/never/printed"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            v.get("entries").and_then(Value::as_array).map(Vec::len),
+            Some(0)
+        );
     }
 
     #[tokio::test]
@@ -1893,14 +2142,19 @@ mod tests {
         let v = run_internal("console-read", &json!({"action_ref": "/pkg/child"}), &ctx)
             .await
             .unwrap();
-        assert_eq!(v.get("entries").and_then(Value::as_array).map(Vec::len), Some(1));
+        assert_eq!(
+            v.get("entries").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
     }
 
     #[tokio::test]
     async fn console_tail_returns_immediately_when_entries_exist() {
         let (_d, mut ctx) = test_ctx(None).await;
         ctx.caller = Some(Caller::from_action("/pkg/foo", None));
-        run_internal("console-print", &json!({"message": "hi"}), &ctx).await.unwrap();
+        run_internal("console-print", &json!({"message": "hi"}), &ctx)
+            .await
+            .unwrap();
         ctx.caller = None;
 
         let v = run_internal(
@@ -1910,7 +2164,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(v.get("entries").and_then(Value::as_array).map(Vec::len), Some(1));
+        assert_eq!(
+            v.get("entries").and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
     }
 
     #[tokio::test]
@@ -1936,16 +2193,23 @@ mod tests {
         let read = run_internal("console-read", &json!({"action_ref": "/pkg/foo"}), &ctx)
             .await
             .unwrap();
-        assert_eq!(read.get("entries").and_then(Value::as_array).map(Vec::len), Some(2));
+        assert_eq!(
+            read.get("entries").and_then(Value::as_array).map(Vec::len),
+            Some(2)
+        );
     }
 
     #[tokio::test]
     async fn console_list_reflects_written_consoles() {
         let (_d, mut ctx) = test_ctx(None).await;
         ctx.caller = Some(Caller::from_action("/pkg/a", None));
-        run_internal("console-print", &json!({"message": "x"}), &ctx).await.unwrap();
+        run_internal("console-print", &json!({"message": "x"}), &ctx)
+            .await
+            .unwrap();
         ctx.caller = Some(Caller::from_action("/pkg/b", None));
-        run_internal("console-print", &json!({"message": "y"}), &ctx).await.unwrap();
+        run_internal("console-print", &json!({"message": "y"}), &ctx)
+            .await
+            .unwrap();
         ctx.caller = None;
 
         let v = run_internal("console-list", &json!({"prefix": "/pkg"}), &ctx)
@@ -1959,7 +2223,9 @@ mod tests {
     async fn action_cancelled_is_refused_without_an_action_caller() {
         let (_d, ctx) = test_ctx(None).await;
         assert!(ctx.caller.is_none());
-        let err = run_internal("action-cancelled", &json!({}), &ctx).await.unwrap_err();
+        let err = run_internal("action-cancelled", &json!({}), &ctx)
+            .await
+            .unwrap_err();
         assert!(err.contains("no action caller"), "{err}");
     }
 
@@ -1972,13 +2238,25 @@ mod tests {
 
         // No row exists yet for "inv-fixed" — must fail closed to `false`,
         // not error, mirroring the loopback's `/cancelled` route.
-        let before = run_internal("action-cancelled", &json!({}), &ctx).await.unwrap();
+        let before = run_internal("action-cancelled", &json!({}), &ctx)
+            .await
+            .unwrap();
         assert_eq!(before.get("cancelled"), Some(&Value::Bool(false)));
 
-        ctx.local.invocations().create("inv-fixed", "/pkg/foo", 0).await.unwrap();
-        ctx.local.invocations().request_cancel("inv-fixed").await.unwrap();
+        ctx.local
+            .invocations()
+            .create("inv-fixed", "/pkg/foo", 0)
+            .await
+            .unwrap();
+        ctx.local
+            .invocations()
+            .request_cancel("inv-fixed")
+            .await
+            .unwrap();
 
-        let after = run_internal("action-cancelled", &json!({}), &ctx).await.unwrap();
+        let after = run_internal("action-cancelled", &json!({}), &ctx)
+            .await
+            .unwrap();
         assert_eq!(after.get("cancelled"), Some(&Value::Bool(true)));
     }
 
@@ -2000,7 +2278,9 @@ mod tests {
     }
 
     async fn start_on(ctx: &InternalCtx, port: u16) -> String {
-        let v = run_internal("oauth-start", &json!({ "port": port }), ctx).await.unwrap();
+        let v = run_internal("oauth-start", &json!({ "port": port }), ctx)
+            .await
+            .unwrap();
         v["state_value"].as_str().unwrap().to_string()
     }
 
@@ -2008,20 +2288,40 @@ mod tests {
     async fn oauth_start_redirect_host_localhost_is_reachable_and_others_are_refused() {
         let (_d, ctx) = test_ctx(None).await;
         let port = 18766;
-        let v = run_internal("oauth-start", &json!({ "port": port, "redirect_host": "localhost" }), &ctx)
-            .await
-            .unwrap();
-        assert_eq!(v["redirect_uri"], format!("http://localhost:{port}/callback"));
+        let v = run_internal(
+            "oauth-start",
+            &json!({ "port": port, "redirect_host": "localhost" }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            v["redirect_uri"],
+            format!("http://localhost:{port}/callback")
+        );
         // The listener is still on 127.0.0.1, which is what `localhost`
         // reaches once the browser falls back from ::1.
         assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
-        run_internal("oauth-stop", &json!({ "state_value": v["state_value"] }), &ctx).await.unwrap();
+        run_internal(
+            "oauth-stop",
+            &json!({ "state_value": v["state_value"] }),
+            &ctx,
+        )
+        .await
+        .unwrap();
 
-        let err = run_internal("oauth-start", &json!({ "port": 18767, "redirect_host": "evil.example" }), &ctx)
-            .await
-            .unwrap_err();
+        let err = run_internal(
+            "oauth-start",
+            &json!({ "port": 18767, "redirect_host": "evil.example" }),
+            &ctx,
+        )
+        .await
+        .unwrap_err();
         assert!(err.contains("redirect_host"), "{err}");
-        assert!(std::net::TcpListener::bind(("127.0.0.1", 18767)).is_ok(), "a refused host must bind nothing");
+        assert!(
+            std::net::TcpListener::bind(("127.0.0.1", 18767)).is_ok(),
+            "a refused host must bind nothing"
+        );
     }
 
     #[tokio::test]
@@ -2032,9 +2332,16 @@ mod tests {
         // Previously: "failed to bind oauth loopback ... os error 10048".
         let second = start_on(&ctx, port).await;
 
-        let v = run_internal("oauth-stop", &json!({ "state_value": first }), &ctx).await.unwrap();
-        assert_eq!(v["stopped"], false, "the superseded listener should already be gone");
-        let v = run_internal("oauth-stop", &json!({ "state_value": second }), &ctx).await.unwrap();
+        let v = run_internal("oauth-stop", &json!({ "state_value": first }), &ctx)
+            .await
+            .unwrap();
+        assert_eq!(
+            v["stopped"], false,
+            "the superseded listener should already be gone"
+        );
+        let v = run_internal("oauth-stop", &json!({ "state_value": second }), &ctx)
+            .await
+            .unwrap();
         assert_eq!(v["stopped"], true);
         assert!(wait_port_free(port).await);
     }
@@ -2042,15 +2349,31 @@ mod tests {
     #[tokio::test]
     async fn oauth_await_releases_the_port_when_the_caller_is_stopped() {
         let (_d, mut ctx) = test_ctx(None).await;
-        ctx.caller = Some(Caller::with_invocation("/pkg/login", None, "inv-oauth-cancel"));
-        ctx.local.invocations().create("inv-oauth-cancel", "/pkg/login", 0).await.unwrap();
+        ctx.caller = Some(Caller::with_invocation(
+            "/pkg/login",
+            None,
+            "inv-oauth-cancel",
+        ));
+        ctx.local
+            .invocations()
+            .create("inv-oauth-cancel", "/pkg/login", 0)
+            .await
+            .unwrap();
         let port = 18762;
         let state = start_on(&ctx, port).await;
 
-        ctx.local.invocations().request_cancel("inv-oauth-cancel").await.unwrap();
+        ctx.local
+            .invocations()
+            .request_cancel("inv-oauth-cancel")
+            .await
+            .unwrap();
         let err = tokio::time::timeout(
             Duration::from_secs(5),
-            run_internal("oauth-await", &json!({ "state_value": state, "timeout_secs": 300 }), &ctx),
+            run_internal(
+                "oauth-await",
+                &json!({ "state_value": state, "timeout_secs": 300 }),
+                &ctx,
+            ),
         )
         .await
         .expect("oauth-await must notice the stop request instead of waiting out its timeout")
@@ -2081,16 +2404,22 @@ mod tests {
         let port = 18764;
         let state = start_on(&ctx, port).await;
 
-        let err = run_internal("oauth-await", &json!({ "state_value": state, "timeout_secs": 1 }), &ctx)
-            .await
-            .unwrap_err();
+        let err = run_internal(
+            "oauth-await",
+            &json!({ "state_value": state, "timeout_secs": 1 }),
+            &ctx,
+        )
+        .await
+        .unwrap_err();
         assert!(err.contains("timed out"), "{err}");
         assert!(
             std::net::TcpListener::bind(("127.0.0.1", port)).is_err(),
             "listener must survive an oauth-await timeout"
         );
 
-        let v = run_internal("oauth-stop", &json!({ "state_value": state }), &ctx).await.unwrap();
+        let v = run_internal("oauth-stop", &json!({ "state_value": state }), &ctx)
+            .await
+            .unwrap();
         assert_eq!(v["stopped"], true);
         assert!(wait_port_free(port).await);
     }
@@ -2111,15 +2440,21 @@ mod tests {
         let browser = tokio::spawn(async move {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             tokio::time::sleep(Duration::from_millis(200)).await;
-            let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
             stream.write_all(request.as_bytes()).await.unwrap();
             let mut response = String::new();
             stream.read_to_string(&mut response).await.unwrap();
             response
         });
-        let v = run_internal("oauth-await", &json!({ "state_value": state, "timeout_secs": 10 }), &ctx)
-            .await
-            .unwrap();
+        let v = run_internal(
+            "oauth-await",
+            &json!({ "state_value": state, "timeout_secs": 10 }),
+            &ctx,
+        )
+        .await
+        .unwrap();
         assert_eq!(v["code"], "the-code");
         let response = browser.await.unwrap();
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");

@@ -78,7 +78,10 @@ fn shell_execute_open(url: &str) -> Result<(), String> {
     if rc as isize > 32 {
         Ok(())
     } else {
-        Err(format!("open-url: ShellExecuteW failed (code {})", rc as isize))
+        Err(format!(
+            "open-url: ShellExecuteW failed (code {})",
+            rc as isize
+        ))
     }
 }
 

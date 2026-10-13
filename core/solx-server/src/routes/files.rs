@@ -4,8 +4,8 @@ use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::get;
 use axum::response::{IntoResponse, Response};
+use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
 use solx_surface::managers::Solx;
@@ -33,7 +33,10 @@ pub struct FileListQuery {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/files", get(list_files))
-        .route("/files/*rel_path", get(get_file).put(put_file).delete(delete_file))
+        .route(
+            "/files/*rel_path",
+            get(get_file).put(put_file).delete(delete_file),
+        )
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 
@@ -118,6 +121,10 @@ async fn list_files(
     State(state): State<AppState>,
     Query(query): Query<FileListQuery>,
 ) -> Result<Json<FileListResponse>, ApiError> {
-    let paths = state.app.files().list(query.prefix.as_deref().unwrap_or("")).await?;
+    let paths = state
+        .app
+        .files()
+        .list(query.prefix.as_deref().unwrap_or(""))
+        .await?;
     Ok(Json(FileListResponse { paths }))
 }

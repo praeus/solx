@@ -96,7 +96,10 @@ fn cache_put(key: &str, token: String, expires_in_secs: u64) {
     // Refresh 60s before the actual expiry to avoid races.
     let ttl = expires_in_secs.saturating_sub(60).max(1);
     if let Ok(mut c) = cache().lock() {
-        c.insert(key.to_string(), (token, Instant::now() + Duration::from_secs(ttl)));
+        c.insert(
+            key.to_string(),
+            (token, Instant::now() + Duration::from_secs(ttl)),
+        );
     }
 }
 
@@ -176,10 +179,7 @@ pub async fn resolve_auth(
             // doesn't have a keyring/secret shape.
             let token =
                 secret_field(action_config, auth, "token", Some("token_secret"), "bearer").await?;
-            let ttl = auth
-                .get("ttl_secs")
-                .and_then(Value::as_u64)
-                .unwrap_or(3600);
+            let ttl = auth.get("ttl_secs").and_then(Value::as_u64).unwrap_or(3600);
             cache_put(&key, token.clone(), ttl);
             Ok(Some(format!("Bearer {token}")))
         }
@@ -198,10 +198,7 @@ pub async fn resolve_auth(
         }
         "oauth_service_account" => {
             let token = exchange_service_account_token(action_config, auth).await?;
-            let ttl = auth
-                .get("ttl_secs")
-                .and_then(Value::as_u64)
-                .unwrap_or(3600);
+            let ttl = auth.get("ttl_secs").and_then(Value::as_u64).unwrap_or(3600);
             cache_put(&key, token.clone(), ttl);
             Ok(Some(format!("Bearer {token}")))
         }
@@ -245,8 +242,14 @@ struct RefreshRequest {
 impl RefreshRequest {
     async fn from_value(action_config: &Value, auth: &Value) -> Result<Self, String> {
         Ok(Self {
-            client_id: secret_field(action_config, auth, "client_id", Some("client_id_secret"), "oauth_refresh")
-                .await?,
+            client_id: secret_field(
+                action_config,
+                auth,
+                "client_id",
+                Some("client_id_secret"),
+                "oauth_refresh",
+            )
+            .await?,
             client_secret: secret_field(
                 action_config,
                 auth,
@@ -361,9 +364,15 @@ pub(crate) async fn optional_secret_field(
     if !inline_present && !pointer_present {
         return Ok(None);
     }
-    secret_field(action_config, auth, field, secret_field_name, auth_type_label)
-        .await
-        .map(Some)
+    secret_field(
+        action_config,
+        auth,
+        field,
+        secret_field_name,
+        auth_type_label,
+    )
+    .await
+    .map(Some)
 }
 
 /// Variant of [`secret_field`] for non-secret fields. Inline string only.
@@ -376,9 +385,7 @@ fn require_inline_string(
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
-        .ok_or_else(|| {
-            format!("auth.type='{auth_type_label}' missing required field '{field}'")
-        })
+        .ok_or_else(|| format!("auth.type='{auth_type_label}' missing required field '{field}'"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -405,17 +412,11 @@ enum RefreshStorage {
     Inline,
     /// The action has `"refresh_token": { "keyring_service": …, "keyring_account": … }`
     /// — write the new value through the keyring.
-    Keyring {
-        service: String,
-        account: String,
-    },
+    Keyring { service: String, account: String },
     /// The action has `"refresh_token_secret": "<name>"` — write the new
     /// value through the scoped secret store, using the key already
     /// configured for that name in `action_config.secrets`.
-    Secret {
-        name: String,
-        key: String,
-    },
+    Secret { name: String, key: String },
 }
 
 impl RefreshStorage {
@@ -582,8 +583,12 @@ async fn persist_rotated_refresh_token(
                 );
             }
         }
-        RefreshStorage::Secret { name: secret_name, key } => {
-            if let Err(e) = crate::secrets::set_secret(&secret_name, new_refresh_token, &key).await {
+        RefreshStorage::Secret {
+            name: secret_name,
+            key,
+        } => {
+            if let Err(e) = crate::secrets::set_secret(&secret_name, new_refresh_token, &key).await
+            {
                 tracing::warn!(
                     "failed to persist rotated refresh_token to secret '{secret_name}' \
                      for action '{name}': {e}"
@@ -625,15 +630,15 @@ impl ServiceAccountRequest {
     }
 }
 
-async fn exchange_service_account_token(action_config: &Value, auth: &Value) -> Result<String, String> {
+async fn exchange_service_account_token(
+    action_config: &Value,
+    auth: &Value,
+) -> Result<String, String> {
     let req = ServiceAccountRequest::from_value(action_config, auth).await?;
 
     let now = chrono::Utc::now().timestamp();
     let exp = now + 3600; // 1h
-    let scope = auth
-        .get("scope")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let scope = auth.get("scope").and_then(Value::as_str).unwrap_or("");
     let claims = json!({
         "iss": req.client_email,
         "scope": scope,
@@ -714,7 +719,12 @@ mod tests {
 
     #[async_trait]
     impl ActionManager for StubActionManager {
-        async fn save(&self, _path: &str, _name: &str, _input: ActionInput) -> solx_surface::error::Result<Action> {
+        async fn save(
+            &self,
+            _path: &str,
+            _name: &str,
+            _input: ActionInput,
+        ) -> solx_surface::error::Result<Action> {
             panic!("stub ActionManager::save should not be called by these tests")
         }
         async fn get(&self, _path: &str, _name: &str) -> solx_surface::error::Result<Action> {
@@ -726,13 +736,24 @@ mod tests {
         async fn list(&self, _opts: ListOptions) -> solx_surface::error::Result<Page<Action>> {
             panic!("stub ActionManager::list should not be called by these tests")
         }
-        async fn paths(&self, _opts: ListOptions) -> solx_surface::error::Result<Page<solx_surface::query::PathFacet>> {
+        async fn paths(
+            &self,
+            _opts: ListOptions,
+        ) -> solx_surface::error::Result<Page<solx_surface::query::PathFacet>> {
             panic!("stub ActionManager::paths should not be called by these tests")
         }
-        async fn search(&self, _query: ActionSearchQuery) -> solx_surface::error::Result<Page<Action>> {
+        async fn search(
+            &self,
+            _query: ActionSearchQuery,
+        ) -> solx_surface::error::Result<Page<Action>> {
             panic!("stub ActionManager::search should not be called by these tests")
         }
-        async fn exec(&self, _path: &str, _name: &str, _params: Value) -> solx_surface::error::Result<ActionExecResult> {
+        async fn exec(
+            &self,
+            _path: &str,
+            _name: &str,
+            _params: Value,
+        ) -> solx_surface::error::Result<ActionExecResult> {
             panic!("stub ActionManager::exec should not be called by these tests")
         }
     }
@@ -746,7 +767,9 @@ mod tests {
     async fn no_auth_block_returns_none() {
         clear();
         let cfg = json!({});
-        let out = resolve_auth(&stub_actions(), "/test", "a", &cfg).await.unwrap();
+        let out = resolve_auth(&stub_actions(), "/test", "a", &cfg)
+            .await
+            .unwrap();
         assert!(out.is_none());
     }
 
@@ -755,7 +778,10 @@ mod tests {
     async fn bearer_returns_static_token() {
         clear();
         let cfg = json!({ "auth": { "type": "bearer", "token": "abc123" } });
-        let out = resolve_auth(&stub_actions(), "/test", "a", &cfg).await.unwrap().unwrap();
+        let out = resolve_auth(&stub_actions(), "/test", "a", &cfg)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(out, "Bearer abc123");
     }
 
@@ -764,7 +790,9 @@ mod tests {
     async fn bearer_missing_token_errors() {
         clear();
         let cfg = json!({ "auth": { "type": "bearer" } });
-        let err = resolve_auth(&stub_actions(), "/test", "bearer_missing_action", &cfg).await.unwrap_err();
+        let err = resolve_auth(&stub_actions(), "/test", "bearer_missing_action", &cfg)
+            .await
+            .unwrap_err();
         assert!(err.contains("requires field 'token'"), "{err}");
     }
 
@@ -773,8 +801,13 @@ mod tests {
     async fn unknown_auth_type_errors_helpfully() {
         clear();
         let cfg = json!({ "auth": { "type": "magic_link" } });
-        let err = resolve_auth(&stub_actions(), "/test", "a", &cfg).await.unwrap_err();
-        assert!(err.contains("unsupported action_config.auth.type 'magic_link'"), "{err}");
+        let err = resolve_auth(&stub_actions(), "/test", "a", &cfg)
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("unsupported action_config.auth.type 'magic_link'"),
+            "{err}"
+        );
         assert!(
             err.contains("'bearer'"),
             "error should list the valid types, got: {err}"
@@ -786,7 +819,9 @@ mod tests {
     async fn auth_block_missing_type_errors() {
         clear();
         let cfg = json!({ "auth": { "token": "x" } });
-        let err = resolve_auth(&stub_actions(), "/test", "a", &cfg).await.unwrap_err();
+        let err = resolve_auth(&stub_actions(), "/test", "a", &cfg)
+            .await
+            .unwrap_err();
         assert!(err.contains("missing required field 'type'"), "{err}");
     }
 
@@ -795,11 +830,16 @@ mod tests {
     async fn cache_hit_avoids_second_call() {
         clear();
         let cfg = json!({ "auth": { "type": "bearer", "token": "abc123", "ttl_secs": 60 } });
-        let _ = resolve_auth(&stub_actions(), "/test", "a", &cfg).await.unwrap();
+        let _ = resolve_auth(&stub_actions(), "/test", "a", &cfg)
+            .await
+            .unwrap();
         // Second call should hit the cache and still return the same token
         // even if we mutate the config to make the bearer path fail.
         let mutated = json!({ "auth": { "type": "bearer" /* no token */ } });
-        let out = resolve_auth(&stub_actions(), "/test", "a", &mutated).await.unwrap().unwrap();
+        let out = resolve_auth(&stub_actions(), "/test", "a", &mutated)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(out, "Bearer abc123");
     }
 
@@ -809,8 +849,20 @@ mod tests {
         clear();
         let cfg_a = json!({ "auth": { "type": "bearer", "token": "for-a", "ttl_secs": 60 } });
         let cfg_b = json!({ "auth": { "type": "bearer", "token": "for-b", "ttl_secs": 60 } });
-        assert_eq!(resolve_auth(&stub_actions(), "/test", "a", &cfg_a).await.unwrap().unwrap(), "Bearer for-a");
-        assert_eq!(resolve_auth(&stub_actions(), "/test", "b", &cfg_b).await.unwrap().unwrap(), "Bearer for-b");
+        assert_eq!(
+            resolve_auth(&stub_actions(), "/test", "a", &cfg_a)
+                .await
+                .unwrap()
+                .unwrap(),
+            "Bearer for-a"
+        );
+        assert_eq!(
+            resolve_auth(&stub_actions(), "/test", "b", &cfg_b)
+                .await
+                .unwrap()
+                .unwrap(),
+            "Bearer for-b"
+        );
     }
 
     #[serial_test::serial]
@@ -821,20 +873,31 @@ mod tests {
         // "staging" copy of the same integration, both named "webhook")
         // must not share a cached bearer token.
         clear();
-        let cfg_prod = json!({ "auth": { "type": "bearer", "token": "prod-token", "ttl_secs": 60 } });
-        let cfg_staging = json!({ "auth": { "type": "bearer", "token": "staging-token", "ttl_secs": 60 } });
+        let cfg_prod =
+            json!({ "auth": { "type": "bearer", "token": "prod-token", "ttl_secs": 60 } });
+        let cfg_staging =
+            json!({ "auth": { "type": "bearer", "token": "staging-token", "ttl_secs": 60 } });
         assert_eq!(
-            resolve_auth(&stub_actions(), "/prod", "webhook", &cfg_prod).await.unwrap().unwrap(),
+            resolve_auth(&stub_actions(), "/prod", "webhook", &cfg_prod)
+                .await
+                .unwrap()
+                .unwrap(),
             "Bearer prod-token"
         );
         assert_eq!(
-            resolve_auth(&stub_actions(), "/staging", "webhook", &cfg_staging).await.unwrap().unwrap(),
+            resolve_auth(&stub_actions(), "/staging", "webhook", &cfg_staging)
+                .await
+                .unwrap()
+                .unwrap(),
             "Bearer staging-token"
         );
         // Re-resolving prod (config unchanged) must still hit its own cache
         // entry, not staging's.
         assert_eq!(
-            resolve_auth(&stub_actions(), "/prod", "webhook", &cfg_prod).await.unwrap().unwrap(),
+            resolve_auth(&stub_actions(), "/prod", "webhook", &cfg_prod)
+                .await
+                .unwrap()
+                .unwrap(),
             "Bearer prod-token"
         );
     }
@@ -844,13 +907,25 @@ mod tests {
     async fn clear_auth_cache_forces_refresh() {
         clear();
         let cfg = json!({ "auth": { "type": "bearer", "token": "first" } });
-        assert_eq!(resolve_auth(&stub_actions(), "/test", "a", &cfg).await.unwrap().unwrap(), "Bearer first");
+        assert_eq!(
+            resolve_auth(&stub_actions(), "/test", "a", &cfg)
+                .await
+                .unwrap()
+                .unwrap(),
+            "Bearer first"
+        );
 
         // Mutate config (e.g. user rotated the bearer); clear cache; verify
         // the new token is returned.
         let cfg2 = json!({ "auth": { "type": "bearer", "token": "second" } });
         clear_auth_cache("/test", "a");
-        assert_eq!(resolve_auth(&stub_actions(), "/test", "a", &cfg2).await.unwrap().unwrap(), "Bearer second");
+        assert_eq!(
+            resolve_auth(&stub_actions(), "/test", "a", &cfg2)
+                .await
+                .unwrap()
+                .unwrap(),
+            "Bearer second"
+        );
     }
 
     #[serial_test::serial]
@@ -880,8 +955,13 @@ mod tests {
                 "client_secret": "csec"
             }
         });
-        let out = resolve_auth(&stub_actions(), "/test", "a", &cfg).await.unwrap();
-        assert!(out.is_none(), "oauth_authorization_code must not inject a Bearer header; got {out:?}");
+        let out = resolve_auth(&stub_actions(), "/test", "a", &cfg)
+            .await
+            .unwrap();
+        assert!(
+            out.is_none(),
+            "oauth_authorization_code must not inject a Bearer header; got {out:?}"
+        );
     }
 
     #[serial_test::serial]
@@ -898,7 +978,9 @@ mod tests {
                 "client_id": "cid"
             }
         });
-        let _ = resolve_auth(&stub_actions(), "/test", "a", &cfg).await.unwrap();
+        let _ = resolve_auth(&stub_actions(), "/test", "a", &cfg)
+            .await
+            .unwrap();
         // Cache should remain empty.
         assert!(
             cache_get(&cache_key("/test", "a")).is_none(),
@@ -977,9 +1059,15 @@ mod tests {
         let cfg = json!({});
         let auth = json!({});
         assert_eq!(
-            optional_secret_field(&cfg, &auth, "client_secret", Some("client_secret_secret"), "oauth_authorization_code")
-                .await
-                .unwrap(),
+            optional_secret_field(
+                &cfg,
+                &auth,
+                "client_secret",
+                Some("client_secret_secret"),
+                "oauth_authorization_code"
+            )
+            .await
+            .unwrap(),
             None
         );
     }
@@ -989,9 +1077,15 @@ mod tests {
         let cfg = json!({});
         let auth = json!({ "client_secret": "shh" });
         assert_eq!(
-            optional_secret_field(&cfg, &auth, "client_secret", Some("client_secret_secret"), "oauth_authorization_code")
-                .await
-                .unwrap(),
+            optional_secret_field(
+                &cfg,
+                &auth,
+                "client_secret",
+                Some("client_secret_secret"),
+                "oauth_authorization_code"
+            )
+            .await
+            .unwrap(),
             Some("shh".to_string())
         );
     }
@@ -1003,9 +1097,15 @@ mod tests {
         // loudly rather than silently degrading to Ok(None).
         let cfg = json!({});
         let auth = json!({ "client_secret_secret": "MY_SECRET" });
-        let err = optional_secret_field(&cfg, &auth, "client_secret", Some("client_secret_secret"), "oauth_authorization_code")
-            .await
-            .unwrap_err();
+        let err = optional_secret_field(
+            &cfg,
+            &auth,
+            "client_secret",
+            Some("client_secret_secret"),
+            "oauth_authorization_code",
+        )
+        .await
+        .unwrap_err();
         assert!(err.contains("MY_SECRET"), "{err}");
     }
 
@@ -1040,7 +1140,8 @@ mod tests {
         // key configured for it — falls back to Inline rather than
         // silently trying to use the secret store without a key.
         let cfg = json!({});
-        let auth = json!({"refresh_token_secret": "GOOGLE_OAUTH_REFRESH_TOKEN", "refresh_token": "abc"});
+        let auth =
+            json!({"refresh_token_secret": "GOOGLE_OAUTH_REFRESH_TOKEN", "refresh_token": "abc"});
         assert!(matches!(
             RefreshStorage::from_auth(&cfg, &auth),
             RefreshStorage::Inline
@@ -1059,10 +1160,13 @@ mod tests {
             .unwrap_or(true));
 
         let string = json!({"persist_rotated_refresh": "no"});
-        assert!(string
-            .get("persist_rotated_refresh")
-            .and_then(Value::as_bool)
-            .unwrap_or(true), "non-bool values fall through to the default-true");
+        assert!(
+            string
+                .get("persist_rotated_refresh")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            "non-bool values fall through to the default-true"
+        );
 
         let opted_out = json!({"persist_rotated_refresh": false});
         assert!(!opted_out

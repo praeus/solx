@@ -281,7 +281,10 @@ impl ConsoleStore {
             });
         }
         if sources.is_empty() {
-            return Ok(CopyResult { copied: 0, next_cursor: from });
+            return Ok(CopyResult {
+                copied: 0,
+                next_cursor: from,
+            });
         }
         let next_cursor = sources.last().map(|s| s.seq + 1).unwrap_or(from);
         let count = sources.len() as i64;
@@ -362,12 +365,20 @@ impl ConsoleStore {
         // own call is: an eviction failure here must not undo entries that
         // are already durably copied.
         self.evict_if_over_cap(&conn, to_action_ref).await?;
-        Ok(CopyResult { copied: count as usize, next_cursor })
+        Ok(CopyResult {
+            copied: count as usize,
+            next_cursor,
+        })
     }
 
     /// Read entries from `from_seq` (inclusive; default 0, i.e. the start of
     /// whatever remains retained) forward, oldest first.
-    pub async fn read(&self, action_ref: &str, from_seq: Option<i64>, limit: i64) -> Result<ReadResult> {
+    pub async fn read(
+        &self,
+        action_ref: &str,
+        from_seq: Option<i64>,
+        limit: i64,
+    ) -> Result<ReadResult> {
         let conn = self.db.connect().await?;
         let (first_seq, _next_seq, dropped) = self.meta(&conn, action_ref).await?;
         let from = from_seq.unwrap_or(0).max(0);
@@ -399,7 +410,12 @@ impl ConsoleStore {
         }
 
         let next_cursor = entries.last().map(|e| e.seq + 1).unwrap_or(from);
-        Ok(ReadResult { entries, next_cursor, first_seq, dropped })
+        Ok(ReadResult {
+            entries,
+            next_cursor,
+            first_seq,
+            dropped,
+        })
     }
 
     /// Like [`Self::read`], but if nothing new is available yet, polls up
@@ -483,24 +499,22 @@ impl ConsoleStore {
         let conn = self.db.connect().await?;
         let limit = limit.clamp(1, 1000);
         let mut rows = match prefix {
-            Some(p) => {
-                conn.query(
+            Some(p) => conn
+                .query(
                     "SELECT action_ref, created_at, last_write, next_seq, first_seq, dropped \
                      FROM consoles WHERE action_ref LIKE ?1 ORDER BY last_write DESC LIMIT ?2",
                     libsql::params![format!("{p}%"), limit],
                 )
                 .await
-                .map_err(map_db)?
-            }
-            None => {
-                conn.query(
+                .map_err(map_db)?,
+            None => conn
+                .query(
                     "SELECT action_ref, created_at, last_write, next_seq, first_seq, dropped \
                      FROM consoles ORDER BY last_write DESC LIMIT ?1",
                     libsql::params![limit],
                 )
                 .await
-                .map_err(map_db)?
-            }
+                .map_err(map_db)?,
         };
 
         let mut out = Vec::new();
@@ -524,7 +538,8 @@ impl ConsoleStore {
     /// there is no background scheduler.
     pub async fn sweep_expired(&self) -> Result<i64> {
         let conn = self.db.connect().await?;
-        let cutoff = (Utc::now() - chrono::Duration::days(self.config.console_ttl_days())).to_rfc3339();
+        let cutoff =
+            (Utc::now() - chrono::Duration::days(self.config.console_ttl_days())).to_rfc3339();
 
         let mut rows = conn
             .query(
@@ -599,7 +614,9 @@ impl ConsoleStore {
             return Ok(());
         }
         let overflow = retained - cap;
-        let batch = overflow.max(((cap as f64) * EVICT_BATCH_FRACTION).ceil() as i64).max(1);
+        let batch = overflow
+            .max(((cap as f64) * EVICT_BATCH_FRACTION).ceil() as i64)
+            .max(1);
         let new_first = (first_seq + batch).min(next_seq);
 
         conn.execute(
@@ -635,8 +652,30 @@ mod tests {
     #[tokio::test]
     async fn print_assigns_increasing_seq_starting_at_one() {
         let (_d, store) = test_store().await;
-        let s1 = store.print("/a/b", "inv-1", None, "info", "guest", Some("one".into()), None).await.unwrap();
-        let s2 = store.print("/a/b", "inv-1", None, "info", "guest", Some("two".into()), None).await.unwrap();
+        let s1 = store
+            .print(
+                "/a/b",
+                "inv-1",
+                None,
+                "info",
+                "guest",
+                Some("one".into()),
+                None,
+            )
+            .await
+            .unwrap();
+        let s2 = store
+            .print(
+                "/a/b",
+                "inv-1",
+                None,
+                "info",
+                "guest",
+                Some("two".into()),
+                None,
+            )
+            .await
+            .unwrap();
         assert_eq!(s1, 1);
         assert_eq!(s2, 2);
     }
@@ -644,8 +683,14 @@ mod tests {
     #[tokio::test]
     async fn separate_consoles_have_independent_sequences() {
         let (_d, store) = test_store().await;
-        let a1 = store.print("/a", "i", None, "info", "guest", Some("x".into()), None).await.unwrap();
-        let b1 = store.print("/b", "i", None, "info", "guest", Some("y".into()), None).await.unwrap();
+        let a1 = store
+            .print("/a", "i", None, "info", "guest", Some("x".into()), None)
+            .await
+            .unwrap();
+        let b1 = store
+            .print("/b", "i", None, "info", "guest", Some("y".into()), None)
+            .await
+            .unwrap();
         assert_eq!(a1, 1);
         assert_eq!(b1, 1);
     }
@@ -654,11 +699,25 @@ mod tests {
     async fn read_returns_entries_in_order_with_a_correct_next_cursor() {
         let (_d, store) = test_store().await;
         for i in 0..3 {
-            store.print("/a", "i", None, "info", "guest", Some(format!("m{i}")), None).await.unwrap();
+            store
+                .print(
+                    "/a",
+                    "i",
+                    None,
+                    "info",
+                    "guest",
+                    Some(format!("m{i}")),
+                    None,
+                )
+                .await
+                .unwrap();
         }
         let r = store.read("/a", None, 100).await.unwrap();
         assert_eq!(r.entries.len(), 3);
-        assert_eq!(r.entries.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(
+            r.entries.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
         assert_eq!(r.next_cursor, 4);
         assert_eq!(r.first_seq, 1);
         assert_eq!(r.dropped, 0);
@@ -668,10 +727,24 @@ mod tests {
     async fn read_from_a_cursor_only_returns_newer_entries() {
         let (_d, store) = test_store().await;
         for i in 0..5 {
-            store.print("/a", "i", None, "info", "guest", Some(format!("m{i}")), None).await.unwrap();
+            store
+                .print(
+                    "/a",
+                    "i",
+                    None,
+                    "info",
+                    "guest",
+                    Some(format!("m{i}")),
+                    None,
+                )
+                .await
+                .unwrap();
         }
         let r = store.read("/a", Some(4), 100).await.unwrap();
-        assert_eq!(r.entries.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![4, 5]);
+        assert_eq!(
+            r.entries.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![4, 5]
+        );
     }
 
     #[tokio::test]
@@ -690,12 +763,37 @@ mod tests {
         let (_d, store) = test_store().await;
         // The destination already has entries of its own, so the copied ones
         // must continue that sequence, not restart at 1.
-        store.print("/dest", "other-inv", None, "info", "guest", Some("already here".into()), None).await.unwrap();
+        store
+            .print(
+                "/dest",
+                "other-inv",
+                None,
+                "info",
+                "guest",
+                Some("already here".into()),
+                None,
+            )
+            .await
+            .unwrap();
         for i in 0..3 {
-            store.print("/src", "inv-1", None, "info", "guest", Some(format!("m{i}")), None).await.unwrap();
+            store
+                .print(
+                    "/src",
+                    "inv-1",
+                    None,
+                    "info",
+                    "guest",
+                    Some(format!("m{i}")),
+                    None,
+                )
+                .await
+                .unwrap();
         }
 
-        let result = store.copy("/src", "/dest", "inv-1", None, 100, None).await.unwrap();
+        let result = store
+            .copy("/src", "/dest", "inv-1", None, 100, None)
+            .await
+            .unwrap();
         assert_eq!(result.copied, 3);
         assert_eq!(result.next_cursor, 4);
 
@@ -703,8 +801,14 @@ mod tests {
         assert_eq!(dest.entries.len(), 4);
         // Continues the destination's own sequence rather than colliding
         // with or restarting from the source's.
-        assert_eq!(dest.entries.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1, 2, 3, 4]);
-        let copied: Vec<&str> = dest.entries[1..].iter().map(|e| e.message.as_deref().unwrap()).collect();
+        assert_eq!(
+            dest.entries.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+        let copied: Vec<&str> = dest.entries[1..]
+            .iter()
+            .map(|e| e.message.as_deref().unwrap())
+            .collect();
         assert_eq!(copied, vec!["m0", "m1", "m2"]);
         // The source is untouched - this is copy, not move.
         let src = store.read("/src", None, 100).await.unwrap();
@@ -717,14 +821,54 @@ mod tests {
         // interleaves every concurrent caller's entries. Copying "everything
         // from cursor" would pull in entries that are not this caller's.
         let (_d, store) = test_store().await;
-        store.print("/src", "inv-a", None, "info", "guest", Some("a1".into()), None).await.unwrap();
-        store.print("/src", "inv-b", None, "info", "guest", Some("b1".into()), None).await.unwrap();
-        store.print("/src", "inv-a", None, "info", "guest", Some("a2".into()), None).await.unwrap();
+        store
+            .print(
+                "/src",
+                "inv-a",
+                None,
+                "info",
+                "guest",
+                Some("a1".into()),
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .print(
+                "/src",
+                "inv-b",
+                None,
+                "info",
+                "guest",
+                Some("b1".into()),
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .print(
+                "/src",
+                "inv-a",
+                None,
+                "info",
+                "guest",
+                Some("a2".into()),
+                None,
+            )
+            .await
+            .unwrap();
 
-        let result = store.copy("/src", "/dest", "inv-a", None, 100, None).await.unwrap();
+        let result = store
+            .copy("/src", "/dest", "inv-a", None, 100, None)
+            .await
+            .unwrap();
         assert_eq!(result.copied, 2);
         let dest = store.read("/dest", None, 100).await.unwrap();
-        let messages: Vec<&str> = dest.entries.iter().map(|e| e.message.as_deref().unwrap()).collect();
+        let messages: Vec<&str> = dest
+            .entries
+            .iter()
+            .map(|e| e.message.as_deref().unwrap())
+            .collect();
         assert_eq!(messages, vec!["a1", "a2"]);
         assert!(dest.entries.iter().all(|e| e.invocation_id == "inv-a"));
     }
@@ -732,9 +876,23 @@ mod tests {
     #[tokio::test]
     async fn copy_prefixes_the_message_with_a_label_when_given() {
         let (_d, store) = test_store().await;
-        store.print("/src", "inv-1", None, "info", "guest", Some("chunk".into()), None).await.unwrap();
+        store
+            .print(
+                "/src",
+                "inv-1",
+                None,
+                "info",
+                "guest",
+                Some("chunk".into()),
+                None,
+            )
+            .await
+            .unwrap();
 
-        store.copy("/src", "/dest", "inv-1", None, 100, Some("summary")).await.unwrap();
+        store
+            .copy("/src", "/dest", "inv-1", None, 100, Some("summary"))
+            .await
+            .unwrap();
         let dest = store.read("/dest", None, 100).await.unwrap();
         assert_eq!(dest.entries[0].message.as_deref(), Some("[summary] chunk"));
     }
@@ -743,25 +901,60 @@ mod tests {
     async fn copy_resumes_from_the_returned_cursor() {
         let (_d, store) = test_store().await;
         for i in 0..5 {
-            store.print("/src", "inv-1", None, "info", "guest", Some(format!("m{i}")), None).await.unwrap();
+            store
+                .print(
+                    "/src",
+                    "inv-1",
+                    None,
+                    "info",
+                    "guest",
+                    Some(format!("m{i}")),
+                    None,
+                )
+                .await
+                .unwrap();
         }
 
-        let first = store.copy("/src", "/dest", "inv-1", None, 3, None).await.unwrap();
+        let first = store
+            .copy("/src", "/dest", "inv-1", None, 3, None)
+            .await
+            .unwrap();
         assert_eq!(first.copied, 3);
-        let second = store.copy("/src", "/dest", "inv-1", Some(first.next_cursor), 100, None).await.unwrap();
+        let second = store
+            .copy("/src", "/dest", "inv-1", Some(first.next_cursor), 100, None)
+            .await
+            .unwrap();
         assert_eq!(second.copied, 2);
 
         let dest = store.read("/dest", None, 100).await.unwrap();
-        let messages: Vec<&str> = dest.entries.iter().map(|e| e.message.as_deref().unwrap()).collect();
+        let messages: Vec<&str> = dest
+            .entries
+            .iter()
+            .map(|e| e.message.as_deref().unwrap())
+            .collect();
         assert_eq!(messages, vec!["m0", "m1", "m2", "m3", "m4"]);
     }
 
     #[tokio::test]
     async fn copy_of_nothing_new_copies_nothing_and_holds_the_cursor() {
         let (_d, store) = test_store().await;
-        store.print("/src", "inv-1", None, "info", "guest", Some("m0".into()), None).await.unwrap();
+        store
+            .print(
+                "/src",
+                "inv-1",
+                None,
+                "info",
+                "guest",
+                Some("m0".into()),
+                None,
+            )
+            .await
+            .unwrap();
 
-        let result = store.copy("/src", "/dest", "inv-1", Some(5), 100, None).await.unwrap();
+        let result = store
+            .copy("/src", "/dest", "inv-1", Some(5), 100, None)
+            .await
+            .unwrap();
         assert_eq!(result.copied, 0);
         assert_eq!(result.next_cursor, 5);
         let dest = store.read("/dest", None, 100).await.unwrap();
@@ -772,11 +965,22 @@ mod tests {
     async fn copy_preserves_level_and_data() {
         let (_d, store) = test_store().await;
         store
-            .print("/src", "inv-1", None, "warn", "guest", Some("m".into()), Some(json!({ "n": 1 })))
+            .print(
+                "/src",
+                "inv-1",
+                None,
+                "warn",
+                "guest",
+                Some("m".into()),
+                Some(json!({ "n": 1 })),
+            )
             .await
             .unwrap();
 
-        store.copy("/src", "/dest", "inv-1", None, 100, None).await.unwrap();
+        store
+            .copy("/src", "/dest", "inv-1", None, 100, None)
+            .await
+            .unwrap();
         let dest = store.read("/dest", None, 100).await.unwrap();
         assert_eq!(dest.entries[0].level, "warn");
         assert_eq!(dest.entries[0].data, Some(json!({ "n": 1 })));
@@ -786,7 +990,15 @@ mod tests {
     async fn message_and_data_round_trip() {
         let (_d, store) = test_store().await;
         store
-            .print("/a", "i", Some("run-1"), "warn", "command", Some("careful".into()), Some(json!({"n": 7})))
+            .print(
+                "/a",
+                "i",
+                Some("run-1"),
+                "warn",
+                "command",
+                Some("careful".into()),
+                Some(json!({"n": 7})),
+            )
             .await
             .unwrap();
         let r = store.read("/a", None, 10).await.unwrap();
@@ -801,7 +1013,10 @@ mod tests {
     #[tokio::test]
     async fn absent_message_and_data_round_trip_as_none() {
         let (_d, store) = test_store().await;
-        store.print("/a", "i", None, "info", "guest", None, None).await.unwrap();
+        store
+            .print("/a", "i", None, "info", "guest", None, None)
+            .await
+            .unwrap();
         let r = store.read("/a", None, 10).await.unwrap();
         assert_eq!(r.entries[0].message, None);
         assert_eq!(r.entries[0].data, None);
@@ -811,7 +1026,10 @@ mod tests {
     #[tokio::test]
     async fn tail_returns_immediately_when_entries_already_exist() {
         let (_d, store) = test_store().await;
-        store.print("/a", "i", None, "info", "guest", Some("hi".into()), None).await.unwrap();
+        store
+            .print("/a", "i", None, "info", "guest", Some("hi".into()), None)
+            .await
+            .unwrap();
         let started = tokio::time::Instant::now();
         let r = store.tail("/a", None, 10, Some(30)).await.unwrap();
         assert_eq!(r.entries.len(), 1);
@@ -833,7 +1051,10 @@ mod tests {
         let store2 = store.clone();
         let writer = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(400)).await;
-            store2.print("/a", "i", None, "info", "guest", Some("late".into()), None).await.unwrap();
+            store2
+                .print("/a", "i", None, "info", "guest", Some("late".into()), None)
+                .await
+                .unwrap();
         });
         let r = store.tail("/a", None, 10, Some(5)).await.unwrap();
         assert_eq!(r.entries.len(), 1);
@@ -845,12 +1066,26 @@ mod tests {
     async fn clear_drops_from_the_front_and_reports_the_removed_count() {
         let (_d, store) = test_store().await;
         for i in 0..5 {
-            store.print("/a", "i", None, "info", "guest", Some(format!("m{i}")), None).await.unwrap();
+            store
+                .print(
+                    "/a",
+                    "i",
+                    None,
+                    "info",
+                    "guest",
+                    Some(format!("m{i}")),
+                    None,
+                )
+                .await
+                .unwrap();
         }
         let removed = store.clear("/a", Some(3)).await.unwrap();
         assert_eq!(removed, 2);
         let r = store.read("/a", None, 100).await.unwrap();
-        assert_eq!(r.entries.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![3, 4, 5]);
+        assert_eq!(
+            r.entries.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![3, 4, 5]
+        );
         assert_eq!(r.first_seq, 3);
     }
 
@@ -858,7 +1093,18 @@ mod tests {
     async fn clear_with_no_before_seq_drops_everything_retained() {
         let (_d, store) = test_store().await;
         for i in 0..3 {
-            store.print("/a", "i", None, "info", "guest", Some(format!("m{i}")), None).await.unwrap();
+            store
+                .print(
+                    "/a",
+                    "i",
+                    None,
+                    "info",
+                    "guest",
+                    Some(format!("m{i}")),
+                    None,
+                )
+                .await
+                .unwrap();
         }
         let removed = store.clear("/a", None).await.unwrap();
         assert_eq!(removed, 3);
@@ -866,14 +1112,20 @@ mod tests {
         assert!(r.entries.is_empty());
 
         // A subsequent print must not collide with the cleared range.
-        let seq = store.print("/a", "i", None, "info", "guest", Some("new".into()), None).await.unwrap();
+        let seq = store
+            .print("/a", "i", None, "info", "guest", Some("new".into()), None)
+            .await
+            .unwrap();
         assert_eq!(seq, 4);
     }
 
     #[tokio::test]
     async fn clear_is_a_no_op_when_before_seq_is_not_past_first_seq() {
         let (_d, store) = test_store().await;
-        store.print("/a", "i", None, "info", "guest", Some("m".into()), None).await.unwrap();
+        store
+            .print("/a", "i", None, "info", "guest", Some("m".into()), None)
+            .await
+            .unwrap();
         let removed = store.clear("/a", Some(1)).await.unwrap();
         assert_eq!(removed, 0);
     }
@@ -887,12 +1139,45 @@ mod tests {
     #[tokio::test]
     async fn current_next_seq_advances_with_writes_and_is_not_confused_by_a_shared_prefix() {
         let (_d, store) = test_store().await;
-        store.print("/pkg/foo", "i", None, "info", "guest", Some("a".into()), None).await.unwrap();
-        store.print("/pkg/foo", "i", None, "info", "guest", Some("b".into()), None).await.unwrap();
+        store
+            .print(
+                "/pkg/foo",
+                "i",
+                None,
+                "info",
+                "guest",
+                Some("a".into()),
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .print(
+                "/pkg/foo",
+                "i",
+                None,
+                "info",
+                "guest",
+                Some("b".into()),
+                None,
+            )
+            .await
+            .unwrap();
         // A sibling console whose ref happens to share "/pkg/foo" as a
         // literal string prefix, written to more recently — a prefix-based
         // `list()` lookup could mistake this for "/pkg/foo"'s own summary.
-        store.print("/pkg/foobar", "i", None, "info", "guest", Some("z".into()), None).await.unwrap();
+        store
+            .print(
+                "/pkg/foobar",
+                "i",
+                None,
+                "info",
+                "guest",
+                Some("z".into()),
+                None,
+            )
+            .await
+            .unwrap();
 
         assert_eq!(store.current_next_seq("/pkg/foo").await.unwrap(), 3);
     }
@@ -900,9 +1185,18 @@ mod tests {
     #[tokio::test]
     async fn list_reflects_recent_writes_and_respects_prefix() {
         let (_d, store) = test_store().await;
-        store.print("/pkg/a", "i", None, "info", "guest", Some("x".into()), None).await.unwrap();
-        store.print("/pkg/b", "i", None, "info", "guest", Some("y".into()), None).await.unwrap();
-        store.print("/other", "i", None, "info", "guest", Some("z".into()), None).await.unwrap();
+        store
+            .print("/pkg/a", "i", None, "info", "guest", Some("x".into()), None)
+            .await
+            .unwrap();
+        store
+            .print("/pkg/b", "i", None, "info", "guest", Some("y".into()), None)
+            .await
+            .unwrap();
+        store
+            .print("/other", "i", None, "info", "guest", Some("z".into()), None)
+            .await
+            .unwrap();
 
         let all = store.list(None, 100).await.unwrap();
         assert_eq!(all.len(), 3);
@@ -922,11 +1216,26 @@ mod tests {
         store.ensure_schema().await.unwrap();
 
         for i in 0..25 {
-            store.print("/a", "i", None, "info", "guest", Some(format!("m{i}")), None).await.unwrap();
+            store
+                .print(
+                    "/a",
+                    "i",
+                    None,
+                    "info",
+                    "guest",
+                    Some(format!("m{i}")),
+                    None,
+                )
+                .await
+                .unwrap();
         }
 
         let r = store.read("/a", None, 1000).await.unwrap();
-        assert!(r.entries.len() <= 10, "retained {} entries, cap is 10", r.entries.len());
+        assert!(
+            r.entries.len() <= 10,
+            "retained {} entries, cap is 10",
+            r.entries.len()
+        );
         assert!(r.dropped > 0, "expected some entries to have been evicted");
         assert_eq!(r.first_seq, r.entries.first().unwrap().seq);
 
@@ -944,8 +1253,14 @@ mod tests {
         let store = ConsoleStore::new(db.clone(), config.clone());
         store.ensure_schema().await.unwrap();
 
-        store.print("/fresh", "i", None, "info", "guest", Some("m".into()), None).await.unwrap();
-        store.print("/stale", "i", None, "info", "guest", Some("m".into()), None).await.unwrap();
+        store
+            .print("/fresh", "i", None, "info", "guest", Some("m".into()), None)
+            .await
+            .unwrap();
+        store
+            .print("/stale", "i", None, "info", "guest", Some("m".into()), None)
+            .await
+            .unwrap();
 
         // Backdate /stale's last_write past the TTL directly.
         let conn = db.connect().await.unwrap();

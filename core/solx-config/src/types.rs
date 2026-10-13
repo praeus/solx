@@ -328,7 +328,10 @@ pub struct ToolPolicy {
 
 impl ToolPolicy {
     pub fn new(hidden: Vec<ToolRule>, destructive: Vec<ToolRule>) -> Self {
-        ToolPolicy { hidden, destructive }
+        ToolPolicy {
+            hidden,
+            destructive,
+        }
     }
 
     /// Hidden = config rules ∪ the [`CAP_HIDDEN`] tag.
@@ -337,7 +340,11 @@ impl ToolPolicy {
     /// called by name — hiding a tool a client has already learned the name
     /// of is not, on its own, a control.
     pub fn is_hidden(&self, action: &Action) -> bool {
-        has_tag(action, CAP_HIDDEN) || self.hidden.iter().any(|r| r.matches(&action.path, &action.name))
+        has_tag(action, CAP_HIDDEN)
+            || self
+                .hidden
+                .iter()
+                .any(|r| r.matches(&action.path, &action.name))
     }
 
     /// Destructive = config rules ∪ the [`CAP_DESTRUCTIVE`] tag ∪ every
@@ -347,9 +354,14 @@ impl ToolPolicy {
     /// action is destructive by construction, and must never depend on
     /// someone having remembered to tag it.
     pub fn is_destructive(&self, action: &Action) -> bool {
-        matches!(action.action_type, Some(ActionType::Command) | Some(ActionType::Webhook))
-            || has_tag(action, CAP_DESTRUCTIVE)
-            || self.destructive.iter().any(|r| r.matches(&action.path, &action.name))
+        matches!(
+            action.action_type,
+            Some(ActionType::Command) | Some(ActionType::Webhook)
+        ) || has_tag(action, CAP_DESTRUCTIVE)
+            || self
+                .destructive
+                .iter()
+                .any(|r| r.matches(&action.path, &action.name))
     }
 }
 
@@ -434,8 +446,14 @@ mod tests {
 
     #[test]
     fn glob_question_matches_single_char() {
-        assert!(glob_matches("/packages/solx-?oogle", "/packages/solx-google"));
-        assert!(!glob_matches("/packages/solx-?oogle", "/packages/solx-gooogle"));
+        assert!(glob_matches(
+            "/packages/solx-?oogle",
+            "/packages/solx-google"
+        ));
+        assert!(!glob_matches(
+            "/packages/solx-?oogle",
+            "/packages/solx-gooogle"
+        ));
     }
 
     #[test]
@@ -468,7 +486,13 @@ mod tests {
 
     #[test]
     fn config_rule_hides_an_untagged_action() {
-        let policy = ToolPolicy::new(vec![ToolRule { path: "/packages/x".into(), actions: None }], vec![]);
+        let policy = ToolPolicy::new(
+            vec![ToolRule {
+                path: "/packages/x".into(),
+                actions: None,
+            }],
+            vec![],
+        );
         assert!(policy.is_hidden(&action("/packages/x", "y", &[], None)));
         assert!(!policy.is_hidden(&action("/packages/z", "y", &[], None)));
     }
@@ -478,7 +502,13 @@ mod tests {
         // The whole reason config is a floor rather than the only input:
         // a row's capabilities are writable by anything that can call
         // entity-save-action.
-        let policy = ToolPolicy::new(vec![ToolRule { path: "/packages/x".into(), actions: None }], vec![]);
+        let policy = ToolPolicy::new(
+            vec![ToolRule {
+                path: "/packages/x".into(),
+                actions: None,
+            }],
+            vec![],
+        );
         assert!(policy.is_hidden(&action("/packages/x", "y", &["totally-safe"], None)));
     }
 
@@ -495,11 +525,29 @@ mod tests {
     fn destructive_unions_tag_and_config() {
         let policy = ToolPolicy::new(
             vec![],
-            vec![ToolRule { path: "/builtin/document".into(), actions: Some(vec!["entity-delete-document".into()]) }],
+            vec![ToolRule {
+                path: "/builtin/document".into(),
+                actions: Some(vec!["entity-delete-document".into()]),
+            }],
         );
-        assert!(policy.is_destructive(&action("/builtin/document", "entity-delete-document", &[], Some(ActionType::Internal))));
-        assert!(!policy.is_destructive(&action("/builtin/document", "entity-get-document", &[], Some(ActionType::Internal))));
-        assert!(policy.is_destructive(&action("/packages/x", "wipe", &[CAP_DESTRUCTIVE], Some(ActionType::Wasm))));
+        assert!(policy.is_destructive(&action(
+            "/builtin/document",
+            "entity-delete-document",
+            &[],
+            Some(ActionType::Internal)
+        )));
+        assert!(!policy.is_destructive(&action(
+            "/builtin/document",
+            "entity-get-document",
+            &[],
+            Some(ActionType::Internal)
+        )));
+        assert!(policy.is_destructive(&action(
+            "/packages/x",
+            "wipe",
+            &[CAP_DESTRUCTIVE],
+            Some(ActionType::Wasm)
+        )));
     }
 
     #[test]
@@ -517,7 +565,12 @@ mod tests {
     #[test]
     fn a_tag_is_matched_exactly_not_as_a_substring() {
         let policy = ToolPolicy::default();
-        assert!(!policy.is_destructive(&action("/p", "a", &["non-solx:destructive"], Some(ActionType::Wasm))));
+        assert!(!policy.is_destructive(&action(
+            "/p",
+            "a",
+            &["non-solx:destructive"],
+            Some(ActionType::Wasm)
+        )));
         assert!(!policy.is_hidden(&action("/p", "a", &["solx:hidden-ish"], None)));
     }
 
@@ -526,12 +579,18 @@ mod tests {
         let policy = ToolPolicy::default();
         let a = action("/p", "a", &[CAP_DESTRUCTIVE], Some(ActionType::Wasm));
         assert!(policy.is_destructive(&a));
-        assert!(!policy.is_hidden(&a), "destructive must stay callable, just gated");
+        assert!(
+            !policy.is_hidden(&a),
+            "destructive must stay callable, just gated"
+        );
     }
 
     #[test]
     fn rule_path_only_excludes_everything_under_path() {
-        let rule = ToolRule { path: "*/_private/*".into(), actions: None };
+        let rule = ToolRule {
+            path: "*/_private/*".into(),
+            actions: None,
+        };
         assert!(rule.matches("/a/_private/b", "anything"));
         assert!(!rule.matches("/a/public/b", "anything"));
     }
@@ -549,7 +608,10 @@ mod tests {
 
     #[test]
     fn rule_with_empty_actions_behaves_like_path_only() {
-        let rule = ToolRule { path: "/x".into(), actions: Some(vec![]) };
+        let rule = ToolRule {
+            path: "/x".into(),
+            actions: Some(vec![]),
+        };
         assert!(rule.matches("/x", "anything"));
     }
 }

@@ -56,7 +56,9 @@ impl LocalActionManager {
             }
         };
         String::from_utf8(bytes).map_err(|e| {
-            SolxError::Exec(format!("script artifact '{bin_name}' is not valid UTF-8: {e}"))
+            SolxError::Exec(format!(
+                "script artifact '{bin_name}' is not valid UTF-8: {e}"
+            ))
         })
     }
 
@@ -110,7 +112,8 @@ impl LocalActionManager {
         params: Value,
         caller: Option<&'a Caller>,
         invocation_id: Option<&'a str>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ActionExecResult>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ActionExecResult>> + Send + 'a>>
+    {
         Box::pin(self.exec_as_with_inner(path, name, params, caller, invocation_id))
     }
 
@@ -159,7 +162,10 @@ impl LocalActionManager {
         // — it is expected to outlive any one caller. `action_config`'s own
         // `timeout_secs` still wins either way.
         let effective_timeout = if detached {
-            Some(timeout_secs(&action.action_config).unwrap_or_else(|| self.config.background_timeout_secs()))
+            Some(
+                timeout_secs(&action.action_config)
+                    .unwrap_or_else(|| self.config.background_timeout_secs()),
+            )
         } else {
             timeout_secs(&action.action_config)
         };
@@ -183,9 +189,10 @@ impl LocalActionManager {
                 .await?
             }
             Some(ActionType::Webhook) => {
-                let url = action.fn_name.as_deref().ok_or_else(|| {
-                    SolxError::Exec("webhook action has no fn_name (URL)".into())
-                })?;
+                let url = action
+                    .fn_name
+                    .as_deref()
+                    .ok_or_else(|| SolxError::Exec("webhook action has no fn_name (URL)".into()))?;
                 exec::run_webhook(
                     &self.config,
                     self,
@@ -233,7 +240,11 @@ impl LocalActionManager {
                 // already committed to the `invocations` row — for a plain
                 // `exec_as` call this is exactly the freshly-minted id above,
                 // so behavior is unchanged from before this method existed.
-                let frame = Caller::with_invocation(&action_ref, action.action_config.as_ref(), invocation_id);
+                let frame = Caller::with_invocation(
+                    &action_ref,
+                    action.action_config.as_ref(),
+                    invocation_id,
+                );
                 // WASM execution reports its own success/message (a guest can
                 // report a handled failure without erroring the host call), so
                 // it returns a full ActionExecResult directly rather than
@@ -258,12 +269,17 @@ impl LocalActionManager {
                 // for this action's own identity, not the incoming one — a
                 // script's nested `exec` calls must never reach an outer
                 // action's secret keys.
-                let frame = Caller::with_invocation(&action_ref, action.action_config.as_ref(), invocation_id);
+                let frame = Caller::with_invocation(
+                    &action_ref,
+                    action.action_config.as_ref(),
+                    invocation_id,
+                );
                 let runner = script::ActionCommandRunner {
                     actions: self.self_arc()?,
                     caller: frame,
                 };
-                let initial = std::collections::HashMap::from([("params".to_string(), params.clone())]);
+                let initial =
+                    std::collections::HashMap::from([("params".to_string(), params.clone())]);
                 let run = solx_scripts::execute_script_with_vars(&runner, &source, initial);
                 let budget = std::time::Duration::from_secs(
                     effective_timeout.unwrap_or(exec::DEFAULT_TIMEOUT_SECS),
@@ -310,10 +326,17 @@ mod tests {
     async fn exec_accepts_camel_case_for_a_required_snake_case_builtin_param() {
         let (_d, _c, m) = setup_wired().await;
         let result = m
-            .exec("/builtin/file", "file-put", serde_json::json!({"relPath": "a.txt", "content": "hi"}))
+            .exec(
+                "/builtin/file",
+                "file-put",
+                serde_json::json!({"relPath": "a.txt", "content": "hi"}),
+            )
             .await
             .unwrap();
-        assert_eq!(result.result.get("rel_path").and_then(Value::as_str), Some("a.txt"));
+        assert_eq!(
+            result.result.get("rel_path").and_then(Value::as_str),
+            Some("a.txt")
+        );
     }
 
     #[tokio::test]
@@ -350,7 +373,10 @@ mod tests {
         };
         m.save("/tools", "echo", input).await.unwrap();
 
-        let err = m.exec("/tools", "echo", serde_json::json!({})).await.unwrap_err();
+        let err = m
+            .exec("/tools", "echo", serde_json::json!({}))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("command_actions"), "{err}");
     }
 
@@ -361,7 +387,9 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let handle = tokio::spawn(async move {
             loop {
-                let Ok((mut stream, _)) = listener.accept().await else { break };
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
                 tokio::spawn(async move {
                     use tokio::io::{AsyncReadExt, AsyncWriteExt};
                     let mut buf = vec![0u8; 8192];
@@ -398,17 +426,31 @@ mod tests {
         .await
         .unwrap();
 
-        let res = m.exec("/tools", "hook", serde_json::json!({"x": 1})).await.unwrap();
+        let res = m
+            .exec("/tools", "hook", serde_json::json!({"x": 1}))
+            .await
+            .unwrap();
         assert!(res.success);
 
-        let entries = m.console().read("/tools/hook", None, 10).await.unwrap().entries;
+        let entries = m
+            .console()
+            .read("/tools/hook", None, 10)
+            .await
+            .unwrap()
+            .entries;
         assert_eq!(entries.len(), 2, "{entries:?}");
         assert_eq!(entries[0].source, "webhook");
-        assert!(entries[0].message.as_deref().unwrap().starts_with("POST http"));
+        assert!(entries[0]
+            .message
+            .as_deref()
+            .unwrap()
+            .starts_with("POST http"));
         assert!(entries[1].message.as_deref().unwrap().contains("succeeded"));
         // Params must never be logged — they can carry secrets a nested
         // reader of the console has no business seeing.
-        assert!(!entries.iter().any(|e| e.message.as_deref().unwrap_or("").contains("\"x\"")));
+        assert!(!entries
+            .iter()
+            .any(|e| e.message.as_deref().unwrap_or("").contains("\"x\"")));
 
         server.abort();
     }
@@ -433,7 +475,12 @@ mod tests {
         let err = m.exec("/tools", "deadhook", serde_json::json!({})).await;
         assert!(err.is_err());
 
-        let entries = m.console().read("/tools/deadhook", None, 10).await.unwrap().entries;
+        let entries = m
+            .console()
+            .read("/tools/deadhook", None, 10)
+            .await
+            .unwrap()
+            .entries;
         assert_eq!(entries.len(), 2, "{entries:?}");
         assert_eq!(entries[1].level, "warn");
         assert!(entries[1].message.as_deref().unwrap().contains("failed"));
@@ -456,10 +503,18 @@ mod tests {
         .await
         .unwrap();
 
-        let err = m.exec("/tools", "hook", serde_json::json!({})).await.unwrap_err();
+        let err = m
+            .exec("/tools", "hook", serde_json::json!({}))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("allowed_base_urls"), "{err}");
 
-        let entries = m.console().read("/tools/hook", None, 10).await.unwrap().entries;
+        let entries = m
+            .console()
+            .read("/tools/hook", None, 10)
+            .await
+            .unwrap()
+            .entries;
         assert!(entries.is_empty(), "{entries:?}");
     }
 
@@ -473,8 +528,14 @@ mod tests {
     // Only ever used for `entity-save-action`/`entity-delete-action`, which
     // live under `ACTION_PATH` (action-entity CRUD, alongside the async
     // start/stop/poll/cancelled actions), not the flat `/builtin` root.
-    async fn exec_builtin(m: &Arc<LocalActionManager>, fn_name: &str, params: Value) -> Result<Value> {
-        m.exec(seed::ACTION_PATH, fn_name, params).await.map(|r| r.result)
+    async fn exec_builtin(
+        m: &Arc<LocalActionManager>,
+        fn_name: &str,
+        params: Value,
+    ) -> Result<Value> {
+        m.exec(seed::ACTION_PATH, fn_name, params)
+            .await
+            .map(|r| r.result)
     }
 
     #[tokio::test]
@@ -493,7 +554,10 @@ mod tests {
             .await
             .unwrap_err();
             assert!(err.to_string().contains("use the solx CLI"), "{ty}: {err}");
-            assert!(m.get_unmasked("/evil", "shell").await.is_err(), "{ty} was created anyway");
+            assert!(
+                m.get_unmasked("/evil", "shell").await.is_err(),
+                "{ty} was created anyway"
+            );
         }
     }
 
@@ -524,7 +588,11 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("use the solx CLI"), "{err}");
         assert_eq!(
-            m.get_unmasked("/tools", "safe").await.unwrap().fn_name.as_deref(),
+            m.get_unmasked("/tools", "safe")
+                .await
+                .unwrap()
+                .fn_name
+                .as_deref(),
             Some("echo 42")
         );
     }
@@ -552,7 +620,10 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("use the solx CLI"), "{err}");
-        assert!(m.get_unmasked("/tools", "safe").await.is_ok(), "action was deleted anyway");
+        assert!(
+            m.get_unmasked("/tools", "safe").await.is_ok(),
+            "action was deleted anyway"
+        );
     }
 
     /// The lockdown is limited to the two executable types — everything else
@@ -608,7 +679,11 @@ mod tests {
 
     /// Like `setup_wired`, but also hands back the `FileStore` so a test can
     /// upload a `.solx` artifact before posting the action that references it.
-    async fn setup_script() -> (tempfile::TempDir, Arc<LocalActionManager>, Arc<dyn FileStore>) {
+    async fn setup_script() -> (
+        tempfile::TempDir,
+        Arc<LocalActionManager>,
+        Arc<dyn FileStore>,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let cfg = Arc::new(ConfigService::open_in(dir.path()).unwrap());
         let types: Arc<dyn TypeManager> = Arc::new(
@@ -671,7 +746,10 @@ mod tests {
         .await
         .unwrap();
 
-        let ran = m.exec("/tools", "hello", serde_json::json!({"go": true})).await.unwrap();
+        let ran = m
+            .exec("/tools", "hello", serde_json::json!({"go": true}))
+            .await
+            .unwrap();
         assert_eq!(ran.result["success"], serde_json::json!(true));
         // The nested action's result is a list page (an object).
         assert!(
@@ -680,7 +758,10 @@ mod tests {
             ran.result
         );
 
-        let skipped = m.exec("/tools", "hello", serde_json::json!({"go": false})).await.unwrap();
+        let skipped = m
+            .exec("/tools", "hello", serde_json::json!({"go": false}))
+            .await
+            .unwrap();
         assert_eq!(skipped.result, serde_json::json!("skipped"));
     }
 
@@ -705,13 +786,26 @@ mod tests {
         .await
         .unwrap();
 
-        m.exec("/tools", "count", serde_json::json!({})).await.unwrap();
+        m.exec("/tools", "count", serde_json::json!({}))
+            .await
+            .unwrap();
 
-        let entries = m.console().read("/tools/count", None, 10).await.unwrap().entries;
+        let entries = m
+            .console()
+            .read("/tools/count", None, 10)
+            .await
+            .unwrap()
+            .entries;
         assert_eq!(entries.len(), 2, "{entries:?}");
         assert_eq!(entries[0].source, "script");
-        assert_eq!(entries[0].message.as_deref(), Some("exec /builtin/action/entity-list-actions"));
-        assert_eq!(entries[1].message.as_deref(), Some("exec /builtin/document/entity-list-documents"));
+        assert_eq!(
+            entries[0].message.as_deref(),
+            Some("exec /builtin/action/entity-list-actions")
+        );
+        assert_eq!(
+            entries[1].message.as_deref(),
+            Some("exec /builtin/document/entity-list-documents")
+        );
         // Both stages share the one script invocation's identity.
         assert_eq!(entries[0].invocation_id, entries[1].invocation_id);
     }
@@ -735,7 +829,12 @@ mod tests {
         let err = m.exec("/tools", "bad", serde_json::json!({})).await;
         assert!(err.is_err());
 
-        let entries = m.console().read("/tools/bad", None, 10).await.unwrap().entries;
+        let entries = m
+            .console()
+            .read("/tools/bad", None, 10)
+            .await
+            .unwrap()
+            .entries;
         assert_eq!(entries.len(), 2, "{entries:?}");
         assert_eq!(entries[1].level, "warn");
         assert!(entries[1].message.as_deref().unwrap().contains("failed"));
@@ -749,7 +848,10 @@ mod tests {
             ..Default::default()
         };
         m.save("/tools", "s", input).await.unwrap();
-        let err = m.exec("/tools", "s", serde_json::json!({})).await.unwrap_err();
+        let err = m
+            .exec("/tools", "s", serde_json::json!({}))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("bin_name"), "{err}");
     }
 
@@ -762,7 +864,10 @@ mod tests {
             ..Default::default()
         };
         m.save("/tools", "s", input).await.unwrap();
-        let err = m.exec("/tools", "s", serde_json::json!({})).await.unwrap_err();
+        let err = m
+            .exec("/tools", "s", serde_json::json!({}))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("missing.solx"), "{err}");
     }
 
@@ -781,8 +886,14 @@ mod tests {
         )
         .await
         .unwrap();
-        let err = m.exec("/tools", "bad", serde_json::json!({})).await.unwrap_err();
-        assert!(err.to_string().contains("unsupported script stage"), "{err}");
+        let err = m
+            .exec("/tools", "bad", serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("unsupported script stage"),
+            "{err}"
+        );
     }
 
     #[tokio::test]
@@ -819,7 +930,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let err = m.exec("/tools", "slow", serde_json::json!({})).await.unwrap_err();
+        let err = m
+            .exec("/tools", "slow", serde_json::json!({}))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("timed out"), "{err}");
     }
 }

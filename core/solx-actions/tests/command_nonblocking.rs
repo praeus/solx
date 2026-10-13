@@ -28,7 +28,11 @@ fn ignores_stdin() -> &'static str {
     "echo done"
 }
 
-async fn setup() -> (tempfile::TempDir, Arc<solx_config::ConfigService>, Arc<LocalActionManager>) {
+async fn setup() -> (
+    tempfile::TempDir,
+    Arc<solx_config::ConfigService>,
+    Arc<LocalActionManager>,
+) {
     let dir = tempfile::tempdir().unwrap();
     let cfg = Arc::new(solx_config::ConfigService::open_in(dir.path()).unwrap());
     let types: Arc<dyn TypeManager> = Arc::new(
@@ -44,9 +48,15 @@ async fn setup() -> (tempfile::TempDir, Arc<solx_config::ConfigService>, Arc<Loc
     let files: Arc<dyn FileStore> =
         Arc::new(solx_files::LocalFileStore::new(dir.path().join("files")));
     let actions = Arc::new(
-        LocalActionManager::open(&dir.path().join("actions.db"), cfg.clone(), types, docs, files)
-            .await
-            .unwrap(),
+        LocalActionManager::open(
+            &dir.path().join("actions.db"),
+            cfg.clone(),
+            types,
+            docs,
+            files,
+        )
+        .await
+        .unwrap(),
     );
     actions.set_self_ref(Arc::downgrade(&actions));
     (dir, cfg, actions)
@@ -65,7 +75,11 @@ async fn save_cmd(
 ) {
     cfg.register_command(
         name,
-        solx_config::CommandDef { command: cmd.into(), description: None, cwd: None },
+        solx_config::CommandDef {
+            command: cmd.into(),
+            description: None,
+            cwd: None,
+        },
     )
     .unwrap();
     actions
@@ -95,7 +109,9 @@ async fn concurrent_commands_do_not_serialize_on_the_worker() {
     let mut tasks = Vec::new();
     for _ in 0..4 {
         let a = actions.clone();
-        tasks.push(tokio::spawn(async move { a.exec("/t", "slow", json!({})).await }));
+        tasks.push(tokio::spawn(async move {
+            a.exec("/t", "slow", json!({})).await
+        }));
     }
     for t in tasks {
         assert!(t.await.unwrap().unwrap().success);
@@ -123,7 +139,10 @@ async fn the_runtime_stays_responsive_during_a_command() {
         tokio::time::sleep(Duration::from_millis(50)).await;
         ticks += 1;
     }
-    assert!(ticks >= 5, "runtime was starved while a command ran (ticks={ticks})");
+    assert!(
+        ticks >= 5,
+        "runtime was starved while a command ran (ticks={ticks})"
+    );
     assert!(running.await.unwrap().unwrap().success);
 }
 
@@ -137,10 +156,13 @@ async fn a_large_stdin_payload_does_not_deadlock() {
     save_cmd(&actions, &cfg, "ignores-stdin", ignores_stdin(), None).await;
 
     let big = json!({ "blob": "x".repeat(512 * 1024) });
-    let res = tokio::time::timeout(Duration::from_secs(30), actions.exec("/t", "ignores-stdin", big))
-        .await
-        .expect("writing a large payload to a child that ignores stdin deadlocked")
-        .unwrap();
+    let res = tokio::time::timeout(
+        Duration::from_secs(30),
+        actions.exec("/t", "ignores-stdin", big),
+    )
+    .await
+    .expect("writing a large payload to a child that ignores stdin deadlocked")
+    .unwrap();
     assert!(res.success, "{:?}", res.message);
 }
 
@@ -161,13 +183,23 @@ async fn a_hanging_command_hits_its_timeout() {
     } else {
         "while :; do :; done"
     };
-    save_cmd(&actions, &cfg, "hangs", forever, Some(json!({ "timeout_secs": 1 }))).await;
+    save_cmd(
+        &actions,
+        &cfg,
+        "hangs",
+        forever,
+        Some(json!({ "timeout_secs": 1 })),
+    )
+    .await;
 
     let start = Instant::now();
-    let err = tokio::time::timeout(Duration::from_secs(30), actions.exec("/t", "hangs", json!({})))
-        .await
-        .expect("hanging command was never bounded")
-        .unwrap_err();
+    let err = tokio::time::timeout(
+        Duration::from_secs(30),
+        actions.exec("/t", "hangs", json!({})),
+    )
+    .await
+    .expect("hanging command was never bounded")
+    .unwrap_err();
     assert!(err.to_string().contains("timed out"), "{err}");
     assert!(start.elapsed() < Duration::from_secs(15));
 }

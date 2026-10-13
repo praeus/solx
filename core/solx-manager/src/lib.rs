@@ -188,15 +188,26 @@ impl App {
     /// Public so a host can choose remote mode explicitly, with a URL/token
     /// kept outside `config` (e.g. a desktop client's own settings, so it
     /// doesn't flip every other solx tool sharing the appdata dir to remote).
-    pub fn remote(config: Arc<ConfigService>, server_url: String, token: String) -> Result<Arc<Self>> {
+    pub fn remote(
+        config: Arc<ConfigService>,
+        server_url: String,
+        token: String,
+    ) -> Result<Arc<Self>> {
         let remote_url = Some(server_url.clone());
-        let types: Arc<dyn TypeManager> =
-            Arc::new(solx_client::RemoteTypeManager::new(server_url.clone(), token.clone()));
-        let docs: Arc<dyn DocManager> =
-            Arc::new(solx_client::RemoteDocManager::new(server_url.clone(), token.clone()));
-        let actions: Arc<dyn ActionManager> =
-            Arc::new(solx_client::RemoteActionManager::new(server_url.clone(), token.clone()));
-        let files: Arc<dyn FileStore> = Arc::new(solx_client::RemoteFileStore::new(server_url, token));
+        let types: Arc<dyn TypeManager> = Arc::new(solx_client::RemoteTypeManager::new(
+            server_url.clone(),
+            token.clone(),
+        ));
+        let docs: Arc<dyn DocManager> = Arc::new(solx_client::RemoteDocManager::new(
+            server_url.clone(),
+            token.clone(),
+        ));
+        let actions: Arc<dyn ActionManager> = Arc::new(solx_client::RemoteActionManager::new(
+            server_url.clone(),
+            token.clone(),
+        ));
+        let files: Arc<dyn FileStore> =
+            Arc::new(solx_client::RemoteFileStore::new(server_url, token));
 
         Ok(Arc::new(App {
             config,
