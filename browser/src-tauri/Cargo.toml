@@ -1,0 +1,59 @@
+[package]
+name = "solx-explorer"
+version = "0.1.0"
+description = "solx desktop app: solx-web over Tauri IPC, as a local server or a thin client"
+authors = ["Praeus Solomon"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "solx_explorer_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# Exactly one of `server`/`client` (enforced in lib.rs). `server` is the
+# default so plain `cargo`/`tauri dev` builds the full app; the client build
+# is `--no-default-features --features client` (see package.json scripts).
+default = ["server"]
+# The whole of solx-core in-process (local managers), optionally also served
+# over HTTP by an embedded solx-server sharing the same `App`.
+server = [
+    "solx-manager/local",
+    "solx-tauri-plugin/local",
+    "dep:solx-server",
+    "dep:solx-actions",
+    "dep:tokio",
+]
+# Thin client: only solx-manager's remote wiring (solx-client), proxying to
+# an existing solx-server. No wasmtime/libsql/keyring.
+client = []
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+solx-tauri-plugin = { path = "../../solx-core/solx-tauri-plugin" }
+solx-manager = { path = "../../solx-core/solx-manager", default-features = false }
+solx-config = { path = "../../solx-core/solx-config" }
+solx-server = { path = "../../solx-core/solx-server", optional = true }
+solx-actions = { path = "../../solx-core/solx-actions", optional = true }
+tokio = { version = "1", features = ["net", "io-util", "time", "sync"], optional = true }
+
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

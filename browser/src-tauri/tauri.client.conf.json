@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "solx-client",
+  "mainBinaryName": "solx-client",
+  "identifier": "org.praeus.solx-client",
+  "app": {
+    "windows": [
+      {
+        "title": "solx (client)",
+        "width": 1280,
+        "height": 800
+      }
+    ]
+  }
+}
