@@ -6,6 +6,7 @@
  * through with no conversion layer.
  */
 import type {
+  EntityOptions,
   JsonValue,
   ListOptions,
   Page,
@@ -15,7 +16,7 @@ import type {
   TypeManager as TypeManagerIface,
 } from '@solx/surface';
 import { Ref } from '@solx/surface';
-import { entityPath, requestJson, toQuery } from './fetch.js';
+import { entityPath, entityQuery, requestJson, toQuery } from './fetch.js';
 
 /**
  * HTTP-proxy `TypeManager` talking to a `solx-server`. Public name matches
@@ -29,18 +30,23 @@ export class HttpTypeManager implements TypeManagerIface {
     private readonly token: string,
   ) {}
 
-  async save(path: string, name: string, input: TypeInput): Promise<TypeEntity> {
+  async save(path: string, name: string, input: TypeInput, opts?: EntityOptions): Promise<TypeEntity> {
     return requestJson<TypeEntity>(this.baseUrl, this.token, 'PUT', entityPath('types', path, name), {
       body: input,
+      query: entityQuery(opts),
     });
   }
 
-  async get(path: string, name: string): Promise<TypeEntity> {
-    return requestJson<TypeEntity>(this.baseUrl, this.token, 'GET', entityPath('types', path, name));
+  async get(path: string, name: string, opts?: EntityOptions): Promise<TypeEntity> {
+    return requestJson<TypeEntity>(this.baseUrl, this.token, 'GET', entityPath('types', path, name), {
+      query: entityQuery(opts),
+    });
   }
 
-  async delete(path: string, name: string): Promise<void> {
-    await requestJson<void>(this.baseUrl, this.token, 'DELETE', entityPath('types', path, name));
+  async delete(path: string, name: string, opts?: EntityOptions): Promise<void> {
+    await requestJson<void>(this.baseUrl, this.token, 'DELETE', entityPath('types', path, name), {
+      query: entityQuery(opts),
+    });
   }
 
   async list(opts?: ListOptions): Promise<Page<TypeEntity>> {

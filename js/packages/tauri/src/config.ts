@@ -25,6 +25,26 @@ export interface ToolRule {
   actions?: string[];
 }
 
+/**
+ * Exclusion patterns for one scope, by entity kind. A pattern is a glob
+ * (`*` spans `/`, `?` is one character) matched against an entity's path or
+ * its full reference: `/a/b` hides entities in `/a/b` and the entity `b` in
+ * `/a`; `/a/b*` also hides everything beneath.
+ */
+export interface ExclusionLists {
+  documents?: string[];
+  types?: string[];
+  actions?: string[];
+}
+
+/** `exclusions`: two independent scopes. */
+export interface Exclusions {
+  /** Hidden from the web UI and REST/Tauri clients. */
+  user?: ExclusionLists;
+  /** Hidden from models: MCP, the agent harness. Unioned with `tool_exclude` for actions. */
+  tooling?: ExclusionLists;
+}
+
 export interface InstalledPackage {
   name: string;
   version: string;
@@ -68,6 +88,7 @@ export interface SolxConfigFile {
   /** Former name of `tool_exclude`; still read, folded away on write. */
   mcp_exclude?: ToolRule[];
   tool_destructive?: ToolRule[];
+  exclusions?: Exclusions;
   [key: string]: unknown;
 }
 

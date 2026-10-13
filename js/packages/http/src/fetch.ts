@@ -5,10 +5,11 @@
  * and `search` options ride in the query string, and a non-2xx response's
  * JSON body is the `SolxError` itself.
  */
-import { SolxError } from '@solx/surface';
+import { SolxError, type EntityOptions } from '@solx/surface';
 import { mapHttpError } from './error.js';
 
-export type QueryValue = string | number | boolean | undefined;
+/** An array goes out as repeated keys (`excludePaths=/a&excludePaths=/b`). */
+export type QueryValue = string | number | boolean | string[] | undefined;
 
 export interface RequestOptions {
   query?: Record<string, QueryValue>;
@@ -59,12 +60,22 @@ export function toQuery(opts?: object): Record<string, QueryValue> {
   return out;
 }
 
+/** Query for a single-entity request: just its `excludeMode`, when set. */
+export function entityQuery(opts?: EntityOptions): Record<string, QueryValue> | undefined {
+  return opts?.excludeMode ? { excludeMode: opts.excludeMode } : undefined;
+}
+
 function buildUrl(baseUrl: string, path: string, query?: Record<string, QueryValue>): string {
   const url = `${baseUrl.replace(/\/$/, '')}${path}`;
   if (!query) return url;
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
-    if (value !== undefined) params.append(key, String(value));
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      for (const v of value) params.append(key, v);
+    } else {
+      params.append(key, String(value));
+    }
   }
   const qs = params.toString();
   return qs ? `${url}?${qs}` : url;

@@ -9,12 +9,13 @@ import type {
   DocManager as DocManagerIface,
   Document,
   DocumentInput,
+  EntityOptions,
   ListOptions,
   Page,
   PathFacet,
   SearchQuery,
 } from '@solx/surface';
-import { entityPath, requestJson, toQuery } from './fetch.js';
+import { entityPath, entityQuery, requestJson, toQuery } from './fetch.js';
 
 /**
  * HTTP-proxy `DocManager` talking to a `solx-server`. Public name matches
@@ -27,18 +28,23 @@ export class HttpDocManager implements DocManagerIface {
     private readonly token: string,
   ) {}
 
-  async save(path: string, name: string, input: DocumentInput): Promise<Document> {
+  async save(path: string, name: string, input: DocumentInput, opts?: EntityOptions): Promise<Document> {
     return requestJson<Document>(this.baseUrl, this.token, 'PUT', entityPath('docs', path, name), {
       body: input,
+      query: entityQuery(opts),
     });
   }
 
-  async get(path: string, name: string): Promise<Document> {
-    return requestJson<Document>(this.baseUrl, this.token, 'GET', entityPath('docs', path, name));
+  async get(path: string, name: string, opts?: EntityOptions): Promise<Document> {
+    return requestJson<Document>(this.baseUrl, this.token, 'GET', entityPath('docs', path, name), {
+      query: entityQuery(opts),
+    });
   }
 
-  async delete(path: string, name: string): Promise<void> {
-    await requestJson<void>(this.baseUrl, this.token, 'DELETE', entityPath('docs', path, name));
+  async delete(path: string, name: string, opts?: EntityOptions): Promise<void> {
+    await requestJson<void>(this.baseUrl, this.token, 'DELETE', entityPath('docs', path, name), {
+      query: entityQuery(opts),
+    });
   }
 
   async list(opts?: ListOptions): Promise<Page<Document>> {

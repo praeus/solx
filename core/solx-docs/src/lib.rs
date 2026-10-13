@@ -21,7 +21,9 @@ use solx_surface::entities::{DocLink, Document, DocumentInput, FileRef};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::{DocManager, TypeManager};
 use solx_surface::path::{full_ref, normalize_path, validate_name};
-use solx_surface::query::{ListOptions, ListSchema, Page, PathFacet, SearchQuery, SortOrder};
+use solx_surface::query::{
+    exclude_conditions, ListOptions, ListSchema, Page, PathFacet, SearchQuery, SortOrder,
+};
 use uuid::Uuid;
 
 use content::{flatten_strings, walk_contents};
@@ -610,7 +612,14 @@ impl DocManager for LocalDocManager {
         let offset = query.offset.unwrap_or(0);
 
         let mut conditions: Vec<String> = Vec::new();
-        let mut binds: Vec<libsql::Value> = Vec::new();
+        // Exclusions render first, while the bind list is still empty, so
+        // the shared renderer's `?N` numbering lines up with `binds`.
+        let mut excl_binds: Vec<String> = Vec::new();
+        if let Some(cond) = exclude_conditions(&query.exclude_paths, "d.", &mut excl_binds)? {
+            conditions.push(cond);
+        }
+        let mut binds: Vec<libsql::Value> =
+            excl_binds.into_iter().map(libsql::Value::from).collect();
 
         if let Some(prefix) = query.path_prefix.as_deref().filter(|s| !s.is_empty()) {
             let p = normalize_path(prefix)?;
@@ -1042,5 +1051,56 @@ mod tests {
             .find(|f| f.path == "/blog/drafts")
             .unwrap();
         assert_eq!(drafts.count, 1);
+    }
+
+    #[tokio::test]
+    async fn exclude_paths_apply_to_list_paths_and_search() {
+        let (_d, m) = setup().await;
+        let input = |title: &str| DocumentInput {
+            type_ref: Some("/types/docs/Document".into()),
+            title: Some(title.into()),
+            ..Default::default()
+        };
+        m.save("/agent/skills", "one", input("alpha skill"))
+            .await
+            .unwrap();
+        m.save("/agent", "skills", input("alpha index"))
+            .await
+            .unwrap();
+        m.save("/notes", "keep", input("alpha note")).await.unwrap();
+        let ex = vec!["/agent/skills".to_string()];
+
+        let page = m
+            .list(ListOptions {
+                exclude_paths: ex.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].name, "keep");
+
+        let paths = m
+            .paths(ListOptions {
+                exclude_paths: ex.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let got: Vec<&str> = paths.items.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(got, vec!["/notes"]);
+
+        for q in [None, Some("alpha".to_string())] {
+            let res = m
+                .search(SearchQuery {
+                    q: q.clone(),
+                    exclude_paths: ex.clone(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            assert_eq!(res.total, 1, "q={q:?}");
+            assert_eq!(res.items[0].name, "keep");
+        }
     }
 }

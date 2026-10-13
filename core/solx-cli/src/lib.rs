@@ -527,6 +527,8 @@ async fn handle_search(
         linked_to,
         limit,
         offset,
+        // The CLI is an admin surface: no configured exclusions apply.
+        ..Default::default()
     };
     Ok(serde_json::to_value(
         app.docs().search(q).await.map_err(to_anyhow)?,

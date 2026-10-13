@@ -18,15 +18,27 @@ import type {
   TypeEntity,
   TypeInput,
 } from './entities.js';
-import type { ActionSearchQuery, ListOptions, Page, PathFacet, SearchQuery } from './query.js';
+import type {
+  ActionSearchQuery,
+  EntityOptions,
+  ListOptions,
+  Page,
+  PathFacet,
+  SearchQuery,
+} from './query.js';
 import type { JsonValue } from './json.js';
 
 // ---------- TypeManager ----------
+//
+// `get`/`save`/`delete` take an optional `EntityOptions` carrying the
+// exclusion scope. Transports that serve the web UI (`@solx/http`,
+// `@solx/tauri`) honour it; the native packages ignore it, as the Rust
+// manager traits apply no configured exclusions.
 
 export interface TypeManager {
-  save(path: string, name: string, input: TypeInput): Promise<TypeEntity>;
-  get(path: string, name: string): Promise<TypeEntity>;
-  delete(path: string, name: string): Promise<void>;
+  save(path: string, name: string, input: TypeInput, opts?: EntityOptions): Promise<TypeEntity>;
+  get(path: string, name: string, opts?: EntityOptions): Promise<TypeEntity>;
+  delete(path: string, name: string, opts?: EntityOptions): Promise<void>;
   list(opts?: ListOptions): Promise<Page<TypeEntity>>;
   /**
    * Distinct path values in use, each with a count of types at that path.
@@ -54,9 +66,9 @@ export interface FileStore {
 // ---------- DocManager ----------
 
 export interface DocManager {
-  save(path: string, name: string, input: DocumentInput): Promise<Document>;
-  get(path: string, name: string): Promise<Document>;
-  delete(path: string, name: string): Promise<void>;
+  save(path: string, name: string, input: DocumentInput, opts?: EntityOptions): Promise<Document>;
+  get(path: string, name: string, opts?: EntityOptions): Promise<Document>;
+  delete(path: string, name: string, opts?: EntityOptions): Promise<void>;
   list(opts?: ListOptions): Promise<Page<Document>>;
   /** Distinct path values in use, each with a count of documents at that path. Optional — see {@link TypeManager.paths}. */
   paths?(opts?: ListOptions): Promise<Page<PathFacet>>;
@@ -66,9 +78,9 @@ export interface DocManager {
 // ---------- ActionManager ----------
 
 export interface ActionManager {
-  save(path: string, name: string, input: ActionInput): Promise<Action>;
-  get(path: string, name: string): Promise<Action>;
-  delete(path: string, name: string): Promise<void>;
+  save(path: string, name: string, input: ActionInput, opts?: EntityOptions): Promise<Action>;
+  get(path: string, name: string, opts?: EntityOptions): Promise<Action>;
+  delete(path: string, name: string, opts?: EntityOptions): Promise<void>;
   list(opts?: ListOptions): Promise<Page<Action>>;
   /** Distinct path values in use, each with a count of actions at that path. Optional — see {@link TypeManager.paths}. */
   paths?(opts?: ListOptions): Promise<Page<PathFacet>>;

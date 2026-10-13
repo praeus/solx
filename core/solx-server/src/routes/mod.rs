@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod docs;
+pub mod exclude;
 pub mod files;
 pub mod mcp;
 pub mod refs;

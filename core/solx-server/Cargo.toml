@@ -21,6 +21,7 @@ solx-actions = { workspace = true }
 # `Arc<App>`. See routes/mcp.rs.
 solx-mcp = { workspace = true }
 axum = { workspace = true }
+axum-extra = { workspace = true }
 tower-http = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }

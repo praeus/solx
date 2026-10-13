@@ -6,6 +6,11 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use solx_surface::entities::{Action, ActionType};
+use solx_surface::error::SolxError;
+use solx_surface::path::{full_ref, normalize_path};
+use solx_surface::query::{
+    is_excluded_by, validate_exclude_pattern, ExcludeMode, ListOptions, SearchQuery,
+};
 
 /// A single allowed shell command for `Command`-type actions. A Command
 /// action's `fn_name` is never the literal command to run — it's a key into
@@ -269,6 +274,206 @@ pub struct SolxConfig {
     /// Also one of several inputs — see [`ToolPolicy`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_destructive: Option<Vec<ToolRule>>,
+
+    /// Per-scope exclusion patterns for documents, types and actions. See
+    /// [`Exclusions`] and [`ExclusionPolicy`].
+    ///
+    /// ```json
+    /// "exclusions": {
+    ///   "user":    { "documents": ["/agent/skills", "/agent/sessions"] },
+    ///   "tooling": { "actions": ["*/_private/*"] }
+    /// }
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclusions: Option<Exclusions>,
+}
+
+/// The two independent exclusion scopes. Each is a set of patterns (see
+/// `solx_surface::query::validate_exclude_pattern`) per entity kind.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Exclusions {
+    /// Hidden from the web UI and REST/Tauri clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<ExclusionLists>,
+    /// Hidden from model-facing callers: MCP, the agent harness, and any
+    /// builtin call made with `excludeMode: "tooling"`. For actions this is
+    /// unioned with `tool_exclude`/`mcp_exclude` and the `solx:hidden` tag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tooling: Option<ExclusionLists>,
+}
+
+/// Exclusion patterns for one scope, by entity kind.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExclusionLists {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub documents: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub types: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl ExclusionLists {
+    fn for_kind(&self, kind: EntityKind) -> &[String] {
+        match kind {
+            EntityKind::Document => &self.documents,
+            EntityKind::Type => &self.types,
+            EntityKind::Action => &self.actions,
+        }
+    }
+}
+
+/// Which entity store an exclusion applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntityKind {
+    Document,
+    Type,
+    Action,
+}
+
+impl EntityKind {
+    /// The noun the stores use in their `NotFound` messages, so an excluded
+    /// entity reads exactly like a missing one.
+    pub fn label(self) -> &'static str {
+        match self {
+            EntityKind::Document => "document",
+            EntityKind::Type => "type",
+            EntityKind::Action => "action",
+        }
+    }
+}
+
+/// Resolved exclusion patterns for every (scope, kind) pair, built once from
+/// a config snapshot and then applied to many requests or entities.
+///
+/// Same reasoning as [`ToolPolicy`] for being a struct: one snapshot, one
+/// place the decision is made. Exclusions only ever *add* - `apply` appends
+/// to whatever `exclude_paths` the caller already sent.
+#[derive(Debug, Clone, Default)]
+pub struct ExclusionPolicy {
+    user: ExclusionLists,
+    tooling: ExclusionLists,
+}
+
+impl ExclusionPolicy {
+    /// Build from a snapshot. Tooling action patterns include the legacy
+    /// `tool_exclude`/`mcp_exclude` rules, converted by
+    /// [`ToolRule::to_patterns`].
+    pub fn from_config(cfg: &SolxConfig) -> Self {
+        let ex = cfg.exclusions.clone().unwrap_or_default();
+        let user = ex.user.unwrap_or_default();
+        let mut tooling = ex.tooling.unwrap_or_default();
+        for rule in cfg
+            .tool_exclude
+            .iter()
+            .flatten()
+            .chain(cfg.mcp_exclude.iter().flatten())
+        {
+            tooling.actions.extend(rule.to_patterns());
+        }
+        ExclusionPolicy { user, tooling }
+    }
+
+    /// The configured patterns for `kind` under `mode`.
+    pub fn patterns(&self, kind: EntityKind, mode: ExcludeMode) -> &[String] {
+        match mode {
+            ExcludeMode::None => &[],
+            ExcludeMode::User => self.user.for_kind(kind),
+            ExcludeMode::Tooling => self.tooling.for_kind(kind),
+        }
+    }
+
+    /// Resolve `opts.exclude_mode` (falling back to `default`), record the
+    /// resolved mode back on `opts`, and append its patterns to
+    /// `opts.exclude_paths`. Returns the resolved mode.
+    ///
+    /// The mode is written back rather than cleared so the action store can
+    /// still render the `solx:hidden` tag check for `Tooling`.
+    pub fn apply(
+        &self,
+        kind: EntityKind,
+        opts: &mut ListOptions,
+        default: ExcludeMode,
+    ) -> ExcludeMode {
+        let mode = opts.exclude_mode.unwrap_or(default);
+        opts.exclude_mode = Some(mode);
+        opts.exclude_paths
+            .extend(self.patterns(kind, mode).iter().cloned());
+        mode
+    }
+
+    /// [`Self::apply`] for a document [`SearchQuery`].
+    pub fn apply_search(&self, query: &mut SearchQuery, default: ExcludeMode) -> ExcludeMode {
+        let mode = query.exclude_mode.unwrap_or(default);
+        query.exclude_mode = Some(mode);
+        query
+            .exclude_paths
+            .extend(self.patterns(EntityKind::Document, mode).iter().cloned());
+        mode
+    }
+
+    /// Whether the entity at `path`/`name` is excluded under `mode`, by
+    /// path alone. For actions under `Tooling` the row's `solx:hidden` tag
+    /// also counts - use [`Self::is_action_excluded`] when the row is at hand.
+    pub fn is_excluded(&self, kind: EntityKind, mode: ExcludeMode, path: &str, name: &str) -> bool {
+        is_excluded_by(self.patterns(kind, mode), path, name)
+    }
+
+    /// [`Self::is_excluded`] for an action row, including the tag.
+    pub fn is_action_excluded(&self, mode: ExcludeMode, action: &Action) -> bool {
+        (mode == ExcludeMode::Tooling && has_tag(action, CAP_HIDDEN))
+            || self.is_excluded(EntityKind::Action, mode, &action.path, &action.name)
+    }
+
+    /// Refuse direct access to an excluded entity.
+    ///
+    /// A read or delete reports `NotFound`, worded exactly as the store
+    /// words a genuinely missing entity: a caller that could tell the two
+    /// apart could enumerate what is excluded. A write reports `Invalid`
+    /// instead - "not found" would be nonsense for a create, and refusing
+    /// to write somewhere reveals nothing about what is already there.
+    ///
+    /// `path`/`name` are normalized first; one that fails normalization
+    /// passes through so the store can report the real problem.
+    pub fn guard(
+        &self,
+        kind: EntityKind,
+        mode: ExcludeMode,
+        path: &str,
+        name: &str,
+        write: bool,
+    ) -> Result<(), SolxError> {
+        let (Ok(path), Ok(fr)) = (normalize_path(path), full_ref(path, name)) else {
+            return Ok(());
+        };
+        if !self.is_excluded(kind, mode, &path, name.trim()) {
+            return Ok(());
+        }
+        Err(excluded_error(kind, &fr, write))
+    }
+
+    /// [`Self::guard`] for an action row already read, so the
+    /// `solx:hidden` tag counts under `Tooling`.
+    pub fn guard_action(
+        &self,
+        mode: ExcludeMode,
+        action: &Action,
+        write: bool,
+    ) -> Result<(), SolxError> {
+        if !self.is_action_excluded(mode, action) {
+            return Ok(());
+        }
+        let fr = full_ref(&action.path, &action.name).unwrap_or_default();
+        Err(excluded_error(EntityKind::Action, &fr, write))
+    }
+}
+
+fn excluded_error(kind: EntityKind, full_ref: &str, write: bool) -> SolxError {
+    if write {
+        SolxError::Invalid(format!("{} {full_ref} is excluded", kind.label()))
+    } else {
+        SolxError::NotFound(format!("{} {full_ref}", kind.label()))
+    }
 }
 
 /// Reserved capability tag marking an action hidden from model-facing tool
@@ -298,6 +503,32 @@ pub struct ToolRule {
 pub type McpExcludeRule = ToolRule;
 
 impl ToolRule {
+    /// This rule as exclusion patterns: `[path]` when it names no actions,
+    /// otherwise `path/<action>` for each one.
+    ///
+    /// Exclusion patterns match a path *or* a full reference, so
+    /// `path/<action>` also covers a folder of that name under `path` - a
+    /// slightly wider net than [`Self::matches`], accepted so hidden-ness can
+    /// be decided in SQL.
+    ///
+    /// A pattern that fails `validate_exclude_pattern` is dropped. That keeps
+    /// behaviour identical rather than loosening it: such a rule (no leading
+    /// `/` or `*`, a `:`, a `..` segment) could never match a normalized
+    /// path, and left in it would fail every tooling query instead.
+    pub fn to_patterns(&self) -> Vec<String> {
+        let patterns = match &self.actions {
+            Some(names) if !names.is_empty() => {
+                let base = self.path.trim_end_matches('/');
+                names.iter().map(|n| format!("{base}/{n}")).collect()
+            }
+            _ => vec![self.path.clone()],
+        };
+        patterns
+            .into_iter()
+            .filter(|p| validate_exclude_pattern(p).is_ok())
+            .collect()
+    }
+
     /// Whether this rule matches the action at `path`/`name`.
     pub fn matches(&self, path: &str, name: &str) -> bool {
         if !glob_matches(&self.path, path) {
@@ -326,29 +557,37 @@ impl ToolRule {
 /// or Wasm one), so a tag alone would be a flag the flagged party can remove.
 #[derive(Debug, Clone, Default)]
 pub struct ToolPolicy {
-    hidden: Vec<ToolRule>,
+    /// Tooling-scope action exclusion patterns - the same list
+    /// [`ExclusionPolicy`] renders into SQL, so the catalogue and the
+    /// call-time check cannot disagree.
+    hidden: Vec<String>,
     destructive: Vec<ToolRule>,
 }
 
 impl ToolPolicy {
     pub fn new(hidden: Vec<ToolRule>, destructive: Vec<ToolRule>) -> Self {
         ToolPolicy {
+            hidden: hidden.iter().flat_map(ToolRule::to_patterns).collect(),
+            destructive,
+        }
+    }
+
+    /// Build from already-resolved tooling action patterns.
+    pub fn from_patterns(hidden: Vec<String>, destructive: Vec<ToolRule>) -> Self {
+        ToolPolicy {
             hidden,
             destructive,
         }
     }
 
-    /// Hidden = config rules ∪ the [`CAP_HIDDEN`] tag.
+    /// Hidden = tooling action exclusions (`exclusions.tooling.actions` ∪
+    /// `tool_exclude` ∪ `mcp_exclude`) ∪ the [`CAP_HIDDEN`] tag.
     ///
     /// A hidden action is omitted from the catalogue *and* refused when
     /// called by name — hiding a tool a client has already learned the name
     /// of is not, on its own, a control.
     pub fn is_hidden(&self, action: &Action) -> bool {
-        has_tag(action, CAP_HIDDEN)
-            || self
-                .hidden
-                .iter()
-                .any(|r| r.matches(&action.path, &action.name))
+        has_tag(action, CAP_HIDDEN) || is_excluded_by(&self.hidden, &action.path, &action.name)
     }
 
     /// Destructive = config rules ∪ the [`CAP_DESTRUCTIVE`] tag ∪ every
@@ -403,37 +642,9 @@ fn has_tag(action: &Action, tag: &str) -> bool {
     action.capabilities.iter().any(|c| c == tag)
 }
 
-/// Match a glob pattern against a path. `*` matches any sequence of
-/// characters (including `/`), `?` matches any single character; every other
-/// character matches literally. No external glob/regex dependency — this is
-/// the classic two-pointer glob algorithm.
-pub fn glob_matches(pattern: &str, text: &str) -> bool {
-    let p: Vec<char> = pattern.chars().collect();
-    let t: Vec<char> = text.chars().collect();
-    let (mut pi, mut ti) = (0usize, 0usize);
-    let (mut star_p, mut star_t) = (usize::MAX, 0usize);
-
-    while ti < t.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
-            pi += 1;
-            ti += 1;
-        } else if pi < p.len() && p[pi] == '*' {
-            star_p = pi;
-            star_t = ti;
-            pi += 1;
-        } else if star_p != usize::MAX {
-            pi = star_p + 1;
-            star_t += 1;
-            ti = star_t;
-        } else {
-            return false;
-        }
-    }
-    while pi < p.len() && p[pi] == '*' {
-        pi += 1;
-    }
-    pi == p.len()
-}
+/// Moved to `solx-surface` so the SQL exclusion renderer and this crate's
+/// rule matching share one implementation; re-exported for existing callers.
+pub use solx_surface::query::glob_matches;
 
 #[cfg(test)]
 mod tests {
@@ -608,6 +819,110 @@ mod tests {
         assert!(rule.matches("/packages/solx-google", "search"));
         assert!(!rule.matches("/packages/solx-google", "list"));
         assert!(!rule.matches("/packages/solx-other", "search"));
+    }
+
+    #[test]
+    fn rule_converts_to_exclusion_patterns() {
+        let whole = ToolRule {
+            path: "*/_private/*".into(),
+            actions: None,
+        };
+        assert_eq!(whole.to_patterns(), vec!["*/_private/*".to_string()]);
+        // A rule that could never match is dropped rather than left to fail
+        // every query.
+        let dead = ToolRule {
+            path: "packages/no-slash".into(),
+            actions: None,
+        };
+        assert!(dead.to_patterns().is_empty());
+        let named = ToolRule {
+            path: "/builtin/document".into(),
+            actions: Some(vec!["a".into(), "b".into()]),
+        };
+        assert_eq!(
+            named.to_patterns(),
+            vec![
+                "/builtin/document/a".to_string(),
+                "/builtin/document/b".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn exclusion_policy_scopes_are_independent() {
+        let cfg: SolxConfig = serde_json::from_value(serde_json::json!({
+            "exclusions": {
+                "user": { "documents": ["/agent/skills"] },
+                "tooling": { "documents": ["/secret"] }
+            },
+            "tool_exclude": [{ "path": "/packages/x" }]
+        }))
+        .unwrap();
+        let p = ExclusionPolicy::from_config(&cfg);
+        let d = EntityKind::Document;
+        assert!(p.is_excluded(d, ExcludeMode::User, "/agent/skills", "s"));
+        assert!(!p.is_excluded(d, ExcludeMode::Tooling, "/agent/skills", "s"));
+        assert!(p.is_excluded(d, ExcludeMode::Tooling, "/secret", "s"));
+        assert!(!p.is_excluded(d, ExcludeMode::None, "/secret", "s"));
+        // Legacy tool_exclude folds into tooling actions only.
+        let a = EntityKind::Action;
+        assert!(p.is_excluded(a, ExcludeMode::Tooling, "/packages/x", "y"));
+        assert!(!p.is_excluded(a, ExcludeMode::User, "/packages/x", "y"));
+        let tagged = action("/ok", "y", &[CAP_HIDDEN], None);
+        assert!(p.is_action_excluded(ExcludeMode::Tooling, &tagged));
+        assert!(!p.is_action_excluded(ExcludeMode::User, &tagged));
+    }
+
+    #[test]
+    fn guard_reads_like_not_found_and_refuses_writes() {
+        let cfg: SolxConfig = serde_json::from_value(serde_json::json!({
+            "exclusions": { "user": { "documents": ["/agent/skills"] } }
+        }))
+        .unwrap();
+        let p = ExclusionPolicy::from_config(&cfg);
+        let d = EntityKind::Document;
+        // Unnormalized input still matches.
+        let err = p
+            .guard(d, ExcludeMode::User, "agent/skills/", "x", false)
+            .unwrap_err();
+        assert!(
+            matches!(err, SolxError::NotFound(ref m) if m == "document /agent/skills/x"),
+            "{err:?}"
+        );
+        let err = p
+            .guard(d, ExcludeMode::User, "/agent", "skills", true)
+            .unwrap_err();
+        assert!(matches!(err, SolxError::Invalid(_)), "{err:?}");
+        assert!(p
+            .guard(d, ExcludeMode::None, "/agent/skills", "x", false)
+            .is_ok());
+        assert!(p.guard(d, ExcludeMode::User, "/notes", "x", false).is_ok());
+    }
+
+    #[test]
+    fn exclusion_policy_apply_resolves_default_and_appends() {
+        let cfg: SolxConfig = serde_json::from_value(serde_json::json!({
+            "exclusions": { "user": { "types": ["/t"] } }
+        }))
+        .unwrap();
+        let p = ExclusionPolicy::from_config(&cfg);
+        let mut o = ListOptions {
+            exclude_paths: vec!["/mine".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            p.apply(EntityKind::Type, &mut o, ExcludeMode::User),
+            ExcludeMode::User
+        );
+        assert_eq!(o.exclude_mode, Some(ExcludeMode::User));
+        assert_eq!(o.exclude_paths, vec!["/mine".to_string(), "/t".to_string()]);
+
+        let mut o = ListOptions {
+            exclude_mode: Some(ExcludeMode::None),
+            ..Default::default()
+        };
+        p.apply(EntityKind::Type, &mut o, ExcludeMode::User);
+        assert!(o.exclude_paths.is_empty());
     }
 
     #[test]

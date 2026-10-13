@@ -6,7 +6,8 @@ use solx_surface::managers::ActionManager;
 use solx_surface::query::{ActionSearchQuery, ListOptions, Page, PathFacet};
 
 use crate::http::{
-    collection_url, delete, entity_url, get_json, get_json_query, post_json, put_json,
+    collection_url, delete, entity_crud_url, entity_url, explicit_mode, get_json, get_json_query,
+    post_json, put_json,
 };
 
 /// HTTP-proxy [`ActionManager`] talking to a `solx-server`. `exec()` runs
@@ -32,35 +33,40 @@ impl RemoteActionManager {
 #[async_trait]
 impl ActionManager for RemoteActionManager {
     async fn save(&self, path: &str, name: &str, input: ActionInput) -> Result<Action> {
-        let url = entity_url(&self.base_url, "actions", path, name)?;
+        let url = entity_crud_url(&self.base_url, "actions", path, name)?;
         put_json(&self.http, &self.token, url, &input).await
     }
 
     async fn get(&self, path: &str, name: &str) -> Result<Action> {
-        let url = entity_url(&self.base_url, "actions", path, name)?;
+        let url = entity_crud_url(&self.base_url, "actions", path, name)?;
         get_json(&self.http, &self.token, url).await
     }
 
     async fn delete(&self, path: &str, name: &str) -> Result<()> {
-        let url = entity_url(&self.base_url, "actions", path, name)?;
+        let url = entity_crud_url(&self.base_url, "actions", path, name)?;
         delete(&self.http, &self.token, url).await
     }
 
-    async fn list(&self, opts: ListOptions) -> Result<Page<Action>> {
+    async fn list(&self, mut opts: ListOptions) -> Result<Page<Action>> {
         let url = collection_url(&self.base_url, "actions")?;
+        explicit_mode(&mut opts.exclude_mode);
         get_json_query(&self.http, &self.token, url, &opts).await
     }
 
-    async fn paths(&self, opts: ListOptions) -> Result<Page<PathFacet>> {
+    async fn paths(&self, mut opts: ListOptions) -> Result<Page<PathFacet>> {
         let url = collection_url(&self.base_url, "actions-paths")?;
+        explicit_mode(&mut opts.exclude_mode);
         get_json_query(&self.http, &self.token, url, &opts).await
     }
 
     /// `GET /actions-search` — a top-level route rather than
     /// `/actions/search`, for the same reason document search lives at
     /// `/search` rather than `/docs/search`; see `solx_client::docs`.
-    async fn search(&self, query: ActionSearchQuery) -> Result<Page<Action>> {
+    async fn search(&self, mut query: ActionSearchQuery) -> Result<Page<Action>> {
         let url = collection_url(&self.base_url, "actions-search")?;
+        query.list.exclude_mode = query.effective_mode();
+        query.exclude_hidden = false;
+        explicit_mode(&mut query.list.exclude_mode);
         get_json_query(&self.http, &self.token, url, &query).await
     }
 

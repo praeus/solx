@@ -47,6 +47,7 @@ import {
   type PathFacet,
   type TypeEntity,
 } from "./api";
+import type { ExcludeMode } from "@solx/surface";
 import { acquireObjectUrl, releaseObjectUrl } from "./objectUrlCache";
 
 /** ── Health ─────────────────────────────────────────────────────────── */
@@ -85,18 +86,28 @@ export function useDocuments(opts: UseDocumentsOptions = {}): UseQueryResult<Pag
 }
 
 /**
+ * Options for the `use*Paths` hooks. `excludeMode` defaults to the host's
+ * `user` scope; the config editor passes `"none"` so a path that is already
+ * excluded can still be picked.
+ */
+export interface PathsOptions {
+  enabled?: boolean;
+  excludeMode?: ExcludeMode;
+}
+
+/**
  * Distinct document paths, for the Scope picker. Small and slow-changing,
  * like `useDocumentTypes` below, so a generous fixed `limit` and a 5-minute
  * `staleTime` are enough — no need for a debounced/incremental fetch.
  */
 export function useDocumentPaths(
   limit = 200,
-  opts: { enabled?: boolean } = {},
+  opts: PathsOptions = {},
 ): UseQueryResult<Page<PathFacet>> {
-  const { enabled } = opts;
+  const { enabled, excludeMode } = opts;
   return useQuery({
-    queryKey: ["documents", "paths", { limit }],
-    queryFn: () => fetchDocumentPaths({ limit }),
+    queryKey: ["documents", "paths", { limit, excludeMode }],
+    queryFn: () => fetchDocumentPaths({ limit, excludeMode }),
     enabled: enabled !== false,
     staleTime: 5 * 60 * 1000,
   });
@@ -188,12 +199,12 @@ export function useDocumentTypes(
 /** Distinct type paths, for the Scope picker — see `useDocumentPaths`. */
 export function useTypePaths(
   limit = 200,
-  opts: { enabled?: boolean } = {},
+  opts: PathsOptions = {},
 ): UseQueryResult<Page<PathFacet>> {
-  const { enabled } = opts;
+  const { enabled, excludeMode } = opts;
   return useQuery({
-    queryKey: ["types", "paths", { limit }],
-    queryFn: () => fetchTypePaths({ limit }),
+    queryKey: ["types", "paths", { limit, excludeMode }],
+    queryFn: () => fetchTypePaths({ limit, excludeMode }),
     enabled: enabled !== false,
     staleTime: 5 * 60 * 1000,
   });
@@ -290,12 +301,12 @@ export function useActions(opts: UseActionsOptions = {}): UseQueryResult<Page<Ac
 /** Distinct action paths, for the Scope picker — see `useDocumentPaths`. */
 export function useActionPaths(
   limit = 200,
-  opts: { enabled?: boolean } = {},
+  opts: PathsOptions = {},
 ): UseQueryResult<Page<PathFacet>> {
-  const { enabled } = opts;
+  const { enabled, excludeMode } = opts;
   return useQuery({
-    queryKey: ["actions", "paths", { limit }],
-    queryFn: () => fetchActionPaths({ limit }),
+    queryKey: ["actions", "paths", { limit, excludeMode }],
+    queryFn: () => fetchActionPaths({ limit, excludeMode }),
     enabled: enabled !== false,
     staleTime: 5 * 60 * 1000,
   });

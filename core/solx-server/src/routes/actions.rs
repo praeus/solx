@@ -1,14 +1,18 @@
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
+use axum_extra::extract::Query;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use solx_surface::entities::{Action, ActionExecResult, ActionInput};
 use solx_surface::managers::Solx;
 use solx_surface::query::{ActionSearchQuery, ListOptions, Page, PathFacet};
 
+use solx_config::EntityKind;
+
 use crate::error::ApiError;
+use crate::routes::exclude::{self, ModeParam};
 use crate::routes::refs::split_url_ref;
 use crate::state::AppState;
 
@@ -41,9 +45,11 @@ pub fn router() -> Router<AppState> {
 async fn save_action(
     State(state): State<AppState>,
     Path(reference): Path<String>,
+    Query(mode): Query<ModeParam>,
     Json(input): Json<ActionInput>,
 ) -> Result<Json<Action>, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
+    exclude::guard(&state, EntityKind::Action, &mode, &path, &name, true).await?;
     let action = state.app.actions().save(&path, &name, input).await?;
     Ok(Json(action))
 }
@@ -51,8 +57,10 @@ async fn save_action(
 async fn get_action(
     State(state): State<AppState>,
     Path(reference): Path<String>,
+    Query(mode): Query<ModeParam>,
 ) -> Result<Json<Action>, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
+    exclude::guard(&state, EntityKind::Action, &mode, &path, &name, false).await?;
     let action = state.app.actions().get(&path, &name).await?;
     Ok(Json(action))
 }
@@ -60,24 +68,28 @@ async fn get_action(
 async fn delete_action(
     State(state): State<AppState>,
     Path(reference): Path<String>,
+    Query(mode): Query<ModeParam>,
 ) -> Result<StatusCode, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
+    exclude::guard(&state, EntityKind::Action, &mode, &path, &name, false).await?;
     state.app.actions().delete(&path, &name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_actions(
     State(state): State<AppState>,
-    Query(opts): Query<ListOptions>,
+    Query(mut opts): Query<ListOptions>,
 ) -> Result<Json<Page<Action>>, ApiError> {
+    exclude::apply(&state, EntityKind::Action, &mut opts);
     let page = state.app.actions().list(opts).await?;
     Ok(Json(page))
 }
 
 async fn action_paths(
     State(state): State<AppState>,
-    Query(opts): Query<ListOptions>,
+    Query(mut opts): Query<ListOptions>,
 ) -> Result<Json<Page<PathFacet>>, ApiError> {
+    exclude::apply(&state, EntityKind::Action, &mut opts);
     let page = state.app.actions().paths(opts).await?;
     Ok(Json(page))
 }
@@ -93,23 +105,23 @@ async fn search_actions(
     Query(list): Query<ListOptions>,
     Query(SearchTerm { q, exclude_hidden }): Query<SearchTerm>,
 ) -> Result<Json<Page<Action>>, ApiError> {
-    let page = state
-        .app
-        .actions()
-        .search(ActionSearchQuery {
-            list,
-            q,
-            exclude_hidden,
-        })
-        .await?;
+    let mut query = ActionSearchQuery {
+        list,
+        q,
+        exclude_hidden,
+    };
+    query.list.exclude_mode = query.effective_mode();
+    query.exclude_hidden = false;
+    exclude::apply(&state, EntityKind::Action, &mut query.list);
+    let page = state.app.actions().search(query).await?;
     Ok(Json(page))
 }
 
 #[derive(Deserialize)]
 struct SearchTerm {
-    /// `?exclude_hidden=true` drops actions hidden from model-facing
-    /// catalogues. Off by default, like every other caller of `search`.
-    #[serde(default)]
+    /// Deprecated: `?exclude_hidden=true` is `?excludeMode=tooling`, which
+    /// wins when both are sent.
+    #[serde(default, alias = "excludeHidden")]
     exclude_hidden: bool,
     #[serde(default)]
     q: Option<String>,

@@ -29,12 +29,13 @@ use anyhow::{Context, Result};
 
 #[cfg(feature = "local")]
 use solx_actions::LocalActionManager;
-use solx_config::ConfigService;
+use solx_config::{ConfigService, EntityKind};
 #[cfg(feature = "local")]
 use solx_docs::LocalDocManager;
 #[cfg(feature = "local")]
 use solx_files::LocalFileStore;
 use solx_surface::managers::{ActionManager, DocManager, FileStore, Solx, TypeManager};
+use solx_surface::query::ExcludeMode;
 #[cfg(feature = "local")]
 use solx_types::LocalTypeManager;
 
@@ -222,6 +223,37 @@ impl App {
     /// The `solx-server` this app proxies to, or `None` for local managers.
     pub fn remote_url(&self) -> Option<&str> {
         self.remote_url.as_deref()
+    }
+}
+
+impl App {
+    /// Refuse direct access to an entity excluded under `mode` — the
+    /// get/save/delete half of the exclusion lists, shared by every surface
+    /// that has a mode to honour (solx-server's routes, the Tauri plugin).
+    ///
+    /// Reads and deletes of an excluded entity fail as `NotFound`, worded
+    /// like a genuinely missing one; writes fail as `Invalid`. Under
+    /// [`ExcludeMode::Tooling`] an action is read first so its own
+    /// `solx:hidden` tag counts too. A no-op for [`ExcludeMode::None`].
+    pub async fn guard_excluded(
+        &self,
+        kind: EntityKind,
+        mode: ExcludeMode,
+        path: &str,
+        name: &str,
+        write: bool,
+    ) -> solx_surface::error::Result<()> {
+        if mode == ExcludeMode::None {
+            return Ok(());
+        }
+        let policy = self.config.exclusion_policy();
+        policy.guard(kind, mode, path, name, write)?;
+        if kind == EntityKind::Action && mode == ExcludeMode::Tooling {
+            if let Ok(action) = self.actions.get(path, name).await {
+                policy.guard_action(mode, &action, write)?;
+            }
+        }
+        Ok(())
     }
 }
 

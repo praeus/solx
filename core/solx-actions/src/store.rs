@@ -9,7 +9,9 @@ use solx_surface::entities::{Action, ActionExecResult, ActionInput};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::ActionManager;
 use solx_surface::path::{full_ref, normalize_path, validate_name};
-use solx_surface::query::{ActionSearchQuery, ListOptions, ListSchema, Page, PathFacet, SortOrder};
+use solx_surface::query::{
+    ActionSearchQuery, ExcludeMode, ListOptions, ListSchema, ListSql, Page, PathFacet, SortOrder,
+};
 use uuid::Uuid;
 
 use crate::db::map_db;
@@ -17,14 +19,6 @@ use crate::row::{action_type_to_str, get_row, row_to_action, SELECT};
 use crate::{mask, LocalActionManager};
 
 const DEFAULT_LIMIT: usize = 50;
-
-/// How much to over-fetch when `exclude_hidden` forces post-query
-/// filtering, so a page that loses a few rows is usually still full.
-const HIDDEN_OVERFETCH: usize = 4;
-
-/// Ceiling on that inflated fetch, so a large `limit` cannot turn into an
-/// unbounded scan.
-const HIDDEN_FETCH_CAP: usize = 1000;
 
 /// Columns this store exposes to `ListOptions`. `capabilities` and `phrases`
 /// are JSON arrays, so filtering them is a substring match over that text —
@@ -69,6 +63,31 @@ const LIST_SCHEMA: ListSchema<'static> = ListSchema {
 /// `fts_match_query` (that crate's doc comment used to argue action search
 /// terms were unlikely to need this — a normal query like `browser: firefox`
 /// proved otherwise).
+/// Render `opts` against [`LIST_SCHEMA`], adding the `solx:hidden` tag check
+/// when the resolved mode is [`ExcludeMode::Tooling`].
+///
+/// Path patterns arrive already expanded in `opts.exclude_paths` (see
+/// `solx_config::ExclusionPolicy::apply`); the tag is a property of the row,
+/// so it is the one part of the tooling scope rendered here. `json_each`
+/// compares whole array elements, so `non-solx:hidden` does not match - the
+/// reason a `LIKE` over the `capabilities` JSON could not be used.
+fn list_sql(opts: &ListOptions, mode: Option<ExcludeMode>) -> Result<ListSql> {
+    let mut q = opts.to_sql(LIST_SCHEMA)?;
+    if mode == Some(ExcludeMode::Tooling) {
+        q.binds.push(solx_config::CAP_HIDDEN.to_string());
+        let cond = format!(
+            "NOT EXISTS (SELECT 1 FROM json_each(capabilities) WHERE value = ?{})",
+            q.binds.len()
+        );
+        q.where_clause = if q.where_clause.is_empty() {
+            format!(" WHERE {cond}")
+        } else {
+            format!("{} AND {cond}", q.where_clause)
+        };
+    }
+    Ok(q)
+}
+
 fn fts_match_query(q: &str) -> String {
     q.split_whitespace()
         .map(|term| format!("\"{}\"*", term.replace('"', "\"\"")))
@@ -243,7 +262,7 @@ impl ActionManager for LocalActionManager {
         let limit = opts.limit_or(DEFAULT_LIMIT);
         let offset = opts.offset_or_zero();
 
-        let q = opts.to_sql(LIST_SCHEMA)?;
+        let q = list_sql(&opts, opts.exclude_mode)?;
         let binds: Vec<libsql::Value> = q.binds.iter().cloned().map(libsql::Value::from).collect();
 
         let total = {
@@ -275,7 +294,7 @@ impl ActionManager for LocalActionManager {
         let limit = opts.limit_or(DEFAULT_LIMIT);
         let offset = opts.offset_or_zero();
 
-        let q = opts.to_sql(LIST_SCHEMA)?;
+        let q = list_sql(&opts, opts.exclude_mode)?;
         let binds: Vec<libsql::Value> = q.binds.iter().cloned().map(libsql::Value::from).collect();
         let dir = match opts.sort_order {
             SortOrder::Desc => "DESC",
@@ -317,20 +336,12 @@ impl ActionManager for LocalActionManager {
     /// this runs the exact same query plan as `list` — no join, no ranking.
     async fn search(&self, query: ActionSearchQuery) -> Result<Page<Action>> {
         let conn = self.db.connect().await?;
-        let want = query.list.limit_or(DEFAULT_LIMIT);
-        // Hidden-ness is resolved from config rules *and* the row's own
-        // capabilities, so it cannot be pushed into the SQL: a LIKE over the
-        // capabilities JSON would match `non-destructive` against
-        // `solx:destructive`. Filtering therefore happens after the query,
-        // and the fetch is inflated so a full page usually survives it —
-        // the same over-fetch-and-trim solx-mcp's router already does.
-        let limit = if query.exclude_hidden {
-            want.saturating_mul(HIDDEN_OVERFETCH).min(HIDDEN_FETCH_CAP)
-        } else {
-            want
-        };
+        let limit = query.list.limit_or(DEFAULT_LIMIT);
         let offset = query.list.offset_or_zero();
-        let q = query.list.to_sql(LIST_SCHEMA)?;
+        // Hidden-ness is decided entirely in SQL: the caller's surface has
+        // already expanded the configured patterns into `exclude_paths`, and
+        // `list_sql` adds the tag check, so `total` is exact.
+        let q = list_sql(&query.list, query.effective_mode())?;
         let mut binds: Vec<libsql::Value> =
             q.binds.iter().cloned().map(libsql::Value::from).collect();
 
@@ -382,12 +393,7 @@ impl ActionManager for LocalActionManager {
             mask::mask_action_config_opt(&mut action.action_config);
             items.push(action);
         }
-        if query.exclude_hidden {
-            let policy = self.config.tool_policy();
-            items.retain(|a| !policy.is_hidden(a));
-            items.truncate(want);
-        }
-        Ok(Page::new(items, total, want, offset))
+        Ok(Page::new(items, total, limit, offset))
     }
 
     /// Entry point for every *external* caller — the CLI, the MCP server,
@@ -815,10 +821,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exclude_hidden_still_fills_a_page_when_it_can() {
-        // The over-fetch: filtering happens after the query, so without it a
-        // limit-2 page containing one hidden row would come back with one
-        // item even though a second visible one exists.
+    async fn exclude_hidden_fills_a_page_with_an_exact_total() {
+        // Hidden-ness is decided in SQL, so a limit-2 page containing one
+        // hidden row still comes back full and `total` counts visible rows.
         let (_d, _c, m) = setup().await;
         m.save("/tools", "a", ActionInput::default()).await.unwrap();
         m.save(
@@ -847,7 +852,121 @@ mod tests {
             .unwrap();
         let names: Vec<&String> = page.items.iter().map(|a| &a.name).collect();
         assert_eq!(names, vec![&"a".to_string(), &"c".to_string()], "{names:?}");
-        assert_eq!(page.limit, 2, "the caller's limit, not the inflated one");
+        assert_eq!(page.limit, 2);
+        assert_eq!(page.total, 2, "total must not count the hidden row");
+    }
+
+    #[tokio::test]
+    async fn tooling_mode_hides_tagged_rows_from_list_and_paths() {
+        let (_d, _c, m) = setup().await;
+        m.save("/tools", "a", ActionInput::default()).await.unwrap();
+        m.save(
+            "/secret",
+            "b",
+            ActionInput {
+                // A substring of the tag must not count.
+                capabilities: vec![solx_config::CAP_HIDDEN.into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        m.save(
+            "/tools",
+            "c",
+            ActionInput {
+                capabilities: vec!["non-solx:hidden".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let opts = ListOptions {
+            exclude_mode: Some(ExcludeMode::Tooling),
+            exclude_paths: vec!["/builtin*".into()],
+            ..Default::default()
+        };
+        let page = m.list(opts.clone()).await.unwrap();
+        let names: Vec<&str> = page.items.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "c"]);
+        assert_eq!(page.total, 2);
+        let paths = m.paths(opts).await.unwrap();
+        assert_eq!(paths.items.len(), 1);
+        assert_eq!(paths.items[0].path, "/tools");
+        // Any other mode leaves the tag alone.
+        let all = m
+            .list(ListOptions {
+                exclude_mode: Some(ExcludeMode::User),
+                exclude_paths: vec!["/builtin*".into()],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(all.total, 3);
+    }
+
+    #[tokio::test]
+    async fn exclude_paths_filter_list_paths_and_search_exactly() {
+        let (_d, _c, m) = setup().await;
+        for (path, name) in [
+            ("/agent/skills", "one"),
+            ("/agent/skills/deep", "two"),
+            ("/agent", "skills"),
+            ("/agent", "keep"),
+            ("/a/_private/x", "p"),
+            ("/a/xprivate/x", "q"),
+        ] {
+            m.save(path, name, ActionInput::default()).await.unwrap();
+        }
+        let names = |page: Page<Action>| -> Vec<String> {
+            page.items
+                .iter()
+                .map(|a| format!("{}/{}", a.path, a.name))
+                .collect()
+        };
+        // Every call also drops the seeded `/builtin/*` rows.
+        let list = |pats: &[&str]| ListOptions {
+            exclude_paths: pats
+                .iter()
+                .chain(&["/builtin*"])
+                .map(|p| p.to_string())
+                .collect(),
+            ..Default::default()
+        };
+
+        // Exact pattern: the folder itself and the entity of that full ref,
+        // but not deeper folders.
+        let page = m.list(list(&["/agent/skills"])).await.unwrap();
+        assert_eq!(page.total, 4);
+        let got = names(page);
+        assert!(
+            got.contains(&"/agent/skills/deep/two".to_string()),
+            "{got:?}"
+        );
+        assert!(!got.contains(&"/agent/skills".to_string()), "{got:?}");
+
+        // Prefix glob reaches everything beneath.
+        let page = m.list(list(&["/agent/skills*"])).await.unwrap();
+        assert_eq!(page.total, 3, "{:?}", names(page.clone()));
+
+        // `_` is literal: only the real `_private` folder goes.
+        let page = m.list(list(&["*/_private/*"])).await.unwrap();
+        let got = names(page);
+        assert!(!got.iter().any(|r| r.contains("_private")), "{got:?}");
+        assert!(got.contains(&"/a/xprivate/x/q".to_string()), "{got:?}");
+
+        // Paths facets and search see the same filter.
+        let paths = m.paths(list(&["/agent*"])).await.unwrap();
+        assert!(paths.items.iter().all(|f| !f.path.starts_with("/agent")));
+        let page = m
+            .search(ActionSearchQuery {
+                list: list(&["/agent*"]),
+                q: Some("one".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.total, 0);
     }
 
     #[tokio::test]

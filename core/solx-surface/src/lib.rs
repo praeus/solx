@@ -25,4 +25,4 @@ pub use internal_actions::{
     InternalCallCtx, SeedAction,
 };
 pub use managers::{ActionManager, DocManager, FileStore, Solx, TypeManager};
-pub use query::{ListOptions, Page, PathFacet, SearchQuery, SortOrder};
+pub use query::{ExcludeMode, ListOptions, Page, PathFacet, SearchQuery, SortOrder};

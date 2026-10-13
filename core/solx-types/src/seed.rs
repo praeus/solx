@@ -98,6 +98,17 @@ fn builtin_action_param_types() -> Vec<SeedType> {
         "path": { "type": "string", "description": "Directory-style path, e.g. /research/ai. Defaults to the root '/'." },
         "name": { "type": "string", "description": "Single path segment identifying the entity." },
     });
+    // Accepted by every entity built-in - see `solx_actions::internal::exclude`.
+    let exclude_mode = json!({
+        "type": "string",
+        "enum": ["none", "user", "tooling"],
+        "description": "Which configured exclusion list applies: 'tooling' for a model-facing caller, 'user' for what the web UI shows. Defaults to 'none'. An excluded entity reads as not found and cannot be written.",
+    });
+    let exclude_paths = json!({
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Extra exclusion patterns, added to the excludeMode list. A pattern is a glob ('*' spans '/', '?' is one character) matched against an entity's path or its full reference: '/a/b' drops entities in /a/b and the entity b in /a; '/a/b*' also drops everything beneath.",
+    });
 
     vec![
         SeedType {
@@ -107,7 +118,11 @@ fn builtin_action_param_types() -> Vec<SeedType> {
             schema: json!({
                 "type": "object",
                 "required": ["name"],
-                "properties": path_and_name,
+                "properties": {
+                    "path": path_and_name["path"],
+                    "name": path_and_name["name"],
+                    "excludeMode": exclude_mode.clone(),
+                },
             }),
             groups: vec!["builtin-params"],
         },
@@ -127,6 +142,8 @@ fn builtin_action_param_types() -> Vec<SeedType> {
                     "sortOrder": { "type": "string", "enum": ["asc", "desc"] },
                     "dateAfter": { "type": "string" },
                     "dateBefore": { "type": "string" },
+                    "excludeMode": exclude_mode.clone(),
+                    "excludePaths": exclude_paths.clone(),
                 }
             }),
             groups: vec!["builtin-params"],
@@ -141,6 +158,7 @@ fn builtin_action_param_types() -> Vec<SeedType> {
                 "properties": {
                     "path": path_and_name["path"],
                     "name": path_and_name["name"],
+                    "excludeMode": exclude_mode.clone(),
                     "title": { "type": "string" },
                     "summary": { "type": "string" },
                     "typeRef": { "type": "string", "description": "Full reference of the document's type, e.g. /types/core/Object. Required on create." },
@@ -176,6 +194,7 @@ fn builtin_action_param_types() -> Vec<SeedType> {
                 "properties": {
                     "path": path_and_name["path"],
                     "name": path_and_name["name"],
+                    "excludeMode": exclude_mode.clone(),
                     "description": { "type": "string" },
                     "schema": { "type": "object", "description": "A JSON Schema document. Required on create." },
                     "groups": { "type": "array", "items": { "type": "string" } },
@@ -193,6 +212,7 @@ fn builtin_action_param_types() -> Vec<SeedType> {
                 "properties": {
                     "path": path_and_name["path"],
                     "name": path_and_name["name"],
+                    "excludeMode": exclude_mode.clone(),
                     "caption": { "type": "string" },
                     "description": { "type": "string" },
                     "capabilities": { "type": "array", "items": { "type": "string" } },
@@ -222,6 +242,8 @@ fn builtin_action_param_types() -> Vec<SeedType> {
                     "linkedTo": { "type": "string", "description": "Full reference of a document this search's hits must link to." },
                     "limit": { "type": "integer" },
                     "offset": { "type": "integer" },
+                    "excludeMode": exclude_mode.clone(),
+                    "excludePaths": exclude_paths.clone(),
                 }
             }),
             groups: vec!["builtin-params"],
@@ -243,6 +265,8 @@ fn builtin_action_param_types() -> Vec<SeedType> {
                     "sortOrder": { "type": "string", "enum": ["asc", "desc"] },
                     "dateAfter": { "type": "string" },
                     "dateBefore": { "type": "string" },
+                    "excludeMode": exclude_mode.clone(),
+                    "excludePaths": exclude_paths.clone(),
                 }
             }),
             groups: vec!["builtin-params"],
@@ -337,6 +361,7 @@ fn builtin_action_param_types() -> Vec<SeedType> {
                     "path": { "type": "string", "description": "Defaults to the root '/'." },
                     "name": { "type": "string" },
                     "field": { "type": "string" },
+                    "excludeMode": exclude_mode.clone(),
                 }
             }),
             groups: vec!["builtin-params"],
@@ -352,6 +377,7 @@ fn builtin_action_param_types() -> Vec<SeedType> {
                     "path": { "type": "string", "description": "Defaults to the root '/'." },
                     "name": { "type": "string" },
                     "field": { "type": "string" },
+                    "excludeMode": exclude_mode.clone(),
                     "value": {},
                 }
             }),
@@ -469,6 +495,7 @@ fn builtin_action_param_types() -> Vec<SeedType> {
                 "properties": {
                     "doc_path": { "type": "string", "description": "Defaults to the root '/'." },
                     "name": { "type": "string" },
+                    "excludeMode": exclude_mode.clone(),
                     "path": { "type": "string", "description": "Slash-separated path inside `contents`, e.g. 'metadata/tags/0'." },
                 }
             }),
@@ -484,6 +511,7 @@ fn builtin_action_param_types() -> Vec<SeedType> {
                 "properties": {
                     "doc_path": { "type": "string", "description": "Defaults to the root '/'." },
                     "name": { "type": "string" },
+                    "excludeMode": exclude_mode.clone(),
                     "path": { "type": "string", "description": "Slash-separated path inside `contents`." },
                     "value": {},
                     "create": { "type": "boolean", "description": "When true, missing parents along the path are created (objects for non-numeric segments, arrays for numeric ones, padded with nulls). Defaults to false." },

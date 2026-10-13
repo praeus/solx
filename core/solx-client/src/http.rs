@@ -12,6 +12,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use solx_surface::error::SolxError;
 use solx_surface::path::full_ref;
+use solx_surface::query::ExcludeMode;
 use url::Url;
 
 use crate::error::{read_bytes_response, read_response, transport_err};
@@ -32,6 +33,29 @@ pub(crate) fn entity_url(
     name: &str,
 ) -> Result<Url, SolxError> {
     nested_url(base_url, resource, &full_ref(path, name)?)
+}
+
+/// [`entity_url`] for get/save/delete, carrying `?excludeMode=none`.
+///
+/// The manager traits apply no configured exclusions, but the server's
+/// entity routes default to the `user` scope for browser and REST callers.
+/// Without this a proxied `solx delete doc … --if-exists` would silently
+/// skip a user-hidden document.
+pub(crate) fn entity_crud_url(
+    base_url: &str,
+    resource: &str,
+    path: &str,
+    name: &str,
+) -> Result<Url, SolxError> {
+    let mut url = entity_url(base_url, resource, path, name)?;
+    url.query_pairs_mut().append_pair("excludeMode", "none");
+    Ok(url)
+}
+
+/// Pin an unset `exclude_mode` to [`ExcludeMode::None`] before a list or
+/// search goes over the wire, for the same reason [`entity_url`] does.
+pub(crate) fn explicit_mode(mode: &mut Option<ExcludeMode>) {
+    mode.get_or_insert(ExcludeMode::None);
 }
 
 /// Build `{base_url}/{resource}/{rel}`, percent-encoding each segment of
@@ -88,16 +112,26 @@ pub(crate) async fn get_json<Resp: DeserializeOwned>(
 }
 
 /// `GET url?{query}`, where `query` serializes to a flat set of pairs.
+///
+/// Encoded with `serde_html_form` rather than reqwest's `.query()`
+/// (`serde_urlencoded`), which cannot serialize a sequence: a
+/// `Vec` field such as `exclude_paths` goes out as repeated keys
+/// (`excludePaths=/a&excludePaths=/b`), the form the server's
+/// `axum_extra` `Query` reads back.
 pub(crate) async fn get_json_query<Q: Serialize, Resp: DeserializeOwned>(
     http: &reqwest::Client,
     token: &str,
-    url: Url,
+    mut url: Url,
     query: &Q,
 ) -> Result<Resp, SolxError> {
+    let qs = serde_html_form::to_string(query)
+        .map_err(|e| SolxError::Invalid(format!("cannot encode query: {e}")))?;
+    if !qs.is_empty() {
+        url.set_query(Some(&qs));
+    }
     let resp = http
         .get(url)
         .bearer_auth(token)
-        .query(query)
         .send()
         .await
         .map_err(transport_err)?;

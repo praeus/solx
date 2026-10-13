@@ -4,7 +4,9 @@ use solx_surface::error::Result;
 use solx_surface::managers::DocManager;
 use solx_surface::query::{ListOptions, Page, PathFacet, SearchQuery};
 
-use crate::http::{collection_url, delete, entity_url, get_json, get_json_query, put_json};
+use crate::http::{
+    collection_url, delete, entity_crud_url, explicit_mode, get_json, get_json_query, put_json,
+};
 
 /// HTTP-proxy [`DocManager`] talking to a `solx-server`.
 pub struct RemoteDocManager {
@@ -26,35 +28,38 @@ impl RemoteDocManager {
 #[async_trait]
 impl DocManager for RemoteDocManager {
     async fn save(&self, path: &str, name: &str, input: DocumentInput) -> Result<Document> {
-        let url = entity_url(&self.base_url, "docs", path, name)?;
+        let url = entity_crud_url(&self.base_url, "docs", path, name)?;
         put_json(&self.http, &self.token, url, &input).await
     }
 
     async fn get(&self, path: &str, name: &str) -> Result<Document> {
-        let url = entity_url(&self.base_url, "docs", path, name)?;
+        let url = entity_crud_url(&self.base_url, "docs", path, name)?;
         get_json(&self.http, &self.token, url).await
     }
 
     async fn delete(&self, path: &str, name: &str) -> Result<()> {
-        let url = entity_url(&self.base_url, "docs", path, name)?;
+        let url = entity_crud_url(&self.base_url, "docs", path, name)?;
         delete(&self.http, &self.token, url).await
     }
 
-    async fn list(&self, opts: ListOptions) -> Result<Page<Document>> {
+    async fn list(&self, mut opts: ListOptions) -> Result<Page<Document>> {
         let url = collection_url(&self.base_url, "docs")?;
+        explicit_mode(&mut opts.exclude_mode);
         get_json_query(&self.http, &self.token, url, &opts).await
     }
 
-    async fn paths(&self, opts: ListOptions) -> Result<Page<PathFacet>> {
+    async fn paths(&self, mut opts: ListOptions) -> Result<Page<PathFacet>> {
         let url = collection_url(&self.base_url, "docs-paths")?;
+        explicit_mode(&mut opts.exclude_mode);
         get_json_query(&self.http, &self.token, url, &opts).await
     }
 
     /// `GET /search` — a top-level route rather than `/docs/search`, which
     /// as a static sibling of the `/docs/{*ref}` catch-all would shadow any
     /// document named `search` at the root.
-    async fn search(&self, query: SearchQuery) -> Result<Page<Document>> {
+    async fn search(&self, mut query: SearchQuery) -> Result<Page<Document>> {
         let url = collection_url(&self.base_url, "search")?;
+        explicit_mode(&mut query.exclude_mode);
         get_json_query(&self.http, &self.token, url, &query).await
     }
 }

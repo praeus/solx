@@ -29,13 +29,13 @@ use rmcp::service::RequestContext;
 use rmcp::{Peer, RoleServer, ServerHandler};
 use serde_json::{Map, Value};
 
-use solx_config::ToolPolicy;
+use solx_config::{EntityKind, ToolPolicy};
 use solx_manager::App;
 use solx_surface::entities::{Action, ActionExecResult};
 use solx_surface::error::SolxError;
 use solx_surface::managers::Solx;
 use solx_surface::path::full_ref;
-use solx_surface::query::{ActionSearchQuery, ListOptions};
+use solx_surface::query::{ActionSearchQuery, ExcludeMode, ListOptions};
 
 use crate::{error, tools};
 
@@ -121,29 +121,39 @@ impl SolxMcpServer {
             .or_else(|| self.path_prefix.clone())
     }
 
+    /// A list query in the tooling scope: the configured tooling action
+    /// patterns expanded into `exclude_paths`, and the mode left set so the
+    /// store also drops `solx:hidden` rows. Forced, not defaulted - nothing
+    /// a client sends can widen what this server shows a model.
+    fn tooling_list(&self, mut opts: ListOptions) -> ListOptions {
+        opts.exclude_mode = Some(ExcludeMode::Tooling);
+        self.app.config.exclusion_policy().apply(
+            EntityKind::Action,
+            &mut opts,
+            ExcludeMode::Tooling,
+        );
+        opts
+    }
+
     /// Fetch every non-excluded action in the effective scope, in the default
-    /// `path,name` order. Used by the router's `list_all` mode.
+    /// `path,name` order. Used by the router's `list_all` mode. Exclusion is
+    /// done in SQL, so every page is full and `total` is exact.
     async fn all_actions(&self, path_prefix: Option<String>) -> Result<Vec<Action>, ErrorData> {
         let actions = self.app.actions();
-        let policy = self.policy();
         let mut out = Vec::new();
         let mut offset = 0usize;
         loop {
             let page = actions
-                .list(ListOptions {
+                .list(self.tooling_list(ListOptions {
                     path_prefix: path_prefix.clone(),
                     limit: Some(PAGE_SIZE),
                     offset: Some(offset),
                     ..Default::default()
-                })
+                }))
                 .await
                 .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
             let n = page.items.len();
-            for a in page.items {
-                if !policy.is_hidden(&a) {
-                    out.push(a);
-                }
-            }
+            out.extend(page.items);
             offset += n;
             if n == 0 || offset >= page.total {
                 break;
@@ -210,16 +220,13 @@ impl SolxMcpServer {
             .app
             .actions()
             .search(ActionSearchQuery {
-                list: ListOptions {
+                list: self.tooling_list(ListOptions {
                     path_prefix: self.effective_prefix(args),
                     limit: Some(50),
                     ..Default::default()
-                },
+                }),
                 q: Some(query.clone()),
-                // The manager applies the same ToolPolicy this server would,
-                // and over-fetches to keep the page full — so the loop below
-                // only has to trim to the router's page size.
-                exclude_hidden: true,
+                ..Default::default()
             })
             .await
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
@@ -280,6 +287,32 @@ impl SolxMcpServer {
         }
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
+}
+
+/// Arguments for a call a model issued, with the tooling exclusion scope
+/// forced onto every built-in.
+///
+/// The entity built-ins (`entity-list-documents`, `entity-get-type`,
+/// `search-documents`, ...) apply no configured exclusions unless asked, and
+/// the model chooses its own arguments - so without this, anything excluded
+/// from tooling would be one call away. Every spelling of the flag is
+/// replaced rather than added beside: the dispatcher aliases camelCase and
+/// snake_case, so a model-supplied `exclude_mode: "none"` would otherwise
+/// survive next to ours. Package actions are left alone; their parameters
+/// are their own.
+fn force_tooling_scope(path: &str, mut args: Map<String, Value>) -> Value {
+    if path == "/builtin" || path.starts_with("/builtin/") {
+        for key in [
+            "excludeMode",
+            "exclude_mode",
+            "excludeHidden",
+            "exclude_hidden",
+        ] {
+            args.remove(key);
+        }
+        args.insert("excludeMode".into(), Value::from("tooling"));
+    }
+    Value::Object(args)
 }
 
 impl ServerHandler for SolxMcpServer {
@@ -360,10 +393,7 @@ impl ServerHandler for SolxMcpServer {
         // dispatch (see `rmcp::model::meta`'s `GetMeta` doc comment) — so
         // `ctx.meta` is the one that's actually populated here.
         let progress_token = ctx.meta.get_progress_token();
-        let params: Value = request
-            .arguments
-            .map(Value::Object)
-            .unwrap_or_else(|| Value::Object(Map::new()));
+        let params = force_tooling_scope(&path, request.arguments.unwrap_or_default());
 
         // Only pay for the tail loop if the client actually asked for
         // progress updates (attached a `progressToken`) — most callers of
@@ -506,4 +536,30 @@ async fn send_progress(
         .get("next_cursor")
         .and_then(Value::as_i64)
         .unwrap_or(fallback_cursor)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::force_tooling_scope;
+    use serde_json::{json, Map, Value};
+
+    fn obj(v: Value) -> Map<String, Value> {
+        v.as_object().cloned().unwrap()
+    }
+
+    #[test]
+    fn builtins_always_run_in_the_tooling_scope() {
+        let got = force_tooling_scope(
+            "/builtin/document",
+            obj(json!({"pathPrefix": "/a", "exclude_mode": "none", "excludeHidden": false})),
+        );
+        assert_eq!(got, json!({"pathPrefix": "/a", "excludeMode": "tooling"}));
+    }
+
+    #[test]
+    fn package_actions_keep_their_own_arguments() {
+        let args = json!({"excludeMode": "none", "q": "x"});
+        assert_eq!(force_tooling_scope("/packages/p", obj(args.clone())), args);
+        assert_eq!(force_tooling_scope("/builtinx", obj(args.clone())), args);
+    }
 }

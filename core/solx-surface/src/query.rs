@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use crate::error::{Result, SolxError};
 use crate::path::normalize_path;
 
 /// Sort direction for list operations.
@@ -13,6 +13,26 @@ pub enum SortOrder {
     #[default]
     Asc,
     Desc,
+}
+
+/// Which configured exclusion list a request is filtered through.
+///
+/// Stores never read config: a surface (HTTP route, Tauri command, builtin
+/// action, MCP server) resolves the mode into concrete patterns and appends
+/// them to `exclude_paths` before calling the store — see
+/// `solx_config::ExclusionPolicy::apply`. The one thing a store renders from
+/// the mode itself is the action store's `solx:hidden` tag check under
+/// [`ExcludeMode::Tooling`], because that is a property of the row rather
+/// than of its path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExcludeMode {
+    /// No configured exclusions; only the caller's own `exclude_paths`.
+    None,
+    /// What the web UI and REST/Tauri clients see.
+    User,
+    /// What a model sees: MCP, the agent harness, other tool catalogues.
+    Tooling,
 }
 
 /// Options for a paginated `list` over an entity database.
@@ -42,6 +62,14 @@ pub struct ListOptions {
     /// Only rows with created_at <= this RFC 3339 timestamp.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date_before: Option<String>,
+    /// Drop entities matching any of these patterns — see
+    /// [`validate_exclude_pattern`] for the syntax and matching rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_paths: Vec<String>,
+    /// Which configured exclusion list applies. `None` means "the
+    /// surface's default", which differs per surface — see [`ExcludeMode`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_mode: Option<ExcludeMode>,
 }
 
 impl ListOptions {
@@ -125,6 +153,11 @@ impl ListOptions {
             }
         }
 
+        // Exclusions.
+        if let Some(cond) = exclude_conditions(&self.exclude_paths, "", &mut binds)? {
+            conditions.push(cond);
+        }
+
         // Substring filter on a whitelisted column.
         if let (Some(field), Some(value)) = (&self.filter_field, &self.filter_value) {
             if !value.is_empty() {
@@ -186,6 +219,132 @@ impl ListOptions {
     }
 }
 
+// ---------- exclusion patterns ----------
+
+/// Validate and canonicalize one exclusion pattern.
+///
+/// A pattern is a glob over a path: `*` matches any run of characters
+/// (including `/`), `?` matches exactly one, everything else is literal. It
+/// excludes an entity when it matches **either** the entity's folder path
+/// **or** its full reference (`/path/name`). So `/agent/skills` hides
+/// everything stored in that folder *and* an entity named `skills` in
+/// `/agent`; `/agent/skills*` hides that folder, everything beneath it, and
+/// any sibling whose path or reference starts the same way.
+///
+/// It must start with `/` or `*` (so `*/_private/*` works), may not contain
+/// `\`, `:` or control characters, and may not have a `.` or `..` segment.
+/// A trailing slash is dropped.
+pub fn validate_exclude_pattern(pattern: &str) -> Result<String> {
+    let p = pattern.trim();
+    let bad = |why: &str| SolxError::Invalid(format!("exclude pattern '{pattern}': {why}"));
+    if p.is_empty() {
+        return Err(bad("empty"));
+    }
+    if !(p.starts_with('/') || p.starts_with('*')) {
+        return Err(bad("must start with '/' or '*'"));
+    }
+    if let Some(c) = p
+        .chars()
+        .find(|c| *c == '\\' || *c == ':' || c.is_control())
+    {
+        return Err(bad(&format!("forbidden character {c:?}")));
+    }
+    if p.split('/').any(|seg| seg == "." || seg == "..") {
+        return Err(bad("'.' and '..' segments are not allowed"));
+    }
+    let trimmed = p.trim_end_matches('/');
+    Ok(if trimmed.is_empty() {
+        "/".to_string()
+    } else {
+        trimmed.to_string()
+    })
+}
+
+/// Render `patterns` as one `NOT (…)` condition per pattern, appending binds.
+///
+/// `col_prefix` qualifies the `path`/`name` columns (`""` or `"d."`). Each
+/// pattern is bound once and referenced twice — against the path and
+/// against the full reference, built the way [`crate::path::full_ref`] does
+/// (no double slash at the root). SQLite's `GLOB` is used rather than
+/// `LIKE`: it is case-sensitive, like [`glob_matches`], and does not treat
+/// `_` as a wildcard — `LIKE '%/_private/%'` would also match `/xprivate/`.
+pub fn exclude_conditions(
+    patterns: &[String],
+    col_prefix: &str,
+    binds: &mut Vec<String>,
+) -> Result<Option<String>> {
+    if patterns.is_empty() {
+        return Ok(None);
+    }
+    let c = col_prefix;
+    let full = format!("(CASE WHEN {c}path='/' THEN '/'||{c}name ELSE {c}path||'/'||{c}name END)");
+    let mut parts = Vec::with_capacity(patterns.len());
+    for raw in patterns {
+        let p = validate_exclude_pattern(raw)?;
+        // `[` opens a character class in GLOB; `[[]` is a literal `[`.
+        binds.push(p.replace('[', "[[]"));
+        let n = binds.len();
+        parts.push(format!("NOT ({c}path GLOB ?{n} OR {full} GLOB ?{n})"));
+    }
+    Ok(Some(parts.join(" AND ")))
+}
+
+/// The Rust twin of [`exclude_conditions`], for checking one entity (direct
+/// get/save/delete) without a query. An invalid pattern matches nothing.
+pub fn exclude_pattern_matches(pattern: &str, path: &str, name: &str) -> bool {
+    let Ok(p) = validate_exclude_pattern(pattern) else {
+        return false;
+    };
+    if glob_matches(&p, path) {
+        return true;
+    }
+    let full = if path == "/" {
+        format!("/{name}")
+    } else {
+        format!("{path}/{name}")
+    };
+    glob_matches(&p, &full)
+}
+
+/// Whether any of `patterns` excludes the entity at `path`/`name`.
+pub fn is_excluded_by(patterns: &[String], path: &str, name: &str) -> bool {
+    patterns
+        .iter()
+        .any(|p| exclude_pattern_matches(p, path, name))
+}
+
+/// Match a glob pattern against a path. `*` matches any sequence of
+/// characters (including `/`), `?` matches any single character; every other
+/// character matches literally. No external glob/regex dependency — this is
+/// the classic two-pointer glob algorithm.
+pub fn glob_matches(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let (mut star_p, mut star_t) = (usize::MAX, 0usize);
+
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star_p = pi;
+            star_t = ti;
+            pi += 1;
+        } else if star_p != usize::MAX {
+            pi = star_p + 1;
+            star_t += 1;
+            ti = star_t;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
 /// A page of results plus the unpaginated total.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Page<T> {
@@ -237,6 +396,12 @@ pub struct SearchQuery {
     pub limit: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<usize>,
+    /// Same as [`ListOptions::exclude_paths`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_paths: Vec<String>,
+    /// Same as [`ListOptions::exclude_mode`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_mode: Option<ExcludeMode>,
 }
 
 /// Full-text query over the action catalogue (path/name/caption/description/
@@ -249,17 +414,24 @@ pub struct ActionSearchQuery {
     /// Free-text query. `None`/empty behaves exactly like a plain `list`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub q: Option<String>,
-    /// Drop actions hidden from model-facing tool catalogues.
-    ///
-    /// Opt-in, so the CLI, the HTTP admin routes, and anything else
-    /// inventorying the registry keep seeing everything. Set it when
-    /// assembling a catalogue an LLM will choose from.
-    ///
-    /// Filtering happens after the query, so a full page can come back short
-    /// and `total` stays the *unfiltered* count — an upper bound, not an
-    /// exact one. The implementation over-fetches to keep that rare.
+    /// Deprecated spelling of `exclude_mode: tooling`, still accepted so
+    /// existing callers (`?exclude_hidden=true`, `excludeHidden: true`) keep
+    /// getting a filtered catalogue. See [`Self::effective_mode`]; an
+    /// explicit `exclude_mode` wins over it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_hidden: bool,
+}
+
+impl ActionSearchQuery {
+    /// `list.exclude_mode`, falling back to `Tooling` when only the
+    /// deprecated `exclude_hidden` flag was set.
+    pub fn effective_mode(&self) -> Option<ExcludeMode> {
+        self.list.exclude_mode.or(if self.exclude_hidden {
+            Some(ExcludeMode::Tooling)
+        } else {
+            None
+        })
+    }
 }
 
 #[cfg(test)]
@@ -448,6 +620,132 @@ mod tests {
         .to_sql(schema)
         .unwrap();
         assert_eq!(sql.where_clause, "");
+    }
+
+    #[test]
+    fn exclude_paths_render_as_bound_globs_over_path_and_full_ref() {
+        let sql = ListOptions {
+            exclude_paths: vec!["/agent/skills".into(), "/tmp*".into()],
+            ..opts()
+        }
+        .to_sql(SCHEMA)
+        .unwrap();
+        let full = "(CASE WHEN path='/' THEN '/'||name ELSE path||'/'||name END)";
+        assert_eq!(
+            sql.where_clause,
+            format!(
+                " WHERE NOT (path GLOB ?1 OR {full} GLOB ?1) AND NOT (path GLOB ?2 OR {full} GLOB ?2)"
+            )
+        );
+        assert_eq!(
+            sql.binds,
+            vec!["/agent/skills".to_string(), "/tmp*".to_string()]
+        );
+    }
+
+    #[test]
+    fn exclude_paths_compose_with_sequential_binds() {
+        let sql = ListOptions {
+            path_prefix: Some("/a".into()),
+            date_after: Some("2024-01-01".into()),
+            exclude_paths: vec!["/a/b".into()],
+            filter_field: Some("name".into()),
+            filter_value: Some("x".into()),
+            ..opts()
+        }
+        .to_sql(SCHEMA)
+        .unwrap();
+        assert!(
+            sql.where_clause.contains("path GLOB ?4"),
+            "{}",
+            sql.where_clause
+        );
+        assert!(
+            sql.where_clause.contains("LIKE lower(?5)"),
+            "{}",
+            sql.where_clause
+        );
+        assert_eq!(sql.binds.len(), 5);
+    }
+
+    #[test]
+    fn exclude_pattern_brackets_are_literal_in_glob() {
+        let mut binds = Vec::new();
+        let cond = exclude_conditions(&["/a[1]".into()], "d.", &mut binds)
+            .unwrap()
+            .unwrap();
+        assert!(cond.starts_with("NOT (d.path GLOB ?1"), "{cond}");
+        assert_eq!(binds, vec!["/a[[]1]".to_string()]);
+    }
+
+    #[test]
+    fn exclude_pattern_is_bound_never_inlined() {
+        let mut binds = Vec::new();
+        let cond = exclude_conditions(&["/x' OR 1=1 --".into()], "", &mut binds)
+            .unwrap()
+            .unwrap();
+        assert!(!cond.contains("1=1"), "{cond}");
+        assert_eq!(binds, vec!["/x' OR 1=1 --".to_string()]);
+    }
+
+    #[test]
+    fn invalid_exclude_patterns_are_rejected() {
+        for bad in ["", "relative", "/a/../b", "/a:b", "/a\\b"] {
+            assert!(validate_exclude_pattern(bad).is_err(), "{bad:?}");
+        }
+        assert_eq!(validate_exclude_pattern("/a/b/").unwrap(), "/a/b");
+        assert_eq!(
+            validate_exclude_pattern("*/_private/*").unwrap(),
+            "*/_private/*"
+        );
+        assert!(ListOptions {
+            exclude_paths: vec!["nope".into()],
+            ..opts()
+        }
+        .to_sql(SCHEMA)
+        .is_err());
+    }
+
+    #[test]
+    fn rust_matcher_covers_folder_full_ref_and_globs() {
+        // (pattern, path, name, excluded)
+        let cases = [
+            ("/agent/skills", "/agent/skills", "docs", true),
+            ("/agent/skills", "/agent", "skills", true),
+            ("/agent/skills", "/agent/skills/deep", "x", false),
+            ("/agent/skills", "/agent", "skillsx", false),
+            ("/agent/skills*", "/agent/skills/deep", "x", true),
+            ("/agent/skills*", "/agent", "skillsx", true),
+            ("/note", "/", "note", true),
+            ("/note", "/", "other", false),
+            ("*/_private/*", "/a/_private/b", "x", true),
+            ("*/_private/*", "/a/_private", "x", true),
+            ("*/_private/*", "/a/xprivate", "x", false),
+            ("/Agent", "/agent", "x", false),
+            ("/a?c", "/abc", "x", true),
+        ];
+        for (pat, path, name, want) in cases {
+            assert_eq!(
+                exclude_pattern_matches(pat, path, name),
+                want,
+                "{pat} vs {path} {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn exclude_mode_deserializes_and_folds_the_old_flag() {
+        let o: ListOptions =
+            serde_json::from_value(serde_json::json!({"excludeMode": "tooling"})).unwrap();
+        assert_eq!(o.exclude_mode, Some(ExcludeMode::Tooling));
+        let q: ActionSearchQuery =
+            serde_json::from_value(serde_json::json!({"excludeHidden": true})).unwrap();
+        assert_eq!(q.effective_mode(), Some(ExcludeMode::Tooling));
+        let q: ActionSearchQuery = serde_json::from_value(
+            serde_json::json!({"excludeHidden": true, "excludeMode": "none"}),
+        )
+        .unwrap();
+        assert_eq!(q.effective_mode(), Some(ExcludeMode::None));
     }
 
     #[test]

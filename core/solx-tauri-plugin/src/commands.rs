@@ -9,14 +9,16 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use solx_config::ConfigService;
+use solx_config::{ConfigService, EntityKind};
 use solx_surface::entities::{
     Action, ActionExecResult, ActionInput, Document, DocumentInput, TypeEntity, TypeInput,
 };
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::Solx;
 use solx_surface::path::split_ref;
-use solx_surface::query::{ActionSearchQuery, ListOptions, Page, PathFacet, SearchQuery};
+use solx_surface::query::{
+    ActionSearchQuery, ExcludeMode, ListOptions, Page, PathFacet, SearchQuery,
+};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{command, State};
 
@@ -37,6 +39,21 @@ fn entity(path: &str, name: &str) -> Result<(String, String)> {
     split_ref(&format!("{}/{}", path.trim_end_matches('/'), name))
 }
 
+/// The exclusion scope a command applies when the caller names none - the
+/// same `user` default as `solx-server`'s entity routes, since both serve
+/// the web UI. Exec is never filtered (the agent widget reaches the builtins
+/// through it and asks for the tooling scope itself).
+const DEFAULT_MODE: ExcludeMode = ExcludeMode::User;
+
+/// Expand `opts`' mode (or [`DEFAULT_MODE`]) into its `exclude_paths`.
+fn scoped(app: &solx_manager::App, kind: EntityKind, opts: Option<ListOptions>) -> ListOptions {
+    let mut opts = opts.unwrap_or_default();
+    app.config
+        .exclusion_policy()
+        .apply(kind, &mut opts, DEFAULT_MODE);
+    opts
+}
+
 // ── types ── (`/types`, `/types/{*ref}`, `/types-paths`, `/validate`)
 
 /// `PUT /types/{*ref}`
@@ -46,9 +63,19 @@ pub(crate) async fn types_save(
     path: String,
     name: String,
     input: TypeInput,
+    exclude_mode: Option<ExcludeMode>,
 ) -> Result<TypeEntity> {
     let (path, name) = entity(&path, &name)?;
-    state.app()?.types().save(&path, &name, input).await
+    let app = state.app()?;
+    app.guard_excluded(
+        EntityKind::Type,
+        exclude_mode.unwrap_or(DEFAULT_MODE),
+        &path,
+        &name,
+        true,
+    )
+    .await?;
+    app.types().save(&path, &name, input).await
 }
 
 /// `GET /types/{*ref}`
@@ -57,9 +84,19 @@ pub(crate) async fn types_get(
     state: State<'_, SolxState>,
     path: String,
     name: String,
+    exclude_mode: Option<ExcludeMode>,
 ) -> Result<TypeEntity> {
     let (path, name) = entity(&path, &name)?;
-    state.app()?.types().get(&path, &name).await
+    let app = state.app()?;
+    app.guard_excluded(
+        EntityKind::Type,
+        exclude_mode.unwrap_or(DEFAULT_MODE),
+        &path,
+        &name,
+        false,
+    )
+    .await?;
+    app.types().get(&path, &name).await
 }
 
 /// `DELETE /types/{*ref}`
@@ -68,9 +105,19 @@ pub(crate) async fn types_delete(
     state: State<'_, SolxState>,
     path: String,
     name: String,
+    exclude_mode: Option<ExcludeMode>,
 ) -> Result<()> {
     let (path, name) = entity(&path, &name)?;
-    state.app()?.types().delete(&path, &name).await
+    let app = state.app()?;
+    app.guard_excluded(
+        EntityKind::Type,
+        exclude_mode.unwrap_or(DEFAULT_MODE),
+        &path,
+        &name,
+        false,
+    )
+    .await?;
+    app.types().delete(&path, &name).await
 }
 
 /// `GET /types`
@@ -79,7 +126,8 @@ pub(crate) async fn types_list(
     state: State<'_, SolxState>,
     opts: Option<ListOptions>,
 ) -> Result<Page<TypeEntity>> {
-    state.app()?.types().list(opts.unwrap_or_default()).await
+    let app = state.app()?;
+    app.types().list(scoped(&app, EntityKind::Type, opts)).await
 }
 
 /// `GET /types-paths`
@@ -88,7 +136,10 @@ pub(crate) async fn types_paths(
     state: State<'_, SolxState>,
     opts: Option<ListOptions>,
 ) -> Result<Page<PathFacet>> {
-    state.app()?.types().paths(opts.unwrap_or_default()).await
+    let app = state.app()?;
+    app.types()
+        .paths(scoped(&app, EntityKind::Type, opts))
+        .await
 }
 
 /// No route of its own — `@solx/http` resolves via `GET /types/{*ref}`.
@@ -119,9 +170,19 @@ pub(crate) async fn docs_save(
     path: String,
     name: String,
     input: DocumentInput,
+    exclude_mode: Option<ExcludeMode>,
 ) -> Result<Document> {
     let (path, name) = entity(&path, &name)?;
-    state.app()?.docs().save(&path, &name, input).await
+    let app = state.app()?;
+    app.guard_excluded(
+        EntityKind::Document,
+        exclude_mode.unwrap_or(DEFAULT_MODE),
+        &path,
+        &name,
+        true,
+    )
+    .await?;
+    app.docs().save(&path, &name, input).await
 }
 
 /// `GET /docs/{*ref}`
@@ -130,9 +191,19 @@ pub(crate) async fn docs_get(
     state: State<'_, SolxState>,
     path: String,
     name: String,
+    exclude_mode: Option<ExcludeMode>,
 ) -> Result<Document> {
     let (path, name) = entity(&path, &name)?;
-    state.app()?.docs().get(&path, &name).await
+    let app = state.app()?;
+    app.guard_excluded(
+        EntityKind::Document,
+        exclude_mode.unwrap_or(DEFAULT_MODE),
+        &path,
+        &name,
+        false,
+    )
+    .await?;
+    app.docs().get(&path, &name).await
 }
 
 /// `DELETE /docs/{*ref}`
@@ -141,9 +212,19 @@ pub(crate) async fn docs_delete(
     state: State<'_, SolxState>,
     path: String,
     name: String,
+    exclude_mode: Option<ExcludeMode>,
 ) -> Result<()> {
     let (path, name) = entity(&path, &name)?;
-    state.app()?.docs().delete(&path, &name).await
+    let app = state.app()?;
+    app.guard_excluded(
+        EntityKind::Document,
+        exclude_mode.unwrap_or(DEFAULT_MODE),
+        &path,
+        &name,
+        false,
+    )
+    .await?;
+    app.docs().delete(&path, &name).await
 }
 
 /// `GET /docs`
@@ -152,7 +233,10 @@ pub(crate) async fn docs_list(
     state: State<'_, SolxState>,
     opts: Option<ListOptions>,
 ) -> Result<Page<Document>> {
-    state.app()?.docs().list(opts.unwrap_or_default()).await
+    let app = state.app()?;
+    app.docs()
+        .list(scoped(&app, EntityKind::Document, opts))
+        .await
 }
 
 /// `GET /docs-paths`
@@ -161,7 +245,10 @@ pub(crate) async fn docs_paths(
     state: State<'_, SolxState>,
     opts: Option<ListOptions>,
 ) -> Result<Page<PathFacet>> {
-    state.app()?.docs().paths(opts.unwrap_or_default()).await
+    let app = state.app()?;
+    app.docs()
+        .paths(scoped(&app, EntityKind::Document, opts))
+        .await
 }
 
 /// `GET /search`
@@ -170,7 +257,12 @@ pub(crate) async fn docs_search(
     state: State<'_, SolxState>,
     query: Option<SearchQuery>,
 ) -> Result<Page<Document>> {
-    state.app()?.docs().search(query.unwrap_or_default()).await
+    let app = state.app()?;
+    let mut query = query.unwrap_or_default();
+    app.config
+        .exclusion_policy()
+        .apply_search(&mut query, DEFAULT_MODE);
+    app.docs().search(query).await
 }
 
 // ── actions ── (`/actions`, `/actions/{*ref}`, `/actions-paths`, `/actions-search`)
@@ -182,9 +274,19 @@ pub(crate) async fn actions_save(
     path: String,
     name: String,
     input: ActionInput,
+    exclude_mode: Option<ExcludeMode>,
 ) -> Result<Action> {
     let (path, name) = entity(&path, &name)?;
-    state.app()?.actions().save(&path, &name, input).await
+    let app = state.app()?;
+    app.guard_excluded(
+        EntityKind::Action,
+        exclude_mode.unwrap_or(DEFAULT_MODE),
+        &path,
+        &name,
+        true,
+    )
+    .await?;
+    app.actions().save(&path, &name, input).await
 }
 
 /// `GET /actions/{*ref}`
@@ -193,9 +295,19 @@ pub(crate) async fn actions_get(
     state: State<'_, SolxState>,
     path: String,
     name: String,
+    exclude_mode: Option<ExcludeMode>,
 ) -> Result<Action> {
     let (path, name) = entity(&path, &name)?;
-    state.app()?.actions().get(&path, &name).await
+    let app = state.app()?;
+    app.guard_excluded(
+        EntityKind::Action,
+        exclude_mode.unwrap_or(DEFAULT_MODE),
+        &path,
+        &name,
+        false,
+    )
+    .await?;
+    app.actions().get(&path, &name).await
 }
 
 /// `DELETE /actions/{*ref}`
@@ -204,9 +316,19 @@ pub(crate) async fn actions_delete(
     state: State<'_, SolxState>,
     path: String,
     name: String,
+    exclude_mode: Option<ExcludeMode>,
 ) -> Result<()> {
     let (path, name) = entity(&path, &name)?;
-    state.app()?.actions().delete(&path, &name).await
+    let app = state.app()?;
+    app.guard_excluded(
+        EntityKind::Action,
+        exclude_mode.unwrap_or(DEFAULT_MODE),
+        &path,
+        &name,
+        false,
+    )
+    .await?;
+    app.actions().delete(&path, &name).await
 }
 
 /// `GET /actions`
@@ -215,7 +337,10 @@ pub(crate) async fn actions_list(
     state: State<'_, SolxState>,
     opts: Option<ListOptions>,
 ) -> Result<Page<Action>> {
-    state.app()?.actions().list(opts.unwrap_or_default()).await
+    let app = state.app()?;
+    app.actions()
+        .list(scoped(&app, EntityKind::Action, opts))
+        .await
 }
 
 /// `GET /actions-paths`
@@ -224,7 +349,10 @@ pub(crate) async fn actions_paths(
     state: State<'_, SolxState>,
     opts: Option<ListOptions>,
 ) -> Result<Page<PathFacet>> {
-    state.app()?.actions().paths(opts.unwrap_or_default()).await
+    let app = state.app()?;
+    app.actions()
+        .paths(scoped(&app, EntityKind::Action, opts))
+        .await
 }
 
 /// `GET /actions-search`
@@ -233,11 +361,14 @@ pub(crate) async fn actions_search(
     state: State<'_, SolxState>,
     query: Option<ActionSearchQuery>,
 ) -> Result<Page<Action>> {
-    state
-        .app()?
-        .actions()
-        .search(query.unwrap_or_default())
-        .await
+    let app = state.app()?;
+    let mut query = query.unwrap_or_default();
+    query.list.exclude_mode = query.effective_mode();
+    query.exclude_hidden = false;
+    app.config
+        .exclusion_policy()
+        .apply(EntityKind::Action, &mut query.list, DEFAULT_MODE);
+    app.actions().search(query).await
 }
 
 /// `POST /actions/{*ref}` — `params` defaults to `{}`, like an empty POST body.

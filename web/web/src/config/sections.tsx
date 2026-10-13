@@ -7,11 +7,11 @@
  * from here — see `RESTART_KEYS` in solx-config.
  */
 import { useMemo, useRef, useState, type ReactNode } from "react";
-import type { ConfigView, PackageResult, SolxConfigFile, ToolRule } from "@solx/tauri";
+import type { ConfigView, ExclusionLists, PackageResult, SolxConfigFile, ToolRule } from "@solx/tauri";
 import { ChipTagInput } from "../components/ChipTagInput";
 import { JsonEditField } from "../components/JsonEditField";
 import { getTauri } from "../api/connection";
-import { useActionPaths } from "../api/hooks";
+import { useActionPaths, useDocumentPaths, useTypePaths } from "../api/hooks";
 import {
   globMatches,
   isLoopbackHost,
@@ -312,7 +312,8 @@ function RuleList({
 }
 
 function ToolEditor({ draft, setDraft, view }: SectionEditorProps<ToolDraft>) {
-  const pathsQuery = useActionPaths(500);
+  // Unfiltered, so an action path that is already hidden can still be picked.
+  const pathsQuery = useActionPaths(500, { excludeMode: "none" });
   const paths = useMemo(() => (pathsQuery.data?.items ?? []).map((f) => f.path), [pathsQuery.data]);
   return (
     <>
@@ -328,7 +329,8 @@ function ToolEditor({ draft, setDraft, view }: SectionEditorProps<ToolDraft>) {
         <span className="dialog__hint">
           Left out of the tool catalogue a model sees, and refused if called by name. Paths are globs:{" "}
           <code>*</code> spans <code>/</code>, <code>?</code> is one character. Actions can also hide themselves
-          with the <code>solx:hidden</code> tag, but can't unhide what's listed here.
+          with the <code>solx:hidden</code> tag, but can't unhide what's listed here. These rules join the
+          tooling action patterns under <em>Exclusions</em>.
         </span>
         <RuleList
           rows={draft.exclude}
@@ -370,6 +372,160 @@ const tools: SectionDef<ToolDraft> = {
     tool_destructive: toRules(draft.destructive),
   }),
   Editor: ToolEditor,
+};
+
+// ── exclusions ──────────────────────────────────────────────────────────
+
+const SCOPES = [
+  {
+    key: "user",
+    title: "Hidden from the web UI",
+    hint: "Left out of every list, search and path picker here and over REST, and read as not found if opened directly. Models still see them — use this for agent skills and sessions.",
+  },
+  {
+    key: "tooling",
+    title: "Hidden from models",
+    hint: "Left out of what MCP clients and the agent can list, search or read, and refused if addressed directly. The web UI still shows them.",
+  },
+] as const;
+
+const KINDS = [
+  { key: "documents", label: "Documents" },
+  { key: "types", label: "Types" },
+  { key: "actions", label: "Actions" },
+] as const;
+
+type ScopeKey = (typeof SCOPES)[number]["key"];
+type KindKey = (typeof KINDS)[number]["key"];
+type ExclusionDraft = Record<ScopeKey, Record<KindKey, string[]>>;
+
+/**
+ * Whether an exclusion pattern hides anything at `path`. The host also
+ * matches a pattern against an entity's full reference, which a path facet
+ * can't show, so this counts folders only - a hint, not the rule.
+ */
+const patternHitsPath = (pattern: string, path: string) =>
+  globMatches(pattern.replace(/\/+$/, "") || "/", path);
+
+function PatternList({
+  patterns,
+  onChange,
+  paths,
+  listId,
+}: {
+  patterns: string[];
+  onChange: (next: string[]) => void;
+  paths: string[];
+  listId: string;
+}) {
+  return (
+    <div className="config-rows">
+      {patterns.map((pattern, i) => {
+        const p = pattern.trim();
+        const matched = p ? paths.filter((path) => patternHitsPath(p, path)).length : 0;
+        return (
+          <div className="dialog__input-row" key={i}>
+            <input
+              className="dialog__input config-mono"
+              list={listId}
+              value={pattern}
+              placeholder="/agent/skills or /tmp*"
+              spellCheck={false}
+              onChange={(e) => onChange(replaceAt(patterns, i, e.target.value))}
+            />
+            <span className="config-tag config-tag--muted" title="Folders this pattern covers right now">
+              {matched} {matched === 1 ? "folder" : "folders"}
+            </span>
+            <RemoveButton label="Remove pattern" onClick={() => onChange(removeAt(patterns, i))} />
+          </div>
+        );
+      })}
+      <AddButton onClick={() => onChange([...patterns, ""])}>Add pattern</AddButton>
+    </div>
+  );
+}
+
+function ExclusionsEditor({ draft, setDraft }: SectionEditorProps<ExclusionDraft>) {
+  // Unfiltered, so a folder that is already excluded still shows up here.
+  const docs = useDocumentPaths(500, { excludeMode: "none" });
+  const types = useTypePaths(500, { excludeMode: "none" });
+  const actions = useActionPaths(500, { excludeMode: "none" });
+  const paths: Record<KindKey, string[]> = useMemo(
+    () => ({
+      documents: (docs.data?.items ?? []).map((f) => f.path),
+      types: (types.data?.items ?? []).map((f) => f.path),
+      actions: (actions.data?.items ?? []).map((f) => f.path),
+    }),
+    [docs.data, types.data, actions.data],
+  );
+  return (
+    <>
+      {KINDS.map((kind) => (
+        <datalist id={`config-exclusion-${kind.key}`} key={kind.key}>
+          {paths[kind.key].map((p) => (
+            <option key={p} value={p} />
+          ))}
+        </datalist>
+      ))}
+      <span className="dialog__hint">
+        Patterns are globs: <code>*</code> spans <code>/</code>, <code>?</code> is one character. A pattern
+        matches a folder or a single entity: <code>/agent/skills</code> hides what's in that folder and the
+        entity <code>skills</code> in <code>/agent</code>; <code>/agent/skills*</code> also hides everything
+        beneath it.
+      </span>
+      {SCOPES.map((scope) => (
+        <div className="dialog__field" key={scope.key}>
+          <span className="dialog__label">{scope.title}</span>
+          <span className="dialog__hint">{scope.hint}</span>
+          {KINDS.map((kind) => (
+            <div className="config-card" key={kind.key}>
+              <span className="dialog__label">{kind.label}</span>
+              <PatternList
+                patterns={draft[scope.key][kind.key]}
+                paths={paths[kind.key]}
+                listId={`config-exclusion-${kind.key}`}
+                onChange={(next) =>
+                  setDraft({ ...draft, [scope.key]: { ...draft[scope.key], [kind.key]: next } })
+                }
+              />
+            </div>
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
+
+const toLists = (lists: ExclusionLists | undefined): Record<KindKey, string[]> => ({
+  documents: [...(lists?.documents ?? [])],
+  types: [...(lists?.types ?? [])],
+  actions: [...(lists?.actions ?? [])],
+});
+
+/** Blank rows dropped, empty kinds and scopes omitted, so nothing empty is stored. */
+const fromLists = (lists: Record<KindKey, string[]>): ExclusionLists | undefined => {
+  const out: ExclusionLists = {};
+  for (const { key } of KINDS) {
+    const kept = nonEmpty(lists[key].map((p) => p.trim()).filter(Boolean));
+    if (kept) out[key] = kept;
+  }
+  return Object.keys(out).length ? out : undefined;
+};
+
+const exclusions: SectionDef<ExclusionDraft> = {
+  id: "exclusions",
+  title: "Exclusions",
+  description: "Documents, types and actions to hide from the web UI, from models, or from both.",
+  fromConfig: (raw) => ({
+    user: toLists(raw.exclusions?.user),
+    tooling: toLists(raw.exclusions?.tooling),
+  }),
+  toConfig: (draft) => {
+    const user = fromLists(draft.user);
+    const tooling = fromLists(draft.tooling);
+    return { exclusions: user || tooling ? { ...(user && { user }), ...(tooling && { tooling }) } : undefined };
+  },
+  Editor: ExclusionsEditor,
 };
 
 // ── runtime limits ──────────────────────────────────────────────────────
@@ -859,4 +1015,14 @@ const raw: SectionDef<string> = {
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const SECTIONS: SectionDef<any>[] = [allowlists, tools, limits, environment, server, storage, packages, raw];
+export const SECTIONS: SectionDef<any>[] = [
+  allowlists,
+  tools,
+  exclusions,
+  limits,
+  environment,
+  server,
+  storage,
+  packages,
+  raw,
+];

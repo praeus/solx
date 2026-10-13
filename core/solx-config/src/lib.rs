@@ -23,10 +23,12 @@ use base64::Engine as _;
 use fs2::FileExt;
 use serde_json::{Map, Value};
 use solx_surface::error::{Result, SolxError};
+use solx_surface::query::ExcludeMode;
 
 pub use types::{
-    validate_capabilities, CommandDef, InstalledPackage, McpExcludeRule, SolxConfig, ToolPolicy,
-    ToolRule, CAP_DESTRUCTIVE, CAP_HIDDEN, RESERVED_CAPS, RESERVED_CAP_PREFIX,
+    glob_matches, validate_capabilities, CommandDef, EntityKind, ExclusionLists, ExclusionPolicy,
+    Exclusions, InstalledPackage, McpExcludeRule, SolxConfig, ToolPolicy, ToolRule,
+    CAP_DESTRUCTIVE, CAP_HIDDEN, RESERVED_CAPS, RESERVED_CAP_PREFIX,
 };
 
 /// `tool_exclude` ∪ the former `mcp_exclude`. Union rather than
@@ -570,8 +572,18 @@ impl ConfigService {
     /// [`Self::snapshot`] deserializes the entire config on every call.
     pub fn tool_policy(&self) -> ToolPolicy {
         let cfg = self.snapshot();
-        let hidden = merged_exclude(&cfg);
-        ToolPolicy::new(hidden, cfg.tool_destructive.clone().unwrap_or_default())
+        let hidden = ExclusionPolicy::from_config(&cfg)
+            .patterns(EntityKind::Action, ExcludeMode::Tooling)
+            .to_vec();
+        ToolPolicy::from_patterns(hidden, cfg.tool_destructive.clone().unwrap_or_default())
+    }
+
+    /// Resolve every configured exclusion list once: `exclusions.user`,
+    /// `exclusions.tooling`, and the legacy `tool_exclude`/`mcp_exclude`
+    /// rules folded into tooling actions. Same build-once advice as
+    /// [`Self::tool_policy`].
+    pub fn exclusion_policy(&self) -> ExclusionPolicy {
+        ExclusionPolicy::from_config(&self.snapshot())
     }
 
     /// Replace the outbound base-URL allowlist wholesale.
@@ -760,6 +772,26 @@ pub fn validate(value: &Value) -> Result<SolxConfig> {
             return invalid(format!(
                 "server_cors_origins entry {origin:?} is not a valid origin"
             ));
+        }
+    }
+    if let Some(ex) = &cfg.exclusions {
+        let scopes = [("user", &ex.user), ("tooling", &ex.tooling)];
+        for (scope, lists) in scopes {
+            let Some(lists) = lists else { continue };
+            let kinds = [
+                ("documents", &lists.documents),
+                ("types", &lists.types),
+                ("actions", &lists.actions),
+            ];
+            for (kind, patterns) in kinds {
+                for p in patterns {
+                    // An invalid pattern would fail every list in its scope,
+                    // so it is refused here rather than at query time.
+                    if let Err(e) = solx_surface::query::validate_exclude_pattern(p) {
+                        return invalid(format!("exclusions.{scope}.{kind}: {e}"));
+                    }
+                }
+            }
         }
     }
     for (key, def) in cfg.command_actions.iter().flatten() {
@@ -1092,6 +1124,24 @@ mod tests {
             c.snapshot().command_actions.is_some() || c.get("tool_exclude").is_some(),
             "config must still deserialize with both keys set"
         );
+    }
+
+    #[test]
+    fn update_rejects_an_invalid_exclusion_pattern() {
+        let (_d, c) = svc();
+        let err = c
+            .update(changes(serde_json::json!({
+                "exclusions": { "user": { "documents": ["agent/skills"] } }
+            })))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("exclusions.user.documents"),
+            "{err}"
+        );
+        c.update(changes(serde_json::json!({
+            "exclusions": { "user": { "documents": ["/agent/skills", "*/_private/*"] } }
+        })))
+        .unwrap();
     }
 
     #[test]

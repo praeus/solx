@@ -47,6 +47,10 @@ url        = "2"
 rand       = "0.8"
 tracing    = "0.1"
 axum       = "0.7"
+# Query extractor that accepts repeated keys (`?excludePaths=/a&excludePaths=/b`),
+# which `axum::extract::Query` (serde_urlencoded) rejects as a duplicate field.
+axum-extra = { version = "0.9", default-features = false, features = ["query"] }
+serde_html_form = "0.2"
 tower-http = { version = "0.5", features = ["cors"] }
 futures    = "0.3"
 

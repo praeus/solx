@@ -1,12 +1,16 @@
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
+use axum_extra::extract::Query;
 use solx_surface::entities::{Document, DocumentInput};
 use solx_surface::managers::Solx;
 use solx_surface::query::{ListOptions, Page, PathFacet, SearchQuery};
 
+use solx_config::EntityKind;
+
 use crate::error::ApiError;
+use crate::routes::exclude::{self, ModeParam};
 use crate::routes::refs::split_url_ref;
 use crate::state::AppState;
 
@@ -28,9 +32,11 @@ pub fn router() -> Router<AppState> {
 async fn save_doc(
     State(state): State<AppState>,
     Path(reference): Path<String>,
+    Query(mode): Query<ModeParam>,
     Json(input): Json<DocumentInput>,
 ) -> Result<Json<Document>, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
+    exclude::guard(&state, EntityKind::Document, &mode, &path, &name, true).await?;
     let doc = state.app.docs().save(&path, &name, input).await?;
     Ok(Json(doc))
 }
@@ -38,8 +44,10 @@ async fn save_doc(
 async fn get_doc(
     State(state): State<AppState>,
     Path(reference): Path<String>,
+    Query(mode): Query<ModeParam>,
 ) -> Result<Json<Document>, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
+    exclude::guard(&state, EntityKind::Document, &mode, &path, &name, false).await?;
     let doc = state.app.docs().get(&path, &name).await?;
     Ok(Json(doc))
 }
@@ -47,32 +55,37 @@ async fn get_doc(
 async fn delete_doc(
     State(state): State<AppState>,
     Path(reference): Path<String>,
+    Query(mode): Query<ModeParam>,
 ) -> Result<StatusCode, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
+    exclude::guard(&state, EntityKind::Document, &mode, &path, &name, false).await?;
     state.app.docs().delete(&path, &name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_docs(
     State(state): State<AppState>,
-    Query(opts): Query<ListOptions>,
+    Query(mut opts): Query<ListOptions>,
 ) -> Result<Json<Page<Document>>, ApiError> {
+    exclude::apply(&state, EntityKind::Document, &mut opts);
     let page = state.app.docs().list(opts).await?;
     Ok(Json(page))
 }
 
 async fn doc_paths(
     State(state): State<AppState>,
-    Query(opts): Query<ListOptions>,
+    Query(mut opts): Query<ListOptions>,
 ) -> Result<Json<Page<PathFacet>>, ApiError> {
+    exclude::apply(&state, EntityKind::Document, &mut opts);
     let page = state.app.docs().paths(opts).await?;
     Ok(Json(page))
 }
 
 async fn search_docs(
     State(state): State<AppState>,
-    Query(query): Query<SearchQuery>,
+    Query(mut query): Query<SearchQuery>,
 ) -> Result<Json<Page<Document>>, ApiError> {
+    exclude::apply_search(&state, &mut query);
     let results = state.app.docs().search(query).await?;
     Ok(Json(results))
 }

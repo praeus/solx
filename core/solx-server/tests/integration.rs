@@ -420,3 +420,139 @@ async fn missing_token_gets_json_401() {
     assert_eq!(body["kind"], "unauthorized");
     assert!(body["message"].as_str().unwrap().contains("missing"));
 }
+
+/// User exclusions shape what the REST surface shows by default, tooling
+/// exclusions are independent of them, and Rust clients (which pin
+/// `excludeMode=none`) are unaffected by either.
+#[tokio::test]
+async fn exclusions_scope_the_rest_surface() {
+    const DOC_TYPE: &str = "/types/docs/Document";
+    let (_dir, cfg, base_url, token) = spawn_server().await;
+    cfg.set(
+        "exclusions",
+        json!({
+            "user": { "documents": ["/agent/skills", "/agent/sessions*"] },
+            "tooling": { "documents": ["/private"] }
+        }),
+    )
+    .unwrap();
+    let http = reqwest::Client::new();
+    let auth = |rb: reqwest::RequestBuilder| rb.bearer_auth(&token);
+    let docs = RemoteDocManager::new(base_url.clone(), token.clone());
+    for (path, name) in [
+        ("/agent/skills", "s1"),
+        ("/agent/sessions/2026", "x1"),
+        ("/private", "p1"),
+        ("/notes", "n1"),
+    ] {
+        docs.save(
+            path,
+            name,
+            DocumentInput {
+                type_ref: Some(DOC_TYPE.into()),
+                contents: json!({}),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let total = |v: serde_json::Value| v["total"].as_u64().unwrap();
+    let get_json = |rb: reqwest::RequestBuilder| async move {
+        auth(rb)
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()
+    };
+
+    // Default (user): the two agent folders are gone.
+    let listed = get_json(http.get(format!("{base_url}/docs"))).await;
+    assert_eq!(total(listed), 2);
+    let facets = get_json(http.get(format!("{base_url}/docs-paths"))).await;
+    let paths: Vec<&str> = facets["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, vec!["/notes", "/private"]);
+
+    // Tooling sees the agent folders but not /private; none sees all.
+    let tooling = get_json(
+        http.get(format!("{base_url}/docs"))
+            .query(&[("excludeMode", "tooling")]),
+    )
+    .await;
+    assert_eq!(total(tooling), 3);
+    let none = get_json(
+        http.get(format!("{base_url}/search"))
+            .query(&[("excludeMode", "none")]),
+    )
+    .await;
+    assert_eq!(total(none), 4);
+
+    // Ad-hoc patterns ride as repeated keys and add to the scope's own.
+    let ad_hoc = get_json(http.get(format!(
+        "{base_url}/docs?excludePaths=/notes&excludePaths=/priv*"
+    )))
+    .await;
+    assert_eq!(total(ad_hoc), 0);
+
+    // Direct access follows the same scope.
+    let hidden = auth(http.get(format!("{base_url}/docs/agent/skills/s1")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(hidden.status(), 404);
+    let shown = auth(http.get(format!(
+        "{base_url}/docs/agent/skills/s1?excludeMode=tooling"
+    )))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(shown.status(), 200);
+    let refused = auth(http.put(format!("{base_url}/docs/agent/skills/new")))
+        .json(&json!({ "typeRef": DOC_TYPE, "contents": {} }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 400);
+
+    // The agent reaches documents through builtin exec, which user
+    // exclusions never filter; it asks for the tooling scope itself.
+    let exec = get_json(
+        http.post(format!(
+            "{base_url}/actions/builtin/document/entity-list-documents"
+        ))
+        .json(&json!({ "excludeMode": "tooling" })),
+    )
+    .await;
+    assert_eq!(exec["result"]["total"], 3, "{exec}");
+
+    // A Rust client is pinned to `none`, so a proxied CLI sees everything.
+    let page = docs.list(ListOptions::default()).await.unwrap();
+    assert_eq!(page.total, 4);
+    docs.get("/agent/skills", "s1").await.unwrap();
+    let page = docs
+        .list(ListOptions {
+            exclude_paths: vec!["/agent*".into(), "/private".into()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        page.total, 1,
+        "Vec fields survive the client's query encoding"
+    );
+    let hits = docs
+        .search(SearchQuery {
+            exclude_mode: Some(solx_surface::query::ExcludeMode::User),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(hits.total, 2);
+}

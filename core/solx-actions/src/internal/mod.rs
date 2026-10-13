@@ -25,6 +25,7 @@
 //! * [`secrets`] — the per-caller `get-secret`/`set-secret`
 //! * [`oauth`] — the OAuth 2.0 authorization-code loopback controllers
 //!   and their registry/inbox state
+//! * [`exclude`] — `excludeMode` handling shared by the entity built-ins
 //!
 //! All of these are reached through the single [`run_internal`] dispatch
 //! table below; there is no public per-submodule API beyond what
@@ -46,6 +47,7 @@ use crate::LocalActionManager;
 pub mod doc_fields;
 pub mod entity;
 pub mod env;
+pub mod exclude;
 pub mod exec;
 pub mod file;
 pub mod http;
@@ -124,6 +126,7 @@ pub async fn run_internal(
     ctx: &InternalCtx,
 ) -> Result<Value, String> {
     let params = &normalize_params(params);
+    exclude::gate(fn_name, params, ctx).await?;
     match fn_name {
         // ── OAuth 2.0 authorization-code loopback ────────────────────────
         "oauth-start" => oauth::oauth_start(params).await,
@@ -134,24 +137,24 @@ pub async fn run_internal(
         "entity-save-document" => entity::doc_save(params, &ctx.docs).await,
         "entity-get-document" => entity::doc_get(params, &ctx.docs).await,
         "entity-delete-document" => entity::doc_delete(params, &ctx.docs).await,
-        "entity-list-documents" => entity::doc_list(params, &ctx.docs).await,
-        "entity-list-document-paths" => entity::doc_paths(params, &ctx.docs).await,
+        "entity-list-documents" => entity::doc_list(params, &ctx.docs, &ctx.config).await,
+        "entity-list-document-paths" => entity::doc_paths(params, &ctx.docs, &ctx.config).await,
 
         "entity-save-type" => entity::type_save(params, &ctx.types).await,
         "entity-get-type" => entity::type_get(params, &ctx.types).await,
         "entity-delete-type" => entity::type_delete(params, &ctx.types).await,
-        "entity-list-types" => entity::type_list(params, &ctx.types).await,
-        "entity-list-type-paths" => entity::type_paths(params, &ctx.types).await,
+        "entity-list-types" => entity::type_list(params, &ctx.types, &ctx.config).await,
+        "entity-list-type-paths" => entity::type_paths(params, &ctx.types, &ctx.config).await,
 
         "entity-save-action" => entity::action_save(params, &ctx.actions).await,
-        "entity-get-action" => entity::action_get(params, &ctx.actions, &ctx.config).await,
+        "entity-get-action" => entity::action_get(params, &ctx.actions).await,
         "entity-delete-action" => entity::action_delete(params, &ctx.actions).await,
-        "entity-list-actions" => entity::action_list(params, &ctx.actions).await,
-        "entity-list-action-paths" => entity::action_paths(params, &ctx.actions).await,
+        "entity-list-actions" => entity::action_list(params, &ctx.actions, &ctx.config).await,
+        "entity-list-action-paths" => entity::action_paths(params, &ctx.actions, &ctx.config).await,
 
         // ── search ───────────────────────────────────────────────────────
-        "search-documents" => entity::search_documents(params, &ctx.docs).await,
-        "search-actions" => entity::search_actions(params, &ctx.actions).await,
+        "search-documents" => entity::search_documents(params, &ctx.docs, &ctx.config).await,
+        "search-actions" => entity::search_actions(params, &ctx.actions, &ctx.config).await,
 
         // ── file store ───────────────────────────────────────────────────
         "file-put" => file::file_put(params, &ctx.files).await,
@@ -656,6 +659,112 @@ mod tests {
             .expect_err("hidden action must read back as not-found");
             assert!(err.contains("not found"), "{key}: {err}");
         }
+        for key in ["excludeMode", "exclude_mode"] {
+            let err = run_internal(
+                "entity-get-action",
+                &json!({"path": "/tools", "name": "secret", key: "tooling"}),
+                &ctx,
+            )
+            .await
+            .expect_err("hidden action must read back as not-found");
+            assert!(err.contains("not found"), "{key}: {err}");
+            // Delete is gated the same way, so a tooling caller can't remove
+            // what it can't see.
+            run_internal(
+                "entity-delete-action",
+                &json!({"path": "/tools", "name": "secret", key: "tooling"}),
+                &ctx,
+            )
+            .await
+            .expect_err("hidden action must not be deletable in tooling mode");
+        }
+    }
+
+    /// User and tooling exclusions are independent, and builtins apply
+    /// neither unless asked - scripts and package installers rely on that.
+    #[tokio::test]
+    async fn entity_builtins_honour_the_requested_exclude_mode() {
+        let (_d, ctx) = test_ctx(None).await;
+        ctx.config
+            .set(
+                "exclusions",
+                json!({
+                    "user": { "documents": ["/agent/skills"] },
+                    "tooling": { "documents": ["/private*"] }
+                }),
+            )
+            .unwrap();
+        for (path, name) in [("/agent/skills", "a"), ("/private", "b"), ("/notes", "c")] {
+            run_internal(
+                "entity-save-document",
+                &json!({"path": path, "name": name, "typeRef": "/types/core/Object", "contents": {}}),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        }
+        let names = |v: Value| -> Vec<String> {
+            v["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|d| d["name"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let list = |mode: Option<&str>| {
+            let mut p = json!({});
+            if let Some(m) = mode {
+                p["excludeMode"] = json!(m);
+            }
+            p
+        };
+
+        let all = run_internal("entity-list-documents", &list(None), &ctx)
+            .await
+            .unwrap();
+        assert_eq!(names(all).len(), 3, "builtins default to no exclusions");
+        let user = run_internal("entity-list-documents", &list(Some("user")), &ctx)
+            .await
+            .unwrap();
+        // Sorted by path: /notes before /private; /agent/skills is gone.
+        assert_eq!(names(user), vec!["c", "b"]);
+        let tooling = run_internal("search-documents", &list(Some("tooling")), &ctx)
+            .await
+            .unwrap();
+        let got = names(tooling);
+        assert!(
+            got.contains(&"a".to_string()) && !got.contains(&"b".to_string()),
+            "{got:?}"
+        );
+
+        // Direct access follows the same scope.
+        run_internal(
+            "get-field",
+            &json!({"path": "/private", "name": "b", "field": "x", "excludeMode": "tooling"}),
+            &ctx,
+        )
+        .await
+        .expect_err("tooling mode must not read around a hidden document");
+        let err = run_internal(
+            "entity-save-document",
+            &json!({"path": "/agent/skills", "name": "new", "typeRef": "/types/core/Object", "contents": {}, "excludeMode": "user"}),
+            &ctx,
+        )
+        .await
+        .expect_err("user mode must refuse writes into an excluded folder");
+        assert!(err.contains("excluded"), "{err}");
+        run_internal(
+            "entity-get-document",
+            &json!({"path": "/agent/skills", "name": "a", "excludeMode": "tooling"}),
+            &ctx,
+        )
+        .await
+        .expect("a user-hidden document stays visible to tooling");
+
+        let err = run_internal("entity-list-documents", &list(Some("bogus")), &ctx)
+            .await
+            .unwrap_err();
+        assert!(err.contains("invalid"), "{err}");
     }
 
     /// The other direction of the split: a CRUD handler that deserializes a

@@ -31,6 +31,8 @@ export type {
   ConfigUpdateResult,
   ConfigView,
   EffectiveConfig,
+  ExclusionLists,
+  Exclusions,
   InstalledPackage,
   PackageResult,
   SolxConfigFile,

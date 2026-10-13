@@ -73,7 +73,36 @@ column (e.g. `sortBy=created_at`) and stay snake_case — only the parameter
 keys themselves are camelCase.
 
 Query parameters for `/search`: `q`, `pathPrefix`, `typeRef`, `linkedTo`,
-`limit`, `offset`.
+`limit`, `offset`, plus the two exclusion parameters below.
+
+#### Exclusions
+
+Every list, paths and search route on `/docs`, `/types` and `/actions` also
+takes:
+
+- `excludeMode` — `user`, `tooling` or `none`: which configured list from
+  `solx-config.json`'s `exclusions` applies. **Defaults to `user`** on these
+  routes, because they are what the web UI reads.
+- `excludePaths` — extra patterns, repeated as needed
+  (`?excludePaths=/a&excludePaths=/b*`). They add to the mode's list; they
+  never remove from it.
+
+A pattern is a glob (`*` spans `/`, `?` is one character) matched against an
+entity's path **or** its full reference. `/agent/skills` hides everything
+stored in `/agent/skills` and the entity `skills` in `/agent`;
+`/agent/skills*` hides that folder and everything beneath it.
+
+Exclusions are applied in SQL, so `total` is exact.
+
+`GET`, `PUT` and `DELETE` on a single `{ref}` take `excludeMode` too, with the
+same `user` default. An excluded entity reads (or deletes) as `404`, worded
+exactly like a missing one, and a `PUT` to one is refused with `400`. Exec
+(`POST /actions/{ref}`) is never filtered: the agent widget reaches the
+built-ins that way, and passes `excludeMode: "tooling"` to them itself.
+
+The Rust `solx-client` always sends `excludeMode=none` unless told
+otherwise, so a `solx-cli` or `solx-mcp` proxying to this server behaves
+exactly as it does against local managers.
 
 Search is a top-level route rather than `/docs/search` on purpose. A static
 segment beside a catch-all wins the match for every method it is registered
@@ -104,7 +133,10 @@ into `(path, name)` and fetching it — which `GET /types/{ref}` already is.
 | `DELETE` | `/actions/{ref}` | — | `204` |
 | `POST` | `/actions/{ref}` | params (JSON) | `ActionExecResult` |
 | `GET` | `/actions-paths` | — | `Page<PathFacet>` |
-| `GET` | `/actions-search?q=…&exclude_hidden=…` | — | `Page<Action>` |
+| `GET` | `/actions-search?q=…&excludeMode=…` | — | `Page<Action>` |
+
+`exclude_hidden=true` on `/actions-search` is the deprecated spelling of
+`excludeMode=tooling`; an explicit `excludeMode` wins.
 
 `POST` on an action's own URL executes it — RFC 9110's "resource-specific
 processing of the request payload". The body is optional: a parameterless
@@ -223,7 +255,9 @@ and need the `solx:default` capability permission.
 Each command calls the same manager method as the route beside it, and
 fails with the same tagged `{kind, message}` error body. Arguments are
 named (camelCase from JS); `path`/`name` are normalized exactly like a URL
-reference.
+reference. Exclusions behave as on the routes: options objects carry
+`excludeMode`/`excludePaths`, the single-entity commands take an optional
+`excludeMode` argument, and the default is `user`.
 
 | Command | Arguments | Route |
 | --- | --- | --- |

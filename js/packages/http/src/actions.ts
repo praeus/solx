@@ -11,12 +11,13 @@ import type {
   ActionInput,
   ActionManager as ActionManagerIface,
   ActionSearchQuery,
+  EntityOptions,
   JsonValue,
   ListOptions,
   Page,
   PathFacet,
 } from '@solx/surface';
-import { entityPath, requestJson, toQuery } from './fetch.js';
+import { entityPath, entityQuery, requestJson, toQuery } from './fetch.js';
 
 /**
  * HTTP-proxy `ActionManager` talking to a `solx-server`. Public name
@@ -29,18 +30,23 @@ export class HttpActionManager implements ActionManagerIface {
     private readonly token: string,
   ) {}
 
-  async save(path: string, name: string, input: ActionInput): Promise<Action> {
+  async save(path: string, name: string, input: ActionInput, opts?: EntityOptions): Promise<Action> {
     return requestJson<Action>(this.baseUrl, this.token, 'PUT', entityPath('actions', path, name), {
       body: input,
+      query: entityQuery(opts),
     });
   }
 
-  async get(path: string, name: string): Promise<Action> {
-    return requestJson<Action>(this.baseUrl, this.token, 'GET', entityPath('actions', path, name));
+  async get(path: string, name: string, opts?: EntityOptions): Promise<Action> {
+    return requestJson<Action>(this.baseUrl, this.token, 'GET', entityPath('actions', path, name), {
+      query: entityQuery(opts),
+    });
   }
 
-  async delete(path: string, name: string): Promise<void> {
-    await requestJson<void>(this.baseUrl, this.token, 'DELETE', entityPath('actions', path, name));
+  async delete(path: string, name: string, opts?: EntityOptions): Promise<void> {
+    await requestJson<void>(this.baseUrl, this.token, 'DELETE', entityPath('actions', path, name), {
+      query: entityQuery(opts),
+    });
   }
 
   async list(opts?: ListOptions): Promise<Page<Action>> {

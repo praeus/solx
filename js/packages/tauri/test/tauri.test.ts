@@ -52,6 +52,16 @@ describe('entity commands', () => {
     expect(last().cmd).toBe('plugin:solx|actions_delete');
   });
 
+  test('excludeMode is passed by name to save/get/delete', async () => {
+    reply = () => ({ path: '/a', name: 'n' });
+    await solx.docs.get('/a', 'n', { excludeMode: 'none' });
+    expect(last().args).toEqual({ path: '/a', name: 'n', excludeMode: 'none' });
+    await solx.types.save('/t', 'T', {} as never, { excludeMode: 'tooling' });
+    expect(last().args).toMatchObject({ excludeMode: 'tooling' });
+    await solx.actions.delete('/x', 'y', { excludeMode: 'user' });
+    expect(last().args).toMatchObject({ excludeMode: 'user' });
+  });
+
   test('list, paths and search pass their options object', async () => {
     reply = () => ({ items: [], total: 0, limit: 10, offset: 0 });
     await solx.docs.list({ pathPrefix: '/a', limit: 10 });

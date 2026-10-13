@@ -13,6 +13,25 @@ export const SortOrder = {
   Desc: 'desc',
 } as const;
 
+// ---------- ExcludeMode ----------
+
+/**
+ * Which configured exclusion list (`solx-config.json` `exclusions`) a request
+ * is filtered through. `'user'` is what the web UI shows, `'tooling'` what a
+ * model sees, `'none'` applies only the request's own `excludePaths`.
+ *
+ * When omitted, the server's REST routes and the Tauri commands default to
+ * `'user'`; the entity built-ins (`entity-list-documents`, ...) default to
+ * `'none'`.
+ */
+export type ExcludeMode = 'none' | 'user' | 'tooling';
+
+/** Per-call options for a single-entity `get`/`save`/`delete`. */
+export interface EntityOptions {
+  /** See {@link ExcludeMode}. An excluded entity reads as not found and cannot be written. */
+  excludeMode?: ExcludeMode;
+}
+
 // ---------- ListOptions ----------
 
 export interface ListOptions {
@@ -34,6 +53,15 @@ export interface ListOptions {
   dateAfter?: string;
   /** RFC 3339 timestamp; include only entities updated before. */
   dateBefore?: string;
+  /**
+   * Extra exclusion patterns, added to the `excludeMode` list. A pattern is a
+   * glob (`*` spans `/`, `?` is one character) matched against an entity's
+   * path or its full reference: `/a/b` drops entities in `/a/b` and the
+   * entity `b` in `/a`; `/a/b*` also drops everything beneath.
+   */
+  excludePaths?: string[];
+  /** See {@link ExcludeMode}. */
+  excludeMode?: ExcludeMode;
 }
 
 // ---------- Page<T> ----------
@@ -68,6 +96,10 @@ export interface SearchQuery {
   limit?: number;
   /** Offset for pagination. */
   offset?: number;
+  /** See {@link ListOptions.excludePaths}. */
+  excludePaths?: string[];
+  /** See {@link ExcludeMode}. */
+  excludeMode?: ExcludeMode;
 }
 
 // ---------- ActionSearchQuery ----------
@@ -84,4 +116,6 @@ export interface SearchQuery {
 export interface ActionSearchQuery extends ListOptions {
   /** Free-text query string. */
   q?: string;
+  /** @deprecated Use `excludeMode: 'tooling'`, which wins when both are set. */
+  excludeHidden?: boolean;
 }

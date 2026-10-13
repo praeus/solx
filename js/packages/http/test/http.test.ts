@@ -132,6 +132,16 @@ describe('entity references in the URL', () => {
     await expect(solx.docs.get('/research', 'a/b')).rejects.toThrow(SolxError);
   });
 
+  test('excludeMode rides in the query string of a single-entity request', async () => {
+    await solx.docs.get('/agent/skills', 'a', { excludeMode: 'none' });
+    expect(last().url).toBe('/docs/agent/skills/a?excludeMode=none');
+    await solx.actions.save('/tools', 'x', {}, { excludeMode: 'tooling' });
+    expect(last().url).toBe('/actions/tools/x?excludeMode=tooling');
+    // Omitted means the server's default; nothing is sent.
+    await solx.types.delete('/t', 'T');
+    expect(last().url).toBe('/types/t/T');
+  });
+
   test('each resource uses its own collection prefix', async () => {
     await solx.types.get('/types/core', 'String');
     expect(last().url).toBe('/types/types/core/String');
@@ -154,6 +164,17 @@ describe('collection routes', () => {
     expect(url.searchParams.get('limit')).toBe('10');
     expect(url.searchParams.get('sortBy')).toBe('created_at');
     expect(url.searchParams.has('offset')).toBe(false);
+  });
+
+  test('excludePaths go out as repeated keys, beside excludeMode', async () => {
+    nextResponse = (res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ items: [], total: 0, limit: 10, offset: 0 }));
+    };
+    await solx.docs.list({ excludePaths: ['/agent/skills', '/tmp*'], excludeMode: 'tooling' });
+    const url = new URL(`http://x${last().url}`);
+    expect(url.searchParams.getAll('excludePaths')).toEqual(['/agent/skills', '/tmp*']);
+    expect(url.searchParams.get('excludeMode')).toBe('tooling');
   });
 
   test('search is top-level, not a sibling of the docs catch-all', async () => {

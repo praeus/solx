@@ -8,7 +8,8 @@ use solx_surface::query::{ListOptions, Page, PathFacet};
 use solx_surface::wire::ValidateRequest;
 
 use crate::http::{
-    collection_url, delete, entity_url, get_json, get_json_query, post_json, put_json,
+    collection_url, delete, entity_crud_url, explicit_mode, get_json, get_json_query, post_json,
+    put_json,
 };
 
 /// HTTP-proxy [`TypeManager`] talking to a `solx-server`.
@@ -31,27 +32,29 @@ impl RemoteTypeManager {
 #[async_trait]
 impl TypeManager for RemoteTypeManager {
     async fn save(&self, path: &str, name: &str, input: TypeInput) -> Result<TypeEntity> {
-        let url = entity_url(&self.base_url, "types", path, name)?;
+        let url = entity_crud_url(&self.base_url, "types", path, name)?;
         put_json(&self.http, &self.token, url, &input).await
     }
 
     async fn get(&self, path: &str, name: &str) -> Result<TypeEntity> {
-        let url = entity_url(&self.base_url, "types", path, name)?;
+        let url = entity_crud_url(&self.base_url, "types", path, name)?;
         get_json(&self.http, &self.token, url).await
     }
 
     async fn delete(&self, path: &str, name: &str) -> Result<()> {
-        let url = entity_url(&self.base_url, "types", path, name)?;
+        let url = entity_crud_url(&self.base_url, "types", path, name)?;
         delete(&self.http, &self.token, url).await
     }
 
-    async fn list(&self, opts: ListOptions) -> Result<Page<TypeEntity>> {
+    async fn list(&self, mut opts: ListOptions) -> Result<Page<TypeEntity>> {
         let url = collection_url(&self.base_url, "types")?;
+        explicit_mode(&mut opts.exclude_mode);
         get_json_query(&self.http, &self.token, url, &opts).await
     }
 
-    async fn paths(&self, opts: ListOptions) -> Result<Page<PathFacet>> {
+    async fn paths(&self, mut opts: ListOptions) -> Result<Page<PathFacet>> {
         let url = collection_url(&self.base_url, "types-paths")?;
+        explicit_mode(&mut opts.exclude_mode);
         get_json_query(&self.http, &self.token, url, &opts).await
     }
 
