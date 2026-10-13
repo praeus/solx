@@ -1,0 +1,132 @@
+{
+  // VS Code launch configurations for solx-web.
+  //
+  // Three debug styles, one per process:
+  //   1. "Debug: solx-server (CodeLLDB, launch)" — CodeLLDB spawns
+  //      solx-server.exe, attaches from birth, stops at main().
+  //   2. "Debug: solx-web backend (Bun, launch)" — the Bun Debug
+  //      extension launches src/index.ts with --inspect=6499 and
+  //      attaches from birth.
+  //   3. "Debug: Vite frontend (Chrome)" — opens Edge/Chrome at
+  //      http://localhost:5173 with the JS Debugger attached.
+  //      Requires Vite to already be running.
+  //
+  // Attach variants are also kept for debugging processes you started
+  // yourself (e.g. via Run Task → `solx: full stack`).
+  //
+  // The compound `Debug: full stack` uses the launch configs plus a
+  // single preLaunchTask for Vite (which the chrome launcher needs to
+  // already be serving) — eliminating the previous timing race where
+  // attach-based child configs raced the preLaunchTask spawn.
+  //
+  // Debug types used:
+  //   • "lldb"      — CodeLLDB extension (vadimcn.vscode-lldb)
+  //   • "bun"       — Bun Debug extension (oven.bun-vscode)
+  //   • "chrome"    — Microsoft "JavaScript Debugger" (ms-vscode.js-debug)
+  //
+  // Pre-reqs:
+  //   - solx-server binary at D:/Projects/solx-core/target/debug/solx-server.exe
+  //   - server/vendor/solx-win32-x64-msvc/solx.node is the freshly built copy
+  //   - web/dev deps installed: `cd web && bun install`
+
+  "version": "0.2.0",
+  "configurations": [
+    /* ──────────────────────────────────────────────────────────────────
+     * solx-server (Rust)
+     * ────────────────────────────────────────────────────────────────── */
+
+    {
+      "name": "Debug: solx-server (CodeLLDB, launch)",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/../solx-core/target/debug/solx-server.exe",
+      "args": ["--port", "8766"],
+      "cwd": "${workspaceFolder}/../solx-core",
+      "env": {
+        "RUST_LOG": "info,solx_server=debug"
+      },
+      "stopOnEntry": false,
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "close": false
+      }
+    },
+
+    {
+      "name": "Debug: solx-server (CodeLLDB, attach)",
+      "type": "lldb",
+      "request": "attach",
+      "program": "${workspaceFolder}/../solx-core/target/debug/solx-server.exe",
+      "pid": "${command:pickProcess}",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "close": false
+      }
+    },
+
+    /* ──────────────────────────────────────────────────────────────────
+     * Vite frontend
+     *
+     * Uses `preLaunchTask` (singular, synchronous) to start Vite before
+     * chrome opens. The compound form `preLaunchTasks: [...]` does NOT
+     * block before child configurations start in some VS Code versions;
+     * putting it on the chrome config itself guarantees chrome opens
+     * only after Vite logs "ready in".
+     *
+     * `pathMapping` rewrites Vite-served paths like `/src/main.tsx` to
+     * absolute disk paths so source maps and breakpoints resolve.
+     * ────────────────────────────────────────────────────────────────── */
+
+    {
+      "name": "Debug: Vite frontend (Chrome)",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/web",
+      "sourceMaps": true,
+      "preLaunchTask": "solx-web: start Vite",
+      "pathMapping": {
+        "/": "${workspaceFolder}/web",
+        "/src": "${workspaceFolder}/web/src"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "close": false
+      }
+    }
+  ],
+
+  /* ──────────────────────────────────────────────────────────────────
+   * Compound configs — single Run/Debug click that brings up the
+   * full stack under debuggers.
+   *
+   * For solx-server and the Bun backend, the launch configs spawn
+   * the processes themselves, so they don't need preLaunchTasks.
+   *
+   * The chrome launch config only opens a browser window — it does
+   * NOT start the Vite dev server. We preLaunchTask Vite so that
+   * by the time chrome tries to load :5173, the server is up.
+   *
+   * Compound fields allowed: name, configurations, preLaunchTask,
+   *   preLaunchTasks, stopAll, presentation.
+   * ────────────────────────────────────────────────────────────────── */
+
+  "compounds": [
+    {
+      "name": "Debug: full stack",
+      "configurations": [
+        "Debug: solx-server (CodeLLDB, launch)",
+        "Debug: Vite frontend (Chrome)"
+      ],
+      "stopAll": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "solx-dev"
+      }
+    }
+  ]
+}

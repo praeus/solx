@@ -1,0 +1,15 @@
+{
+  "name": "solx-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "cd web && bun run dev",
+    "build": "cd web && bun run build",
+    "lint": "cd web && bun run lint",
+    "typecheck": "cd web && bun run typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  }
+}

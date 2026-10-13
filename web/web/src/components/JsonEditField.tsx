@@ -1,0 +1,85 @@
+/**
+ * JsonEditField — JSON editor with a live parse badge.
+ *
+ * A thin wrapper over `CodeEditField` that pins the language to JSON, adds
+ * the lint gutter, and renders the validity badge underneath. The editor
+ * mechanics (theme, dark mode, touch sizing, compartments) all live in
+ * `CodeEditField`; this file is just the JSON-flavoured chrome.
+ *
+ * Used by:
+ *   - DocumentEditor's JSON-mode contents editor
+ *   - Per-field array/object schema fields
+ */
+
+import { useMemo } from "react";
+import { CodeEditField } from "./CodeEditField";
+import { jsonLintExtensions, parseJsonStatus } from "./codemirror/jsonLint";
+
+interface Props {
+  /** Current JSON value as a string. */
+  value: string;
+  /** Called when the user edits. */
+  onChange: (next: string) => void;
+  /** Placeholder for empty inputs. */
+  placeholder?: string;
+  /** Minimum height in lines. */
+  minLines?: number;
+  /** Read-only mode. */
+  readOnly?: boolean;
+  /** Optional fixed height (CSS length). */
+  height?: string;
+  /** Custom aria-label for screen readers. */
+  ariaLabel?: string;
+  /**
+   * Skip the JSON lint extensions and the validity badge. Use this for
+   * display-only contexts where the value might not be JSON (e.g. a server
+   * error message in the ActionRunner result panel) — the linter would
+   * otherwise flag the display as invalid.
+   */
+  noLint?: boolean;
+}
+
+export function JsonEditField({
+  value,
+  onChange,
+  placeholder,
+  minLines = 6,
+  readOnly = false,
+  height,
+  ariaLabel,
+  noLint = false,
+}: Props) {
+  const lintExtensions = useMemo(() => jsonLintExtensions(), []);
+  const { valid, error } = parseJsonStatus(value);
+
+  return (
+    <div className="json-edit-field">
+      <div className="json-edit-field__editor">
+        <CodeEditField
+          value={value}
+          onChange={onChange}
+          language="json"
+          readOnly={readOnly}
+          height={height}
+          minLines={minLines}
+          placeholder={placeholder}
+          extensions={noLint ? [] : lintExtensions}
+          ariaLabel={ariaLabel}
+        />
+      </div>
+      {!noLint && (
+        <div className="json-edit-field__status">
+          {valid === null ? (
+            <span className="json-edit-field__status--neutral">empty</span>
+          ) : valid ? (
+            <span className="json-edit-field__status--ok">✓ valid JSON</span>
+          ) : (
+            <span className="json-edit-field__status--err" title={error ?? undefined}>
+              ✗ {error ?? "invalid JSON"}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,105 @@
+{
+  // VS Code tasks for solx-web.
+  //
+  // Three component background tasks (one per process), each in its own
+  // dedicated panel so logs don't tangle:
+  //   • solx-web: start solx-server — Rust HTTP+WS server on :8766
+  //   • solx-web: start backend      — Bun → solx-js bridge on :3001
+  //   • solx-web: start Vite         — Vite dev server on :5173
+  //
+  // `solx-web: dev (all three)` depends on all three in parallel, so a
+  // single Run Task → "solx-web: dev (all three)" brings up the full stack.
+  //
+  // For debugging, use the matching compound in .vscode/launch.json — the
+  // task brings the processes up and the launch config attaches a debugger.
+  //
+  // Pre-reqs:
+  //   - solx-server binary exists at:
+  //       D:/Projects/solx-core/target/debug/solx-server.exe
+  //   - server/vendor/solx-win32-x64-msvc/solx.node is the freshly built copy
+  //     (run `bun run vendor` after every cargo build of solx-bindings)
+  //   - web/dist or web/node_modules exist (run `bun install` in web/)
+
+  "version": "2.0.0",
+  "tasks": [
+    /* ──────────────────────────────────────────────────────────────────
+     * Background processes — one per piece of the stack.
+     * Each opens in a dedicated terminal panel and uses a background
+     * problem matcher so VS Code knows when the process is "ready".
+     * ────────────────────────────────────────────────────────────────── */
+
+    {
+      "label": "solx-web: start solx-server",
+      "type": "process",
+      "command": "${workspaceFolder}/../solx-core/target/debug/solx-server.exe",
+      "args": ["--port", "8766"],
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^(never matches)$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^(never matches)$",
+          "endsPattern": "listening on"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "close": false
+      },
+      "detail": "Starts solx-server on :8766 against the default appdata dir (%APPDATA%/praeus/solx). Build first with the `solx-web: build solx-server` task."
+    },
+    
+    {
+      "label": "solx-web: start Vite",
+      "type": "shell",
+      "command": "bun",
+      "args": ["x", "vite"],
+      "options": {
+        "cwd": "${workspaceFolder}/web"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^(never matches)$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^(never matches)$",
+          "endsPattern": "ready in"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "close": false
+      },
+      "detail": "Starts the Vite dev server on http://localhost:5173. Requires solx-web backend on :3001 to also be running."
+    },
+
+    /* ──────────────────────────────────────────────────────────────────
+     * Full-stack compound task — runs the three component tasks in
+     * parallel. Each child is `isBackground: true`, so they stay up until
+     * you terminate this compound (Terminal → "Terminate Task" on the
+     * parent entry in the Terminals dropdown).
+     * ────────────────────────────────────────────────────────────────── */
+
+    {
+      "label": "solx-web: full stack",
+      "dependsOn": [
+        "solx-web: start solx-server",
+        "solx-web: start Vite"
+      ],
+      "dependsOrder": "parallel",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "solx-dev"
+      },
+      "detail": "Starts the full stack in parallel: solx-server (:8766) + Bun backend (:3001) + Vite (:5173)."
+    }
+  ]
+}

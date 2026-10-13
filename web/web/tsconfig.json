@@ -1,0 +1,18 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "allowImportingTsExtensions": false,
+    "paths": {
+      "@solx/http": ["../../solx-js/packages/http/src/index.ts"],
+      "@solx/surface": ["../../solx-js/packages/surface/src/index.ts"],
+      "@solx/tauri": ["../../solx-js/packages/tauri/src/index.ts"],
+      "@solx/widgets/host": ["../../solx-packages/solx-widgets/src/host/index.ts"]
+    }
+  },
+  "include": ["src/**/*", "vite.config.ts"]
+}
