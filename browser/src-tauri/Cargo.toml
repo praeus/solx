@@ -36,8 +36,9 @@ client = []
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
@@ -49,6 +50,8 @@ solx-server = { path = "../../core/solx-server", optional = true }
 solx-actions = { path = "../../core/solx-actions", optional = true }
 tokio = { version = "1", features = ["net", "io-util", "time", "sync"], optional = true }
 
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

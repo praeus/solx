@@ -19,8 +19,9 @@ compile_error!("enable one of the `server` (default) or `client` features");
 
 #[cfg(feature = "server")]
 mod server;
+mod tray;
 
-use tauri::{App, AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::{App, AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 /// Set across `restart_app` so the restarted process knows the previous one
 /// may still be releasing its port (see `server::setup`).
@@ -53,26 +54,54 @@ async fn open_settings(app: AppHandle) -> Result<(), String> {
 /// Restart the app, e.g. after changing a startup-only config key.
 #[tauri::command]
 fn restart_app(app: AppHandle) {
+    restart(&app);
+}
+
+/// `app.restart()` spawns the new process before this one exits, so release
+/// the single-instance lock first or the new process would defer to us and quit.
+pub(crate) fn restart(app: &AppHandle) {
     std::env::set_var(RESTART_ENV, "1");
+    #[cfg(desktop)]
+    tauri_plugin_single_instance::destroy(app);
     app.restart();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Must be the first plugin registered.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        tray::show_main(app);
+    }));
+    builder
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![open_settings, restart_app])
+        // Closing the main window hides it to the tray; quit via the tray menu.
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(|app| {
+            tray::init(app)?;
             setup(app)?;
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_handle, event| {
-            if let RunEvent::Exit = event {
+        .run(|_handle, event| match event {
+            // Implicit exit (last window gone): stay alive in the tray.
+            RunEvent::ExitRequested { api, code, .. } if code.is_none() => api.prevent_exit(),
+            RunEvent::Exit => {
                 #[cfg(feature = "server")]
                 server::shutdown(_handle);
             }
+            _ => {}
         });
 }
 
