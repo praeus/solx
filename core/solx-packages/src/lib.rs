@@ -61,6 +61,13 @@
 //! the new install fails. [`uninstall_package`] deletes a package's directory
 //! when it lives under the packages directory; a package installed from some
 //! other directory is never deleted.
+//!
+//! ## The official catalog
+//!
+//! [`catalog`] lists the packages released from `praeus/solx-packages` and
+//! installs them by name from a release (or a local folder of zips).
+
+pub mod catalog;
 
 use std::collections::HashMap;
 use std::io::Cursor;

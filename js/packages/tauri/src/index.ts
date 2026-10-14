@@ -14,8 +14,11 @@
 import type { RemoteSolx } from '@solx/surface';
 import { TauriActionManager } from './actions.js';
 import { TauriConfig } from './config.js';
+export { TauriPackages } from './packages.js';
+export type { CatalogEntry, CatalogEntryState, CatalogView, PackageOpResult } from './packages.js';
 import { TauriDocManager } from './docs.js';
 import { TauriFileStore } from './files.js';
+import { TauriPackages } from './packages.js';
 import { TauriTransport, type InvokeFn } from './invoke.js';
 import { TauriTypeManager } from './types.js';
 
@@ -81,6 +84,11 @@ export interface TauriSolx extends RemoteSolx {
    * desktop app's Settings window); elsewhere every call is denied.
    */
   config: TauriConfig;
+  /**
+   * The official package catalog: install/uninstall by name. Needs
+   * `solx:packages` (the main and Settings windows) and a local host.
+   */
+  packages: TauriPackages;
 }
 
 /**
@@ -100,5 +108,6 @@ export function connectTauri(invoke: InvokeFn): TauriSolx {
     actions: new TauriActionManager(t),
     host: new TauriHost(t),
     config: new TauriConfig(t),
+    packages: new TauriPackages(t),
   };
 }

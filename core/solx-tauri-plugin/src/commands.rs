@@ -701,6 +701,104 @@ fn no_local_packages() -> SolxError {
     SolxError::Invalid("this build can't manage packages; do it on the solx-server host".into())
 }
 
+/// The official package catalog (`solx_packages::catalog`) with what's
+/// installed and what the release offers this platform. `refresh` skips the
+/// few-minute cache of the release listing.
+///
+/// The `packages_*` commands are `solx:packages`, which the main window
+/// holds: they only take catalog names, and the host resolves each to a zip
+/// in the configured release, so a widget can't install arbitrary code.
+#[command]
+pub(crate) async fn packages_catalog(
+    state: State<'_, SolxState>,
+    refresh: Option<bool>,
+) -> Result<Value> {
+    catalog::view(&state, refresh.unwrap_or(false)).await
+}
+
+/// Install catalog package `name` (and any packages it requires) from the
+/// release. Returns `{ catalog, warnings }`.
+#[command]
+pub(crate) async fn packages_install(state: State<'_, SolxState>, name: String) -> Result<Value> {
+    catalog::install(&state, &name).await
+}
+
+/// Uninstall catalog package `name`. Returns `{ catalog, warnings }`; the
+/// warnings name installed packages that require it.
+#[command]
+pub(crate) async fn packages_uninstall(state: State<'_, SolxState>, name: String) -> Result<Value> {
+    catalog::uninstall(&state, &name).await
+}
+
+#[cfg(feature = "local")]
+mod catalog {
+    use super::*;
+    use solx_packages::catalog::{
+        catalog_entry, catalog_view, dependents, install_from_catalog, resolve_cached,
+        PackageSource,
+    };
+
+    fn result(view: impl Serialize, warnings: Vec<String>) -> Result<Value> {
+        Ok(json!({ "catalog": view, "warnings": warnings }))
+    }
+
+    pub(super) async fn view(state: &SolxState, refresh: bool) -> Result<Value> {
+        let config = host_config(state)?;
+        let source = PackageSource::from_env();
+        let release = resolve_cached(&source, refresh).await?;
+        Ok(serde_json::to_value(catalog_view(
+            &config, &source, &release,
+        ))?)
+    }
+
+    pub(super) async fn install(state: &SolxState, name: &str) -> Result<Value> {
+        let app = state.app()?;
+        host_config(state)?;
+        let source = PackageSource::from_env();
+        let release = resolve_cached(&source, false).await?;
+        let runner = solx_cli::AppRunner { app: app.clone() };
+        let outcome = install_from_catalog(&runner, &app.config, &release, name).await?;
+        result(
+            catalog_view(&app.config, &source, &release),
+            outcome.warnings,
+        )
+    }
+
+    pub(super) async fn uninstall(state: &SolxState, name: &str) -> Result<Value> {
+        let app = state.app()?;
+        host_config(state)?;
+        if catalog_entry(name).is_none() {
+            return Err(SolxError::Invalid(format!(
+                "'{name}' is not in the package catalog; uninstall it from solx settings"
+            )));
+        }
+        let runner = solx_cli::AppRunner { app: app.clone() };
+        solx_packages::uninstall_package(&runner, &app.config, name).await?;
+        let warnings = dependents(&app.config, name)
+            .into_iter()
+            .map(|d| format!("{d} requires {name} and may stop working"))
+            .collect();
+        let source = PackageSource::from_env();
+        let release = resolve_cached(&source, false).await?;
+        result(catalog_view(&app.config, &source, &release), warnings)
+    }
+}
+
+#[cfg(not(feature = "local"))]
+mod catalog {
+    use super::*;
+
+    pub(super) async fn view(_: &SolxState, _: bool) -> Result<Value> {
+        Err(no_local_packages())
+    }
+    pub(super) async fn install(_: &SolxState, _: &str) -> Result<Value> {
+        Err(no_local_packages())
+    }
+    pub(super) async fn uninstall(_: &SolxState, _: &str) -> Result<Value> {
+        Err(no_local_packages())
+    }
+}
+
 /// Build the client-mode `App` from a previously persisted URL/token, if any.
 pub(crate) fn restore_client(config: &Arc<ConfigService>) -> Option<Arc<solx_manager::App>> {
     let snap = config.snapshot();

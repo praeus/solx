@@ -48,6 +48,8 @@ import {
   type TypeEntity,
 } from "./api";
 import type { ExcludeMode } from "@solx/surface";
+import type { CatalogView, PackageOpResult } from "@solx/tauri";
+import { getTauri } from "./connection";
 import { acquireObjectUrl, releaseObjectUrl } from "./objectUrlCache";
 
 /** ── Health ─────────────────────────────────────────────────────────── */
@@ -443,6 +445,54 @@ export function useFileObjectUrl(relPath: string | undefined): string | undefine
   }, [relPath]);
 
   return url;
+}
+
+/** ── Packages (desktop app, local host only) ───────────────────────── */
+
+/**
+ * The official package catalog — see `@solx/tauri`'s `TauriPackages`. Only
+ * a local desktop host can install packages, so callers pass `enabled`
+ * false anywhere else.
+ */
+export function usePackageCatalog(enabled: boolean): UseQueryResult<CatalogView> {
+  return useQuery({
+    queryKey: ["packages"],
+    queryFn: () => getTauri().packages.catalog(),
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
+/** Re-list the release, skipping the host's cache of it. */
+export function useRefreshPackageCatalog() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => getTauri().packages.catalog(true),
+    onSuccess: (catalog: CatalogView) => qc.setQueryData(["packages"], catalog),
+  });
+}
+
+/** An install or uninstall: take its catalog, and refetch what the package added or removed. */
+function usePackageOp(op: (name: string) => Promise<PackageOpResult>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: op,
+    onSuccess: (result: PackageOpResult) => {
+      qc.setQueryData(["packages"], result.catalog);
+      for (const key of ["actions", "types", "documents", "files"]) {
+        void qc.invalidateQueries({ queryKey: [key] });
+      }
+    },
+  });
+}
+
+export function useInstallPackage() {
+  return usePackageOp((name) => getTauri().packages.install(name));
+}
+
+export function useUninstallPackage() {
+  return usePackageOp((name) => getTauri().packages.uninstall(name));
 }
 
 /** ── Re-exports ─────────────────────────────────────────────────────── */

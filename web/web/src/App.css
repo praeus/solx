@@ -629,6 +629,165 @@
   width: 100%;
 }
 
+/* The connection controls keep their height; the tabs below take the rest. */
+.settings-panel__body--top {
+  flex: none;
+  overflow: visible;
+}
+
+.settings-panel__tabs {
+  flex: none;
+  border-top: 1px solid var(--border);
+}
+
+.settings-panel__tab {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+/* ── Install tab ─────────────────────────────────────────────────────── */
+
+.install-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.install-tab__source {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.install-tab__refresh {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+.install-tab__refresh:hover:not(:disabled) {
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
+.install-tab__message {
+  padding: 8px 10px;
+  font-size: 12px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  border-radius: var(--radius);
+}
+
+.install-tab__heading {
+  margin: 8px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.install-tab__hint {
+  margin-top: -6px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.package-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+
+.package-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.package-card__title {
+  font-weight: 600;
+}
+
+.package-card__badge {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.package-card__badge.ok { background: transparent; color: var(--success); border: 1px solid var(--success); }
+.package-card__badge.warn { background: var(--warning-soft); color: var(--warning); }
+.package-card__badge.muted { background: var(--bg-sunken); color: var(--text-faint); }
+
+.package-card__name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.package-card__desc {
+  font-size: 13px;
+}
+
+.package-card__requires {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.package-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.package-card__btn {
+  padding: 5px 12px;
+  font-size: 13px;
+}
+
+.package-card__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.package-card__btn--danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: white;
+}
+
+.package-card__confirm,
+.package-card__busy {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.package-card__warnings {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--warning);
+}
+
 /* ──────────────────────────────────────────────────────────────────────
  * Modal dialog
  * ────────────────────────────────────────────────────────────────────── */

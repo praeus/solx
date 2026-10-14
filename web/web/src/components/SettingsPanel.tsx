@@ -17,11 +17,17 @@
  * Config is still not exposed over HTTP, but a local desktop host can edit
  * it: "Open solx settings…" opens the separate Settings window
  * (`config/ConfigApp.tsx`), the only window allowed to touch it.
+ *
+ * Below the connection controls are tabs. "Install" (local desktop host
+ * only) installs the official packages — see `settings/InstallTab.tsx`.
+ * "Connect" is still to be designed.
  */
 
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useHealth } from "../api/hooks";
+import { InstallTab } from "./settings/InstallTab";
+import { TabBar, type TabDefinition } from "./TabBar";
 import {
   connectHost,
   connectionLabel,
@@ -48,6 +54,7 @@ export function SettingsPanel({ open, onClose }: Props) {
   const [savedFlash, setSavedFlash] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [tab, setTab] = useState("install");
 
   // Re-read on every health refresh too, so the panel tracks the host.
   const host = IN_TAURI ? getHostInfo() : null;
@@ -112,6 +119,13 @@ export function SettingsPanel({ open, onClose }: Props) {
   // app, and its embedded server (if enabled) is set up in solx-config.json.
   const localHost = host?.mode === "local";
 
+  // Only a local desktop host can install packages.
+  const tabs: TabDefinition[] = [
+    ...(localHost ? [{ id: "install", label: "Install", enabled: true }] : []),
+    { id: "connect", label: "Connect", enabled: true },
+  ];
+  const activeTab = tabs.some((t) => t.id === tab) ? tab : tabs[0]!.id;
+
   return (
     <>
       <div className="settings-backdrop" onClick={onClose} />
@@ -138,7 +152,7 @@ export function SettingsPanel({ open, onClose }: Props) {
         </div>
 
         {localHost ? (
-          <div className="settings-panel__body">
+          <div className="settings-panel__body settings-panel__body--top">
             <div className="dialog__hint">
               solx runs inside this app, so there is no server URL or token to
               enter here. Server options, including the embedded HTTP server,
@@ -162,7 +176,7 @@ export function SettingsPanel({ open, onClose }: Props) {
             </div>
           </div>
         ) : (
-        <div className="settings-panel__body">
+        <div className="settings-panel__body settings-panel__body--top">
           <label className="settings-panel__field">
             <span className="settings-panel__label">Server URL</span>
             <input
@@ -218,6 +232,21 @@ export function SettingsPanel({ open, onClose }: Props) {
           </div>
         </div>
         )}
+
+        <TabBar
+          tabs={tabs}
+          activeTab={activeTab}
+          onTabChange={setTab}
+          ariaLabel="Settings sections"
+          className="settings-panel__tabs"
+        />
+        <div className="settings-panel__tab" role="tabpanel">
+          {activeTab === "install" ? (
+            <InstallTab />
+          ) : (
+            <div className="dialog__hint">Connect is coming soon.</div>
+          )}
+        </div>
       </aside>
     </>
   );

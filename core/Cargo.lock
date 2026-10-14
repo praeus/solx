@@ -5523,8 +5523,10 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "solx-config",
  "solx-scripts",
  "solx-surface",

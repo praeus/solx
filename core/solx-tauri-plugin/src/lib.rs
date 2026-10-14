@@ -83,6 +83,9 @@ fn build<R: Runtime>(state: SolxState) -> TauriPlugin<R> {
             commands::config_update,
             commands::config_install_package,
             commands::config_uninstall_package,
+            commands::packages_catalog,
+            commands::packages_install,
+            commands::packages_uninstall,
         ])
         .setup(move |app, _api| {
             app.manage(state);
@@ -107,28 +110,37 @@ mod tests {
     fn command_list_matches_permissions_and_handler() {
         let default = include_str!("../permissions/default.toml");
         let config = include_str!("../permissions/config.toml");
+        let packages = include_str!("../permissions/packages.toml");
         let lib = include_str!("lib.rs");
+        let sets = [("config_", config), ("packages_", packages), ("", default)];
         for cmd in COMMANDS {
             let perm = format!("\"allow-{}\"", cmd.replace('_', "-"));
-            let (home, other) = if cmd.starts_with("config_") {
-                (config, default)
-            } else {
-                (default, config)
-            };
-            assert!(
-                home.contains(&perm),
-                "{perm} is missing from its permission set"
-            );
-            assert!(
-                !other.contains(&perm),
-                "{perm} is in the wrong permission set"
-            );
+            let home = sets
+                .iter()
+                .position(|(prefix, _)| cmd.starts_with(prefix))
+                .unwrap();
+            for (i, (_, set)) in sets.iter().enumerate() {
+                if i == home {
+                    assert!(
+                        set.contains(&perm),
+                        "{perm} is missing from its permission set"
+                    );
+                } else {
+                    assert!(
+                        !set.contains(&perm),
+                        "{perm} is in the wrong permission set"
+                    );
+                }
+            }
             assert!(
                 lib.contains(&format!("commands::{cmd},")),
                 "generate_handler! is missing {cmd}"
             );
         }
-        let granted = default.matches("\"allow-").count() + config.matches("\"allow-").count();
+        let granted: usize = sets
+            .iter()
+            .map(|(_, s)| s.matches("\"allow-").count())
+            .sum();
         assert_eq!(granted, COMMANDS.len());
     }
 }

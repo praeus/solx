@@ -26,11 +26,19 @@ interface Props {
   tabs?: TabDefinition[];
   activeTab: string;
   onTabChange: (tabId: string) => void;
+  ariaLabel?: string;
+  className?: string;
 }
 
-export function TabBar({ tabs = DEFAULT_TABS, activeTab, onTabChange }: Props) {
+export function TabBar({
+  tabs = DEFAULT_TABS,
+  activeTab,
+  onTabChange,
+  ariaLabel = "Entity types",
+  className,
+}: Props) {
   return (
-    <div className="tab-bar" role="tablist" aria-label="Entity types">
+    <div className={className ? `tab-bar ${className}` : "tab-bar"} role="tablist" aria-label={ariaLabel}>
       {tabs.map((tab) => {
         const isActive = tab.id === activeTab;
         const style: CSSProperties = {

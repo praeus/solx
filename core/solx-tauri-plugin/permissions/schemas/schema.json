@@ -583,6 +583,42 @@
           "markdownDescription": "Denies the info command without any pre-configured scope."
         },
         {
+          "description": "Enables the packages_catalog command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-packages-catalog",
+          "markdownDescription": "Enables the packages_catalog command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the packages_catalog command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-packages-catalog",
+          "markdownDescription": "Denies the packages_catalog command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the packages_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-packages-install",
+          "markdownDescription": "Enables the packages_install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the packages_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-packages-install",
+          "markdownDescription": "Denies the packages_install command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the packages_uninstall command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-packages-uninstall",
+          "markdownDescription": "Enables the packages_uninstall command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the packages_uninstall command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-packages-uninstall",
+          "markdownDescription": "Denies the packages_uninstall command without any pre-configured scope."
+        },
+        {
           "description": "Enables the types_delete command without any pre-configured scope.",
           "type": "string",
           "const": "allow-types-delete",
@@ -677,6 +713,12 @@
           "type": "string",
           "const": "default",
           "markdownDescription": "Allows every solx command: the full manager surface (types, docs, actions, files) plus host info and client connect/disconnect.\n#### This default permission set includes:\n\n- `allow-types-save`\n- `allow-types-get`\n- `allow-types-delete`\n- `allow-types-list`\n- `allow-types-paths`\n- `allow-types-resolve`\n- `allow-types-validate`\n- `allow-docs-save`\n- `allow-docs-get`\n- `allow-docs-delete`\n- `allow-docs-list`\n- `allow-docs-paths`\n- `allow-docs-search`\n- `allow-actions-save`\n- `allow-actions-get`\n- `allow-actions-delete`\n- `allow-actions-list`\n- `allow-actions-paths`\n- `allow-actions-search`\n- `allow-actions-exec`\n- `allow-files-put`\n- `allow-files-get`\n- `allow-files-delete`\n- `allow-files-list`\n- `allow-info`\n- `allow-connect`\n- `allow-disconnect`"
+        },
+        {
+          "description": "Allows listing the official package catalog and installing or uninstalling its packages by name. The host resolves each name to a zip in the configured release (never a caller-supplied URL or file), so a window holding this can only add or remove packages from that catalog. Narrower than `config`, which installs arbitrary zips and edits the allowlists directly.\n#### This permission set includes:\n\n- `allow-packages-catalog`\n- `allow-packages-install`\n- `allow-packages-uninstall`",
+          "type": "string",
+          "const": "packages",
+          "markdownDescription": "Allows listing the official package catalog and installing or uninstalling its packages by name. The host resolves each name to a zip in the configured release (never a caller-supplied URL or file), so a window holding this can only add or remove packages from that catalog. Narrower than `config`, which installs arbitrary zips and edits the allowlists directly.\n#### This permission set includes:\n\n- `allow-packages-catalog`\n- `allow-packages-install`\n- `allow-packages-uninstall`"
         }
       ]
     }

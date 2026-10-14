@@ -1,0 +1,10 @@
+"$schema" = "schemas/schema.json"
+
+[[set]]
+identifier = "packages"
+description = "Allows listing the official package catalog and installing or uninstalling its packages by name. The host resolves each name to a zip in the configured release (never a caller-supplied URL or file), so a window holding this can only add or remove packages from that catalog. Narrower than `config`, which installs arbitrary zips and edits the allowlists directly."
+permissions = [
+    "allow-packages-catalog",
+    "allow-packages-install",
+    "allow-packages-uninstall",
+]

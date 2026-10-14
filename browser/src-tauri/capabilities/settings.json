@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "solx:default",
-    "solx:config"
+    "solx:config",
+    "solx:packages"
   ]
 }

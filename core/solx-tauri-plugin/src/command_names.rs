@@ -2,7 +2,8 @@
 // `allow-*` permissions from, and that `permissions/default.toml` and
 // `tauri::generate_handler!` in `lib.rs` must match (both checked by unit
 // tests in `lib.rs`). The `config_*` commands belong to the separate
-// `config` permission set (permissions/config.toml), not `default`.
+// `config` permission set (permissions/config.toml), and the `packages_*`
+// commands to `packages` (permissions/packages.toml), not `default`.
 // Included textually by both, so it can't depend on anything.
 const COMMANDS: &[&str] = &[
     "types_save",
@@ -36,4 +37,7 @@ const COMMANDS: &[&str] = &[
     "config_update",
     "config_install_package",
     "config_uninstall_package",
+    "packages_catalog",
+    "packages_install",
+    "packages_uninstall",
 ];

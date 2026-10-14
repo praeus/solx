@@ -153,6 +153,22 @@ describe('config', () => {
   });
 });
 
+describe('packages', () => {
+  test('catalog, install and uninstall pass refresh and name', async () => {
+    reply = () => ({ source: 's', platform: 'windows-x64', tag: 'v1', message: null, entries: [] });
+    await solx.packages.catalog();
+    expect(last()).toMatchObject({ cmd: 'plugin:solx|packages_catalog', args: { refresh: false } });
+    await solx.packages.catalog(true);
+    expect(last()).toMatchObject({ args: { refresh: true } });
+
+    reply = () => ({ catalog: {}, warnings: [] });
+    await solx.packages.install('solx-names');
+    expect(last()).toMatchObject({ cmd: 'plugin:solx|packages_install', args: { name: 'solx-names' } });
+    await solx.packages.uninstall('solx-names');
+    expect(last()).toMatchObject({ cmd: 'plugin:solx|packages_uninstall', args: { name: 'solx-names' } });
+  });
+});
+
 describe('errors', () => {
   test('a tagged SolxError rejection maps to the matching kind', async () => {
     reply = () => {
