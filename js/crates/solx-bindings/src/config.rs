@@ -156,6 +156,22 @@ fn get(mut cx: FunctionContext) -> JsResult<JsValue> {
     }
 }
 
+/// The stored bearer token for `serverUrl` (OS credential manager, else a
+/// legacy plaintext `server_token`), or `undefined`. Ignores the
+/// environment: `createSolx` applies `SOLX_SERVER_TOKEN` itself, ahead of
+/// this.
+fn client_token(mut cx: FunctionContext) -> JsResult<JsValue> {
+    let mgr = cx.argument::<JsBox<JsConfigService>>(0)?;
+    let server_url = match get_string_arg(&mut cx, 1, "serverUrl") {
+        Ok(s) => s,
+        Err(e) => return throw_str::<JsValue, _>(&mut cx, e),
+    };
+    match solx_config::credentials::stored_client_token(&mgr.inner, &server_url) {
+        Some(token) => Ok(cx.string(token).upcast::<JsValue>()),
+        None => Ok(cx.undefined().upcast::<JsValue>()),
+    }
+}
+
 fn set(mut cx: FunctionContext) -> JsResult<JsUndefined> {
     let mgr = cx.argument::<JsBox<JsConfigService>>(0)?;
     let key = match get_string_arg(&mut cx, 1, "key") {
@@ -263,5 +279,6 @@ pub fn register_config_module(cx: &mut ModuleContext) -> NeonResult<()> {
     cx.export_function("configListPackages", list_packages)?;
     cx.export_function("configRegisterPackage", register_package)?;
     cx.export_function("configUnregisterPackage", unregister_package)?;
+    cx.export_function("configClientToken", client_token)?;
     Ok(())
 }

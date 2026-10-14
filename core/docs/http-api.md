@@ -23,8 +23,9 @@ options ride in the query string, and the HTTP method carries the verb.
 
 Set `server_host` to `0.0.0.0` (or a specific interface IP), or start the
 server with `--host`. On another machine, point a client at it with
-`server_url` (or `SOLX_SERVER_URL`) and copy over the server's
-`server_token`. The server prints a warning at startup when it isn't bound
+`server_url` (or `SOLX_SERVER_URL`) and give it the server's token (run
+`solx token show` on the server's machine; the client takes it as
+`SOLX_SERVER_TOKEN`, or in the desktop app's Settings). The server prints a warning at startup when it isn't bound
 to loopback, because:
 
 - The single token grants full access (read/write on every entity, action

@@ -205,12 +205,17 @@ pub async fn run_command(
     if let Some(cfg) = action_config {
         if let Some(env) = cfg.get("env").and_then(|v| v.as_object()) {
             for (k, v) in env {
-                if injected.iter().any(|(name, _)| name == k) {
-                    tracing::warn!(
-                        action_ref = %action_ref,
-                        env_key = %k,
-                        "action_config.env entry is set by solx for each invocation; ignoring it",
-                    );
+                if let Some((_, value)) = injected.iter().find(|(name, _)| name == k) {
+                    // Packages' install scripts commonly set the same
+                    // SOLX_SERVER_URL solx injects; only a differing value
+                    // is worth a warning.
+                    if v.as_str() != Some(*value) {
+                        tracing::warn!(
+                            action_ref = %action_ref,
+                            env_key = %k,
+                            "action_config.env entry is set by solx for each invocation; ignoring it",
+                        );
+                    }
                     continue;
                 }
                 match v.as_str() {

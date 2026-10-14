@@ -51,7 +51,7 @@ export interface HostInfo {
   version: string;
   serverUrl?: string | null;
   /** The embedded `solx-server` a local host also runs, if any. */
-  embeddedServer?: { url: string; token: string } | null;
+  embeddedServer?: { url: string } | null;
 }
 
 /** Host-level commands with no manager equivalent. */

@@ -702,7 +702,6 @@ interface ServerDraft {
 }
 
 function ServerEditor({ draft, setDraft, view }: SectionEditorProps<ServerDraft>) {
-  const token = view.raw.server_token;
   return (
     <>
       <label className="config-check">
@@ -739,7 +738,7 @@ function ServerEditor({ draft, setDraft, view }: SectionEditorProps<ServerDraft>
       </div>
       {!isLoopbackHost(draft.host) && (
         <div className="config-warning">
-          Reachable from the network: the token below is the only gate, and traffic is unencrypted HTTP. Use a
+          Reachable from the network: the bearer token is the only gate, and traffic is unencrypted HTTP. Use a
           private network (e.g. Tailscale/WireGuard) or a TLS reverse proxy.
         </div>
       )}
@@ -755,16 +754,10 @@ function ServerEditor({ draft, setDraft, view }: SectionEditorProps<ServerDraft>
           placeholder="https://solx.example.com"
         />
       </Field>
-      <Field label="Token" view={view} hint="Bearer token for HTTP clients. Generated on first start.">
-        <div className="dialog__input-row">
-          <input className="dialog__input config-mono" type="text" readOnly value={token ?? "(not generated yet)"} />
-          {token && (
-            <button type="button" className="dialog__btn" onClick={() => void navigator.clipboard.writeText(token)}>
-              Copy
-            </button>
-          )}
-        </div>
-      </Field>
+      <span className="dialog__hint">
+        HTTP clients authenticate with a bearer token kept in this computer's credential manager, not in
+        solx-config.json. Run <code>solx token show</code> on this machine to get it.
+      </span>
     </>
   );
 }

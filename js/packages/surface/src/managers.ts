@@ -131,7 +131,11 @@ export interface SolxConfig {
    * `"http://127.0.0.1:8766"`). Absent/undefined means local mode.
    */
   serverUrl?: string;
-  /** Shared bearer token for `serverUrl`. */
+  /**
+   * Legacy plaintext bearer token. Normally absent: tokens live in the OS
+   * credential manager (see `ConfigService.clientToken`). Only set when
+   * `token_store` is `"config"` or no credential manager is available.
+   */
   serverToken?: string;
   /** Port `solx-server` binds on `127.0.0.1`. Server-side only. */
   serverPort?: number;

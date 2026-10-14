@@ -131,6 +131,18 @@ export class ConfigService implements ConfigServiceInterface {
     return cfg.handle;
   }
 
+  /**
+   * The stored bearer token for the `solx-server` at `serverUrl`: the
+   * OS credential manager, else a legacy plaintext `server_token`.
+   * Ignores `SOLX_SERVER_TOKEN`; `createSolx` checks that first.
+   */
+  clientToken(serverUrl: string): string | undefined {
+    return withSolxError(() => {
+      const native = loadNative() as unknown as NativeConfigModule;
+      return native.configClientToken(this.handle, serverUrl);
+    });
+  }
+
   /** The resolved appdata directory (forward-slash). */
   get appdata(): string {
     const native = loadNative() as unknown as NativeConfigModule;

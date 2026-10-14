@@ -105,11 +105,14 @@ impl App {
             .or_else(|| snap.server_url.clone().filter(|s| !s.trim().is_empty()));
         match server_url {
             Some(server_url) => {
-                let token = solx_config::credentials::client_token(&config).context(
-                        "server_url is configured but no server_token is available \
-                         (start solx-server against this appdata dir first, or set \
-                         SOLX_SERVER_TOKEN)",
-                    )?;
+                let token = solx_config::credentials::client_token(&config, &server_url)
+                    .with_context(|| {
+                        format!(
+                            "server_url is configured but no token is saved for {server_url} \
+                             (start solx-server against this appdata dir first, or set \
+                             SOLX_SERVER_TOKEN)"
+                        )
+                    })?;
                 Self::remote(config, server_url, token)
             }
             #[cfg(feature = "local")]

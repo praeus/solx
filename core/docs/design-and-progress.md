@@ -295,8 +295,8 @@ back every manager:
   that hit a running `solx-server`. `solx-server` itself always uses the
   local impl (built via `App::build_local` so it cannot proxy to itself),
   binds `127.0.0.1:<port>` (default from config's `server_port`), and
-  gates every data route behind a bearer token read from config's
-  `server_token` (auto-generated on first start). A `SOLX_SERVER_URL` env
+  gates every data route behind a bearer token (auto-generated on first
+  start, kept in the OS credential manager; see `solx_config::credentials`). A `SOLX_SERVER_URL` env
   var or a config `server_url` flips `solx-manager` into remote mode for
   any `solx-cli`/`solx-mcp` process pointed at the server.
 

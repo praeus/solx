@@ -56,10 +56,9 @@ bun run dev          # http://localhost:5173
 ```
 
 Enter the server URL and bearer token in the app's Settings panel (⚙,
-bottom-left); they're stored in `localStorage`. The token is `server_token`
-in `solx-config.json` under your solx appdata directory — `solx-server`
-generates it on first start and prints only its listen address, not the
-token.
+bottom-left); they're stored in `localStorage`. Get the token by running
+`solx token show` on the server's machine; `solx-server` keeps it in the OS
+credential manager and never prints it.
 
 ## Build
 

@@ -20,6 +20,8 @@ use solx_surface::managers::Solx;
 
 async fn spawn_server() -> (tempfile::TempDir, Arc<solx_manager::App>, String, String) {
     let dir = tempfile::tempdir().unwrap();
+    // Never touch the real OS credential manager from a test.
+    solx_config::credentials::use_memory_store_for_tests();
     let app = solx_manager::App::build_local_in(dir.path()).await.unwrap();
     let token = solx_config::credentials::root_token(&app.config).unwrap();
 

@@ -60,6 +60,8 @@ mod tests {
     #[tokio::test]
     async fn accepted_bearer_carries_its_principal() {
         let dir = tempfile::tempdir().unwrap();
+        // Never touch the real OS credential manager from a test.
+        solx_config::credentials::use_memory_store_for_tests();
         let app = solx_manager::App::build_local_in(dir.path()).await.unwrap();
         let token = solx_config::credentials::root_token(&app.config).unwrap();
         let state = AppState::new(app).unwrap();

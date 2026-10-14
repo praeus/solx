@@ -5726,10 +5726,12 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "fs2",
+ "keyring",
  "rand 0.8.8",
  "serde",
  "serde_json",
  "solx-surface",
+ "url",
 ]
 
 [[package]]

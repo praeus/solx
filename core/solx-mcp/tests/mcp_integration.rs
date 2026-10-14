@@ -14,6 +14,8 @@ use solx_surface::managers::Solx;
 #[tokio::test]
 async fn tools_list_and_call_tool_round_trip() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
+    // Never touch the real OS credential manager from a test.
+    solx_config::credentials::use_memory_store_for_tests();
     let app = solx_manager::App::build_in(dir.path()).await?;
 
     let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
@@ -106,6 +108,8 @@ impl ClientHandler for ProgressCapture {
 #[tokio::test]
 async fn call_tool_streams_console_entries_as_progress_notifications() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
+    // Never touch the real OS credential manager from a test.
+    solx_config::credentials::use_memory_store_for_tests();
     let app = solx_manager::App::build_in(dir.path()).await?;
 
     // A `Script` action with two stages — `ActionCommandRunner::run` logs
@@ -208,6 +212,8 @@ async fn call_tool_streams_console_entries_as_progress_notifications() -> anyhow
 #[tokio::test]
 async fn router_list_all_respects_path_prefix() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
+    // Never touch the real OS credential manager from a test.
+    solx_config::credentials::use_memory_store_for_tests();
     let app = solx_manager::App::build_in(dir.path()).await?;
 
     let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);

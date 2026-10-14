@@ -22,7 +22,7 @@ That makes the boundaries worth stating precisely.
 **Assume a solx instance runs with your full user privileges.** It is not a
 sandbox for untrusted operators, and it is not a multi-tenant system. The
 controls below limit what *content* — a model, a package, a WASM guest — can
-reach. They do not limit what a person holding your `server_token` or your
+reach. They do not limit what a person holding your server token or your
 shell can do.
 
 ### What is enforced
@@ -74,7 +74,7 @@ carrying only `fn_name` could silently repoint an existing command action.
 
 The CLI reaches `ActionManager::save` directly and is unaffected; package
 installs depend on that. The HTTP `/actions/save` route is also unrestricted,
-deliberately: anyone holding `server_token` can already execute command
+deliberately: anyone holding the server token can already execute command
 actions, so gating it there would buy nothing and would break the CLI in
 remote mode.
 
@@ -144,9 +144,12 @@ for the reasoning behind each and the intended direction.
 - **Scope MCP catalogues.** `SOLX_MCP_PATH_PREFIX` limits an MCP instance to
   one path subtree. Give a model the smallest catalogue that does its job
   rather than every action you own.
-- **Treat `server_token` as a credential.** It is full access to the
-  instance, including command execution. Don't commit it, and don't put it in
-  a shared config file.
+- **Treat the server token as a credential.** It is full access to the
+  instance, including command execution. solx keeps it in the OS credential
+  manager rather than `solx-config.json`; `solx token show` prints it and
+  `solx token rotate` replaces it. Don't commit it, and don't put it in a
+  shared config file. Command actions receive it as `SOLX_SERVER_TOKEN` and
+  should never read it from anywhere else.
 - **Don't expose `solx-server` beyond loopback.** If you tunnel or proxy it,
   you have made a shell-execution endpoint reachable from wherever the tunnel
   terminates. Put real authentication in front of it.

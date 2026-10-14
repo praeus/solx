@@ -23,7 +23,7 @@ precedence as `solx-manager::App` in Rust:
 
 1. `opts.serverUrl` / `opts.serverToken`
 2. `SOLX_SERVER_URL` / `SOLX_SERVER_TOKEN`
-3. `serverUrl` / `serverToken` from `solx-config.json`
+3. `serverUrl` from `solx-config.json`, with the token saved for it in the OS credential manager
 
 `config` is always local — it's what tells the other managers which mode to
 use, so it can't itself be the proxy that decides whether to be remote.

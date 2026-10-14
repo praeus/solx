@@ -199,7 +199,7 @@ export function SettingsPanel({ open, onClose }: Props) {
               placeholder={
                 hasStoredToken
                   ? "•••••••• saved — enter a new token to replace it"
-                  : "bearer token (printed by solx-server on first start)"
+                  : "bearer token (run `solx token show` on the server's machine)"
               }
               autoComplete="new-password"
             />
@@ -207,7 +207,7 @@ export function SettingsPanel({ open, onClose }: Props) {
 
           <div className="dialog__hint">
             {IN_TAURI
-              ? "Checked, then stored by this app (not shared with other solx tools)."
+              ? "Checked, then stored in this computer's credential manager (not shared with other solx tools)."
               : "Stored in this browser client only."}
           </div>
           {saveError && <div className="dialog__hint settings-panel__error">{saveError}</div>}

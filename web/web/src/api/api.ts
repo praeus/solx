@@ -96,7 +96,7 @@ function toApiError(e: unknown): ApiError {
     // the right one lives instead of just echoing the server's rejection.
     const message =
       kind === "unauthorized"
-        ? `solx-server rejected the connection (${err.detail}). Open Settings and enter the server_token from solx-server's solx-config.json.`
+        ? `solx-server rejected the connection (${err.detail}). Open Settings and enter the server's token (run "solx token show" on the server's machine).`
         : err.detail;
     return new ApiError(message, statusForKind(kind), kind);
   }

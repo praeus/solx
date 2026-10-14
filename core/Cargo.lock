@@ -5431,12 +5431,14 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "fs2",
+ "keyring",
  "rand 0.8.7",
  "serde",
  "serde_json",
  "solx-surface",
  "tempfile",
  "tokio",
+ "url",
 ]
 
 [[package]]

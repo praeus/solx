@@ -20,7 +20,6 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use std::time::{Duration, SystemTime};
 
-use base64::Engine as _;
 use fs2::FileExt;
 use serde_json::{Map, Value};
 use solx_surface::error::{Result, SolxError};
@@ -627,14 +626,6 @@ impl ConfigService {
         })
     }
 
-    // ── solx-server bearer token ─────────────────────────────────────────────
-
-    /// Return the persisted `server_token`, generating and persisting a new
-    /// random one (32 bytes, base64) if none exists yet. A single `mutate()`
-    /// call makes generate-then-persist atomic under the same cross-process
-    /// lock every other config write uses, so two `solx-server`s started
-    /// concurrently against the same appdata dir can't race into two
-    /// different tokens.
     /// Apply a set of top-level key changes (`null` removes the key) as one
     /// validated write, returning the keys that actually changed.
     ///
@@ -689,6 +680,18 @@ impl ConfigService {
         Ok(changed)
     }
 
+    // ── solx-server bearer token ─────────────────────────────────────────────
+
+    /// Return the plaintext `server_token` from this file, generating and
+    /// persisting a new random one if none exists yet. A single `mutate()`
+    /// call makes generate-then-persist atomic under the same cross-process
+    /// lock every other config write uses, so two `solx-server`s started
+    /// concurrently against the same appdata dir can't race into two
+    /// different tokens.
+    ///
+    /// Only the `token_store: "config"` path (and the no-credential-manager
+    /// fallback) of [`credentials::root_token`] uses this; everything else
+    /// should go through that module.
     pub fn ensure_server_token(&self) -> Result<String> {
         if let Some(token) = self.snapshot().server_token {
             if !token.trim().is_empty() {
@@ -703,10 +706,7 @@ impl ConfigService {
                     return Ok(());
                 }
             }
-            use rand::RngCore;
-            let mut bytes = [0u8; 32];
-            rand::thread_rng().fill_bytes(&mut bytes);
-            generated = base64::engine::general_purpose::STANDARD.encode(bytes);
+            generated = credentials::generate_token();
             obj.insert("server_token".into(), Value::String(generated.clone()));
             Ok(())
         })?;
@@ -728,6 +728,7 @@ pub const RESTART_KEYS: &[&str] = &[
     "env_vars",
     "server_url",
     "server_token",
+    "token_store",
     "server_port",
     "server_host",
     "server_cors_origins",
@@ -763,6 +764,13 @@ pub fn validate(value: &Value) -> Result<SolxConfig> {
     {
         if host.parse::<std::net::IpAddr>().is_err() {
             return invalid(format!("server_host {host:?} is not an IP address"));
+        }
+    }
+    if let Some(store) = cfg.token_store.as_deref() {
+        if !matches!(store, "keyring" | "config") {
+            return invalid(format!(
+                "token_store {store:?} must be \"keyring\" or \"config\""
+            ));
         }
     }
     if cfg.server_port == Some(0) {

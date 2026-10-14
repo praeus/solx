@@ -5,11 +5,50 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use clap::Parser;
-use serde_json::Value;
+use clap::{Parser, Subcommand};
+use serde_json::{json, Value};
 
-use solx_cli::{run_command, Cli};
+use solx_cli::{run_command, Commands};
+use solx_config::credentials;
 use solx_manager::App;
+
+/// The `solx` binary's command line: every [`Commands`] verb, plus
+/// commands that only make sense typed by a person at this machine.
+/// Those are deliberately not in [`Commands`], which `.solx` scripts
+/// (including a package's `install.solx`) also parse, so a script can
+/// never read the server token.
+#[derive(Parser)]
+#[command(
+    name = "solx",
+    about = "Structured documents and extensible actions via CLI",
+    version
+)]
+struct BinCli {
+    #[command(subcommand)]
+    command: BinCommand,
+}
+
+#[derive(Subcommand)]
+enum BinCommand {
+    /// Show or rotate this machine's solx-server bearer token, kept in the
+    /// OS credential manager.
+    Token {
+        #[command(subcommand)]
+        action: TokenAction,
+    },
+    #[command(flatten)]
+    Core(Commands),
+}
+
+#[derive(Subcommand)]
+enum TokenAction {
+    /// Print the token HTTP clients use to reach this machine's solx-server
+    /// (generated if there is none yet).
+    Show,
+    /// Replace the token with a new random one. Running solx hosts keep
+    /// accepting the old one until they restart.
+    Rotate,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -24,14 +63,36 @@ async fn main() -> Result<()> {
         .with_ansi(false)
         .init();
 
-    let cli = Cli::parse();
-    let app = build_app().await?;
-    let result = run_command(&app, cli.command, None).await?;
+    let result = match BinCli::parse().command {
+        BinCommand::Token { action } => run_token(action)?,
+        BinCommand::Core(command) => {
+            let app = build_app().await?;
+            run_command(&app, command, None).await?
+        }
+    };
     match result {
         Value::String(s) => println!("{s}"),
         other => println!("{}", serde_json::to_string_pretty(&other)?),
     }
     Ok(())
+}
+
+fn run_token(action: TokenAction) -> Result<Value> {
+    let config = solx_config::ConfigService::open().context("open config")?;
+    let token = match action {
+        TokenAction::Show => credentials::root_token(&config),
+        TokenAction::Rotate => credentials::rotate_root_token(&config),
+    }
+    .context("resolve server token")?;
+    let mut out = json!({
+        "token": token,
+        "stored_in": credentials::root_token_location(&config),
+    });
+    if matches!(action, TokenAction::Rotate) {
+        out["note"] =
+            "restart running solx hosts (solx-server, the desktop app) to use the new token".into();
+    }
+    Ok(out)
 }
 
 /// Build the `App`, auto-detecting a locally-reachable `solx-server` before
@@ -66,9 +127,10 @@ async fn build_app() -> Result<Arc<App>> {
     let port = snap.server_port.unwrap_or(solx_config::DEFAULT_SERVER_PORT);
 
     if health_check(port).await {
-        let token = solx_config::credentials::root_token(&config).context("ensure server token")?;
+        // A client of that host: `App::build` resolves the token the way
+        // any client does (never minting one, which the running host
+        // wouldn't accept anyway).
         std::env::set_var("SOLX_SERVER_URL", format!("http://127.0.0.1:{port}"));
-        std::env::set_var("SOLX_SERVER_TOKEN", &token);
         return App::build().await;
     }
 

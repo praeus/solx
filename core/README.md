@@ -161,8 +161,11 @@ cargo run -p solx-server         # http://127.0.0.1:8766, /mcp
 cargo run -p solx-mcp            # or stdio
 ```
 
-`solx-server`'s bearer token lives in `solx-config.json` as `server_token`,
-generated on first start. See [solx-cli/examples/](solx-cli/examples/) for
+`solx-server`'s bearer token is generated on first start and kept in the OS
+credential manager, not in `solx-config.json` (an older plaintext
+`server_token` there is moved over automatically). `solx token show` prints
+it and `solx token rotate` replaces it. On a machine without a credential
+manager, set `"token_store": "config"` to keep it in the config file. See [solx-cli/examples/](solx-cli/examples/) for
 runnable end-to-end scripts covering each action kind.
 
 ### Check the running server is not stale

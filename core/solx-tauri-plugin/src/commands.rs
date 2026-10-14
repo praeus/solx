@@ -506,7 +506,9 @@ pub(crate) async fn connect(
         })
         .await?;
 
-    config.patch(json!({ "server_url": server_url, "server_token": token }))?;
+    // The token goes to the OS credential manager, not the config file.
+    solx_config::credentials::set_client_token(config, &server_url, &token)?;
+    config.patch(json!({ "server_url": server_url }))?;
     state.replace(Some(app));
     Ok(())
 }
@@ -519,6 +521,9 @@ pub(crate) fn disconnect(state: State<'_, SolxState>) -> Result<()> {
             "this build runs solx locally; there is nothing to disconnect".into(),
         ));
     };
+    if let Some(url) = config.snapshot().server_url {
+        solx_config::credentials::forget_client_token(config, &url)?;
+    }
     config.mutate(|obj| {
         obj.remove("server_url");
         obj.remove("server_token");
@@ -562,8 +567,14 @@ pub(crate) struct ConfigView {
 fn config_view(config: &ConfigService) -> ConfigView {
     let snap = config.snapshot();
     let file_name = |p: std::path::PathBuf| p.file_name().map(|f| f.to_string_lossy().into_owned());
+    // Never hand the bearer token to a webview, even when it is still in
+    // the file (`token_store: "config"`, or no credential manager).
+    let mut raw = config.raw_snapshot();
+    if let Some(obj) = raw.as_object_mut() {
+        obj.remove("server_token");
+    }
     ConfigView {
-        raw: config.raw_snapshot(),
+        raw,
         effective: json!({
             "data_directory": config.db_dir(),
             "files_directory": config.files_dir(),
@@ -799,11 +810,16 @@ mod catalog {
     }
 }
 
-/// Build the client-mode `App` from a previously persisted URL/token, if any.
+/// Build the client-mode `App` from a previously saved URL/token, if any.
+/// A token an older build left in this private config's `server_token` is
+/// moved to the OS credential manager first.
 pub(crate) fn restore_client(config: &Arc<ConfigService>) -> Option<Arc<solx_manager::App>> {
     let snap = config.snapshot();
     let url = snap.server_url.filter(|s| !s.trim().is_empty())?;
-    let token = snap.server_token.filter(|s| !s.trim().is_empty())?;
+    if let Err(e) = solx_config::credentials::adopt_legacy_client_token(config, &url) {
+        eprintln!("solx: could not move the saved server token to the credential manager: {e}");
+    }
+    let token = solx_config::credentials::stored_client_token(config, &url)?;
     solx_manager::App::remote(config.clone(), url, token).ok()
 }
 

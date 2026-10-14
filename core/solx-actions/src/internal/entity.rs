@@ -158,7 +158,7 @@ pub(super) async fn type_paths(
 // lets `solx save action` register a Command, and equally what lets
 // solx-web's action editor and solx-quickjs write rows over
 // `PUT /actions/{ref}`. That is the intended posture, not an oversight:
-// holding `server_token` already makes a caller a CLI-equivalent admin, so
+// holding the server token already makes a caller a CLI-equivalent admin, so
 // there is nothing left for a guard on that route to protect. See
 // SECURITY.md — "Treat a solx instance as running with your own privileges."
 

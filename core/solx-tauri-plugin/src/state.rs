@@ -17,12 +17,13 @@ pub(crate) enum Backend {
 }
 
 /// An embedded `solx-server` the host started over the same `App`, reported
-/// by `info` so the UI can show other clients how to reach it.
+/// by `info` so the UI can show other clients how to reach it. Deliberately
+/// carries no token: `info` is callable from the main window, where package
+/// widgets run.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmbeddedServer {
     pub url: String,
-    pub token: String,
 }
 
 /// Managed Tauri state behind every command.

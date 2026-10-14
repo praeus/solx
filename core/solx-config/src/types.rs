@@ -118,11 +118,18 @@ pub struct SolxConfig {
     /// — every existing user's exact current behavior, no server needed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_url: Option<String>,
-    /// Shared bearer token for `server_url`. Generated once by `solx-server`
-    /// on first run and persisted here, so a server and any client pointed
-    /// at the same appdata dir pick it up automatically.
+    /// Legacy plaintext home of the bearer token. Normally empty: the token
+    /// lives in the OS credential manager (see `solx_config::credentials`),
+    /// and a value found here is moved there and removed on first use. Only
+    /// written when `token_store` is `"config"`, or as a fallback when no
+    /// credential manager is available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_token: Option<String>,
+    /// Where bearer tokens are kept: `"keyring"` (default, the OS credential
+    /// manager) or `"config"` (plaintext `server_token` in this file, e.g.
+    /// for a headless machine or CI with no credential manager).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_store: Option<String>,
     /// Port `solx-server` binds on `127.0.0.1`. Server-side only —
     /// independent of `server_url`, since the machine running `solx-server`
     /// won't normally have its own config's `server_url` set at all.
@@ -130,7 +137,7 @@ pub struct SolxConfig {
     pub server_port: Option<u16>,
     /// Address `solx-server` binds on. Server-side only. Defaults to
     /// `127.0.0.1`; set to e.g. `"0.0.0.0"` (or a LAN/Tailscale IP) to serve
-    /// other machines. Once it's off loopback, `server_token` is the only
+    /// other machines. Once it's off loopback, the bearer token is the only
     /// gate and traffic is plaintext HTTP, so put it on a private network
     /// or behind a TLS reverse proxy.
     #[serde(default, skip_serializing_if = "Option::is_none")]

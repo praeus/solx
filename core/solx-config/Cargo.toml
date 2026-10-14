@@ -13,6 +13,11 @@ fs2 = { workspace = true }
 rand = { workspace = true }
 base64 = { workspace = true }
 async-trait = { workspace = true }
+url = { workspace = true }
+# Where bearer tokens live (see `credentials`). Same backends as
+# solx-actions: without a platform feature keyring 3.x silently falls back
+# to an in-memory mock store.
+keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent"] }
 
 [dev-dependencies]
 tempfile = "3"

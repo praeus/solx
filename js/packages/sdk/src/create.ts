@@ -17,7 +17,8 @@
  *
  *   1. `opts.serverUrl`/`opts.serverToken` (explicit override)
  *   2. `SOLX_SERVER_URL`/`SOLX_SERVER_TOKEN` env vars
- *   3. `config.snapshot().serverUrl`/`serverToken` (persisted config)
+ *   3. `config.snapshot().serverUrl`, with the token saved for it in
+ *      the OS credential manager (`config.clientToken(serverUrl)`)
  *
  * `config` itself is **always** local — it's never proxied, even in
  * remote mode, because it's the thing that tells the other managers
@@ -51,7 +52,7 @@ export interface CreateSolxOptions {
   /**
    * Explicit remote connection, taking precedence over the
    * `SOLX_SERVER_URL`/`SOLX_SERVER_TOKEN` env vars and the config
-   * file's `serverUrl`/`serverToken`. Set this to force client mode
+   * file's `serverUrl` and its saved token. Set this to force client mode
    * (e.g. in tests) without touching the environment or config.
    */
   serverUrl?: string;
@@ -101,13 +102,13 @@ export async function createSolx(opts: CreateSolxOptions = {}): Promise<Solx> {
 
   if (serverUrl) {
     const token =
-      opts.serverToken ?? process.env['SOLX_SERVER_TOKEN'] ?? config.snapshot().serverToken;
+      opts.serverToken ?? process.env['SOLX_SERVER_TOKEN'] ?? config.clientToken(serverUrl);
     if (!token) {
       throw new SolxError(
         'Config',
-        'server_url is configured but no server_token is available ' +
-          '(point SOLX_SERVER_TOKEN at the token solx-server printed on ' +
-          'first start, or set config.serverToken).',
+        `server_url is configured but no token is saved for ${serverUrl} ` +
+          '(set SOLX_SERVER_TOKEN to the output of `solx token show` on ' +
+          "the server's machine, or pass opts.serverToken).",
       );
     }
     types = await TypeManager.connect(serverUrl, token);

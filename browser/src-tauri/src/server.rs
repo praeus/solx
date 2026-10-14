@@ -49,7 +49,9 @@ async fn start(handle: &AppHandle) -> anyhow::Result<()> {
     if solx_host_running(port).await {
         let url = format!("http://127.0.0.1:{port}");
         eprintln!("solx: a solx host is already serving {url}; connecting to it instead of opening local storage");
-        let token = solx_config::credentials::root_token(&config).context("ensure server token")?;
+        // A client of that host, so never mint a token it wouldn't accept.
+        let token = solx_config::credentials::client_token(&config, &url)
+            .with_context(|| format!("no token saved for {url} (run `solx token show`)"))?;
         let app = solx_manager::App::remote(config, url, token)?;
         handle.plugin(solx_tauri_plugin::local(app))?;
         return Ok(());
@@ -62,7 +64,6 @@ async fn start(handle: &AppHandle) -> anyhow::Result<()> {
     if !app.config.server_embedded() {
         return Ok(());
     }
-    let token = solx_config::credentials::root_token(&app.config).context("ensure server token")?;
     let addr = solx_server::bind_addr(&snap, None, None)?;
     let cors = solx_server::cors_layer(addr.ip(), snap.server_cors_origins.as_deref().unwrap_or_default());
     let (tx, rx) = oneshot::channel::<()>();
@@ -76,7 +77,7 @@ async fn start(handle: &AppHandle) -> anyhow::Result<()> {
             eprintln!("solx: embedded solx-server listening on http://{bound}");
             handle
                 .state::<SolxState>()
-                .set_embedded(Some(EmbeddedServer { url: format!("http://{bound}"), token }));
+                .set_embedded(Some(EmbeddedServer { url: format!("http://{bound}") }));
             handle.manage(Shutdown(Mutex::new(Some(tx))));
         }
         // Not fatal: the UI works over IPC regardless. Only HTTP clients

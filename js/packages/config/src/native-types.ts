@@ -49,6 +49,11 @@ export interface NativeConfigModule {
   configRegisterPackage(mgr: unknown, pkgJson: string): void;
   /** Unregister a package by name. */
   configUnregisterPackage(mgr: unknown, name: string): void;
+  /**
+   * The stored bearer token for `serverUrl` (OS credential manager,
+   * else a legacy plaintext `server_token`), or `undefined`.
+   */
+  configClientToken(mgr: unknown, serverUrl: string): string | undefined;
 }
 
 export type ConfigServiceHandle = unknown;
