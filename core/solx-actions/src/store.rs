@@ -970,6 +970,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn include_paths_filter_list_paths_and_search_exactly() {
+        let (_d, _c, m) = setup().await;
+        for (path, name) in [
+            ("/agent/skills", "one"),
+            ("/agent/skills/deep", "two"),
+            ("/agent", "skills"),
+            ("/agent", "keep"),
+            ("/tools", "one"),
+        ] {
+            m.save(path, name, ActionInput::default()).await.unwrap();
+        }
+        // Includes also leave out the seeded `/builtin/*` rows.
+        let list = |inc: &[&str], ex: &[&str]| ListOptions {
+            include_paths: inc.iter().map(|p| p.to_string()).collect(),
+            exclude_paths: ex.iter().map(|p| p.to_string()).collect(),
+            ..Default::default()
+        };
+        let refs = |page: Page<Action>| -> Vec<String> {
+            let mut v: Vec<String> = page
+                .items
+                .iter()
+                .map(|a| format!("{}/{}", a.path, a.name))
+                .collect();
+            v.sort();
+            v
+        };
+
+        // Exact pattern: the folder and the entity of that full ref only.
+        let page = m.list(list(&["/agent/skills"], &[])).await.unwrap();
+        assert_eq!(
+            refs(page),
+            vec!["/agent/skills", "/agent/skills/one"],
+        );
+
+        // Several patterns OR together; an exclusion still wins.
+        let page = m
+            .list(list(&["/agent/skills*", "/tools"], &["/agent/skills/deep"]))
+            .await
+            .unwrap();
+        assert_eq!(
+            refs(page),
+            vec!["/agent/skills", "/agent/skills/one", "/tools/one"],
+        );
+
+        let paths = m.paths(list(&["/agent/skills*"], &[])).await.unwrap();
+        let got: Vec<&str> = paths.items.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(got, vec!["/agent", "/agent/skills", "/agent/skills/deep"]);
+
+        let page = m
+            .search(ActionSearchQuery {
+                list: list(&["/tools"], &[]),
+                q: Some("one".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(refs(page), vec!["/tools/one"]);
+    }
+
+    #[tokio::test]
     async fn save_rejects_an_unknown_reserved_capability() {
         let (_d, _c, m) = setup().await;
         let input = ActionInput {

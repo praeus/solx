@@ -66,6 +66,11 @@ pub struct ListOptions {
     /// [`validate_exclude_pattern`] for the syntax and matching rule.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude_paths: Vec<String>,
+    /// Keep only entities matching at least one of these patterns — same
+    /// syntax and matching rule as `exclude_paths`. Empty means no
+    /// restriction; exclusions still apply to whatever is included.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include_paths: Vec<String>,
     /// Which configured exclusion list applies. `None` means "the
     /// surface's default", which differs per surface — see [`ExcludeMode`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -155,6 +160,11 @@ impl ListOptions {
 
         // Exclusions.
         if let Some(cond) = exclude_conditions(&self.exclude_paths, "", &mut binds)? {
+            conditions.push(cond);
+        }
+
+        // Inclusions.
+        if let Some(cond) = include_conditions(&self.include_paths, "", &mut binds)? {
             conditions.push(cond);
         }
 
@@ -273,9 +283,38 @@ pub fn exclude_conditions(
     col_prefix: &str,
     binds: &mut Vec<String>,
 ) -> Result<Option<String>> {
-    if patterns.is_empty() {
+    let parts = pattern_matches_sql(patterns, col_prefix, binds)?;
+    if parts.is_empty() {
         return Ok(None);
     }
+    let parts: Vec<String> = parts.into_iter().map(|m| format!("NOT {m}")).collect();
+    Ok(Some(parts.join(" AND ")))
+}
+
+/// Render `patterns` as one `(… OR …)` condition keeping only entities that
+/// match at least one, appending binds. Same matching rule and arguments as
+/// [`exclude_conditions`]; `None` when `patterns` is empty (no restriction).
+///
+/// The result is a self-contained group, so several include lists rendered
+/// separately AND together — each can only narrow the others.
+pub fn include_conditions(
+    patterns: &[String],
+    col_prefix: &str,
+    binds: &mut Vec<String>,
+) -> Result<Option<String>> {
+    let parts = pattern_matches_sql(patterns, col_prefix, binds)?;
+    if parts.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(format!("({})", parts.join(" OR "))))
+}
+
+/// One `(path GLOB ?n OR full_ref GLOB ?n)` per pattern, binding each once.
+fn pattern_matches_sql(
+    patterns: &[String],
+    col_prefix: &str,
+    binds: &mut Vec<String>,
+) -> Result<Vec<String>> {
     let c = col_prefix;
     let full = format!("(CASE WHEN {c}path='/' THEN '/'||{c}name ELSE {c}path||'/'||{c}name END)");
     let mut parts = Vec::with_capacity(patterns.len());
@@ -284,9 +323,9 @@ pub fn exclude_conditions(
         // `[` opens a character class in GLOB; `[[]` is a literal `[`.
         binds.push(p.replace('[', "[[]"));
         let n = binds.len();
-        parts.push(format!("NOT ({c}path GLOB ?{n} OR {full} GLOB ?{n})"));
+        parts.push(format!("({c}path GLOB ?{n} OR {full} GLOB ?{n})"));
     }
-    Ok(Some(parts.join(" AND ")))
+    Ok(parts)
 }
 
 /// The Rust twin of [`exclude_conditions`], for checking one entity (direct
@@ -311,6 +350,12 @@ pub fn is_excluded_by(patterns: &[String], path: &str, name: &str) -> bool {
     patterns
         .iter()
         .any(|p| exclude_pattern_matches(p, path, name))
+}
+
+/// The Rust twin of [`include_conditions`]: whether the entity at
+/// `path`/`name` passes `patterns`. An empty list includes everything.
+pub fn is_included_by(patterns: &[String], path: &str, name: &str) -> bool {
+    patterns.is_empty() || is_excluded_by(patterns, path, name)
 }
 
 /// Match a glob pattern against a path. `*` matches any sequence of
@@ -399,6 +444,9 @@ pub struct SearchQuery {
     /// Same as [`ListOptions::exclude_paths`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude_paths: Vec<String>,
+    /// Same as [`ListOptions::include_paths`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include_paths: Vec<String>,
     /// Same as [`ListOptions::exclude_mode`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exclude_mode: Option<ExcludeMode>,
@@ -731,6 +779,72 @@ mod tests {
                 "{pat} vs {path} {name}"
             );
         }
+    }
+
+    #[test]
+    fn include_paths_render_as_one_or_group() {
+        let sql = ListOptions {
+            include_paths: vec!["/notes*".into(), "/blog".into()],
+            ..opts()
+        }
+        .to_sql(SCHEMA)
+        .unwrap();
+        let full = "(CASE WHEN path='/' THEN '/'||name ELSE path||'/'||name END)";
+        assert_eq!(
+            sql.where_clause,
+            format!(
+                " WHERE ((path GLOB ?1 OR {full} GLOB ?1) OR (path GLOB ?2 OR {full} GLOB ?2))"
+            )
+        );
+        assert_eq!(sql.binds, vec!["/notes*".to_string(), "/blog".to_string()]);
+    }
+
+    #[test]
+    fn include_paths_compose_after_exclusions() {
+        let sql = ListOptions {
+            path_prefix: Some("/a".into()),
+            exclude_paths: vec!["/a/secret".into()],
+            include_paths: vec!["/a/b*".into()],
+            filter_field: Some("name".into()),
+            filter_value: Some("x".into()),
+            ..opts()
+        }
+        .to_sql(SCHEMA)
+        .unwrap();
+        let w = &sql.where_clause;
+        assert!(w.contains("NOT (path GLOB ?3"), "{w}");
+        assert!(w.contains("AND ((path GLOB ?4"), "{w}");
+        assert!(w.contains("LIKE lower(?5)"), "{w}");
+        assert_eq!(sql.binds.len(), 5);
+    }
+
+    #[test]
+    fn include_patterns_are_validated_escaped_and_bound() {
+        let mut binds = Vec::new();
+        assert_eq!(include_conditions(&[], "", &mut binds).unwrap(), None);
+        let cond = include_conditions(&["/a[1]' OR 1=1 --".into()], "d.", &mut binds)
+            .unwrap()
+            .unwrap();
+        assert!(cond.starts_with("((d.path GLOB ?1"), "{cond}");
+        assert!(!cond.contains("1=1"), "{cond}");
+        assert_eq!(binds, vec!["/a[[]1]' OR 1=1 --".to_string()]);
+        assert!(ListOptions {
+            include_paths: vec!["nope".into()],
+            ..opts()
+        }
+        .to_sql(SCHEMA)
+        .is_err());
+    }
+
+    #[test]
+    fn rust_include_matcher_agrees() {
+        assert!(is_included_by(&[], "/any", "x"));
+        let pats = vec!["/notes*".to_string(), "/blog".to_string()];
+        assert!(is_included_by(&pats, "/notes/deep", "x"));
+        assert!(is_included_by(&pats, "/blog", "x"));
+        assert!(is_included_by(&pats, "/", "blog"));
+        assert!(!is_included_by(&pats, "/blog/deep", "x"));
+        assert!(!is_included_by(&pats, "/other", "x"));
     }
 
     #[test]

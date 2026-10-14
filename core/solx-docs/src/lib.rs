@@ -22,7 +22,7 @@ use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::{DocManager, TypeManager};
 use solx_surface::path::{full_ref, normalize_path, validate_name};
 use solx_surface::query::{
-    exclude_conditions, ListOptions, ListSchema, Page, PathFacet, SearchQuery, SortOrder,
+    exclude_conditions, include_conditions, ListOptions, ListSchema, Page, PathFacet, SearchQuery, SortOrder,
 };
 use uuid::Uuid;
 
@@ -612,10 +612,14 @@ impl DocManager for LocalDocManager {
         let offset = query.offset.unwrap_or(0);
 
         let mut conditions: Vec<String> = Vec::new();
-        // Exclusions render first, while the bind list is still empty, so
-        // the shared renderer's `?N` numbering lines up with `binds`.
+        // Exclusions and inclusions render first, while the bind list is
+        // still empty, so the shared renderer's `?N` numbering lines up with
+        // `binds`.
         let mut excl_binds: Vec<String> = Vec::new();
         if let Some(cond) = exclude_conditions(&query.exclude_paths, "d.", &mut excl_binds)? {
+            conditions.push(cond);
+        }
+        if let Some(cond) = include_conditions(&query.include_paths, "d.", &mut excl_binds)? {
             conditions.push(cond);
         }
         let mut binds: Vec<libsql::Value> =
@@ -1101,6 +1105,66 @@ mod tests {
                 .unwrap();
             assert_eq!(res.total, 1, "q={q:?}");
             assert_eq!(res.items[0].name, "keep");
+        }
+    }
+
+    #[tokio::test]
+    async fn include_paths_apply_to_list_paths_and_search() {
+        let (_d, m) = setup().await;
+        let input = |title: &str| DocumentInput {
+            type_ref: Some("/types/docs/Document".into()),
+            title: Some(title.into()),
+            ..Default::default()
+        };
+        m.save("/agent/skills", "one", input("alpha skill"))
+            .await
+            .unwrap();
+        m.save("/agent", "skills", input("alpha index"))
+            .await
+            .unwrap();
+        m.save("/notes", "keep", input("alpha note")).await.unwrap();
+        m.save("/notes/secret", "hide", input("alpha secret"))
+            .await
+            .unwrap();
+        m.save("/other", "drop", input("alpha other")).await.unwrap();
+        // Two include groups OR together; the exclusion still wins.
+        let inc = vec!["/agent/skills".to_string(), "/notes*".to_string()];
+        let ex = vec!["/notes/secret".to_string()];
+
+        let page = m
+            .list(ListOptions {
+                include_paths: inc.clone(),
+                exclude_paths: ex.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let mut got: Vec<&str> = page.items.iter().map(|d| d.name.as_str()).collect();
+        got.sort();
+        assert_eq!(got, vec!["keep", "one", "skills"]);
+
+        let paths = m
+            .paths(ListOptions {
+                include_paths: inc.clone(),
+                exclude_paths: ex.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let got: Vec<&str> = paths.items.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(got, vec!["/agent", "/agent/skills", "/notes"]);
+
+        for q in [None, Some("alpha".to_string())] {
+            let res = m
+                .search(SearchQuery {
+                    q: q.clone(),
+                    include_paths: inc.clone(),
+                    exclude_paths: ex.clone(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            assert_eq!(res.total, 3, "q={q:?}");
         }
     }
 }
