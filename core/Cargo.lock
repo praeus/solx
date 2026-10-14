@@ -5428,6 +5428,7 @@ dependencies = [
 name = "solx-config"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "fs2",
  "rand 0.8.7",
@@ -5435,6 +5436,7 @@ dependencies = [
  "serde_json",
  "solx-surface",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

@@ -31,6 +31,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use serde_json::{json, Value};
 use solx_config::ConfigService;
+use solx_surface::auth::TokenAuthority;
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::ActionManager;
 use tokio::io::AsyncWriteExt;
@@ -42,6 +43,11 @@ use solx_console::{ConsoleStore, InvocationStore};
 /// `action_config.timeout_secs`. Also reused by `crate::script` as the
 /// default ceiling on a whole `Script` action's execution.
 pub(crate) const DEFAULT_TIMEOUT_SECS: u64 = 300;
+
+/// Set on every spawned Command action that has a credential — see
+/// [`run_command`].
+const ENV_SERVER_URL: &str = "SOLX_SERVER_URL";
+const ENV_SERVER_TOKEN: &str = "SOLX_SERVER_TOKEN";
 
 /// Turn an action ref into a filesystem-safe path segment for
 /// [`ConfigService::logs_dir`] — `/packages/solx-omniparse/process-file` ->
@@ -73,6 +79,7 @@ fn log_dir_slug(action_ref: &str) -> String {
 #[allow(clippy::too_many_arguments)]
 pub async fn run_command(
     cfg: &ConfigService,
+    authority: Option<&Arc<dyn TokenAuthority>>,
     console: Arc<ConsoleStore>,
     invocations: Arc<InvocationStore>,
     action_ref: &str,
@@ -138,6 +145,19 @@ pub async fn run_command(
     let registration =
         console_loopback::register(console, invocations, action_ref, invocation_id).await;
 
+    // How this invocation reaches `solx-server`: handed to the child as
+    // `SOLX_SERVER_URL`/`SOLX_SERVER_TOKEN`, the only supported way for an
+    // action to get a token. Kept bound like `registration`, since an
+    // authority may revoke a per-invocation token when this drops.
+    let credential = match authority {
+        Some(authority) => {
+            authority
+                .issue_action_token(action_ref, invocation_id)
+                .await
+        }
+        None => None,
+    };
+
     let mut cmd = tokio::process::Command::new(shell);
     cmd.arg(flag)
         .arg(command)
@@ -163,15 +183,36 @@ pub async fn run_command(
             .env("SOLX_CONTROL_URL", reg.control_url());
     }
 
-    // Forward any `action_config.env` map to the spawned child, so
-    // packages like `solx-media` that read SOLX_SERVER_URL/SOLX_SERVER_TOKEN
-    // from their own env don't fail with "config error: ... is required".
+    // The variables `credential` sets below. Applied after
+    // `action_config.env`, and that map's entries for them are skipped, so a
+    // token stored in action config can never stand in for the one the
+    // authority issued for this invocation.
+    let injected: Vec<(&str, &str)> = match &credential {
+        Some(c) => {
+            let mut vars = vec![(ENV_SERVER_TOKEN, c.token.as_str())];
+            if let Some(url) = &c.server_url {
+                vars.push((ENV_SERVER_URL, url.as_str()));
+            }
+            vars
+        }
+        None => Vec::new(),
+    };
+
+    // Forward any `action_config.env` map to the spawned child.
     // String values only — non-string entries are skipped with a warning
     // rather than silently dropped, since silently dropping a secret
     // would be the worse failure mode.
     if let Some(cfg) = action_config {
         if let Some(env) = cfg.get("env").and_then(|v| v.as_object()) {
             for (k, v) in env {
+                if injected.iter().any(|(name, _)| name == k) {
+                    tracing::warn!(
+                        action_ref = %action_ref,
+                        env_key = %k,
+                        "action_config.env entry is set by solx for each invocation; ignoring it",
+                    );
+                    continue;
+                }
                 match v.as_str() {
                     Some(s) => {
                         cmd.env(k, s);
@@ -184,6 +225,9 @@ pub async fn run_command(
                 }
             }
         }
+    }
+    for (name, value) in &injected {
+        cmd.env(name, value);
     }
     let mut child = cmd.spawn().map_err(|e| {
         SolxError::Exec(format!("spawn command key '{fn_name}' ('{command}'): {e}"))

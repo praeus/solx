@@ -34,6 +34,7 @@ use solx_config::{ConfigService, EntityKind};
 use solx_docs::LocalDocManager;
 #[cfg(feature = "local")]
 use solx_files::LocalFileStore;
+use solx_surface::auth::TokenAuthority;
 use solx_surface::managers::{ActionManager, DocManager, FileStore, Solx, TypeManager};
 use solx_surface::query::ExcludeMode;
 #[cfg(feature = "local")]
@@ -50,6 +51,10 @@ pub struct App {
     files: Arc<dyn FileStore>,
     /// `Some(server_url)` when proxying to a remote `solx-server`.
     remote_url: Option<String>,
+    /// Decides which bearer tokens this process's HTTP surface accepts, and
+    /// credentials spawned Command actions. `Some` only for local wiring: a
+    /// remote `App` serves nothing and runs no actions itself.
+    authority: Option<Arc<dyn TokenAuthority>>,
 }
 
 impl App {
@@ -100,11 +105,7 @@ impl App {
             .or_else(|| snap.server_url.clone().filter(|s| !s.trim().is_empty()));
         match server_url {
             Some(server_url) => {
-                let token = std::env::var("SOLX_SERVER_TOKEN")
-                    .ok()
-                    .filter(|s| !s.trim().is_empty())
-                    .or(snap.server_token)
-                    .context(
+                let token = solx_config::credentials::client_token(&config).context(
                         "server_url is configured but no server_token is available \
                          (start solx-server against this appdata dir first, or set \
                          SOLX_SERVER_TOKEN)",
@@ -166,6 +167,8 @@ impl App {
             .context("open actions db")?,
         );
         actions_concrete.set_self_ref(Arc::downgrade(&actions_concrete));
+        let authority = build_authority(&config)?;
+        actions_concrete.set_token_authority(authority.clone());
         let actions: Arc<dyn ActionManager> = actions_concrete;
 
         Ok(Arc::new(App {
@@ -175,6 +178,7 @@ impl App {
             actions,
             files,
             remote_url: None,
+            authority: Some(authority),
         }))
     }
 
@@ -217,6 +221,7 @@ impl App {
             actions,
             files,
             remote_url,
+            authority: None,
         }))
     }
 
@@ -224,6 +229,21 @@ impl App {
     pub fn remote_url(&self) -> Option<&str> {
         self.remote_url.as_deref()
     }
+
+    /// The token authority for serving this app over HTTP. `None` for a
+    /// remote app, which has nothing local to serve.
+    pub fn authority(&self) -> Option<Arc<dyn TokenAuthority>> {
+        self.authority.clone()
+    }
+}
+
+/// The one place the token authority is chosen. Today that's always the
+/// single shared `server_token`.
+#[cfg(feature = "local")]
+fn build_authority(config: &ConfigService) -> Result<Arc<dyn TokenAuthority>> {
+    let authority = solx_config::credentials::SingleTokenAuthority::from_config(config)
+        .context("prepare server token")?;
+    Ok(Arc::new(authority))
 }
 
 impl App {

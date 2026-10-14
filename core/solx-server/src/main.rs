@@ -1,5 +1,4 @@
 use std::net::IpAddr;
-use std::sync::Arc;
 
 use anyhow::Context;
 use clap::Parser;
@@ -46,11 +45,6 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("build local App")?;
 
-    let token = app
-        .config
-        .ensure_server_token()
-        .context("ensure server token")?;
-
     let snap = app.config.snapshot();
     let addr = solx_server::bind_addr(&snap, cli.host, cli.port)?;
     let host = addr.ip();
@@ -59,15 +53,14 @@ async fn main() -> anyhow::Result<()> {
         host,
         snap.server_cors_origins.as_deref().unwrap_or_default(),
     );
-    let state = AppState {
-        app,
-        token: Arc::from(token.as_str()),
-    };
+    let state = AppState::new(app)?;
+    let auth = state.auth.clone();
     let router = solx_server::build_router_with_cors(state, cors);
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("bind {addr}"))?;
+    auth.set_server_url(solx_server::server_url(listener.local_addr()?));
     tracing::info!("solx-server listening on http://{addr}");
     println!("solx-server listening on http://{addr}");
     if !host.is_loopback() {

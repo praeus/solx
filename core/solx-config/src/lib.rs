@@ -10,6 +10,7 @@
 //! * The write path edits the file as a raw [`serde_json::Value`] so unknown
 //!   fields written by other tools/versions survive.
 
+pub mod credentials;
 mod types;
 
 use std::collections::HashMap;

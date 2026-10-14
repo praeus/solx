@@ -66,21 +66,15 @@ async fn build_app() -> Result<Arc<App>> {
     let port = snap.server_port.unwrap_or(solx_config::DEFAULT_SERVER_PORT);
 
     if health_check(port).await {
-        let token = config
-            .ensure_server_token()
-            .context("ensure server token")?;
+        let token = solx_config::credentials::root_token(&config).context("ensure server token")?;
         std::env::set_var("SOLX_SERVER_URL", format!("http://127.0.0.1:{port}"));
         std::env::set_var("SOLX_SERVER_TOKEN", &token);
         return App::build().await;
     }
 
     let app = App::build_local().await?;
-    match app.config.ensure_server_token() {
-        Ok(token) => {
-            let state = solx_server::state::AppState {
-                app: app.clone(),
-                token: Arc::from(token.as_str()),
-            };
+    match solx_server::state::AppState::new(app.clone()) {
+        Ok(state) => {
             if let Err(e) = solx_server::spawn_embedded(state, port).await {
                 tracing::warn!(
                     "could not start embedded solx-server on 127.0.0.1:{port} ({e}); \
@@ -88,7 +82,7 @@ async fn build_app() -> Result<Arc<App>> {
                 );
             }
         }
-        Err(e) => tracing::warn!("could not prepare embedded solx-server token: {e}"),
+        Err(e) => tracing::warn!("could not prepare embedded solx-server: {e}"),
     }
     Ok(app)
 }

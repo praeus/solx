@@ -135,6 +135,7 @@ pub async fn serve(
 ) -> std::io::Result<SocketAddr> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?;
+    state.auth.set_server_url(server_url(bound));
     let router = build_router_with_cors(state, cors);
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, router)
@@ -145,6 +146,20 @@ pub async fn serve(
         }
     });
     Ok(bound)
+}
+
+/// The URL a spawned Command action uses to reach a server bound on
+/// `bound`. An unspecified bind (`0.0.0.0`/`::`) is reached over loopback,
+/// since the action runs on this same machine.
+pub fn server_url(bound: SocketAddr) -> String {
+    let mut addr = bound;
+    if addr.ip().is_unspecified() {
+        addr.set_ip(match addr {
+            SocketAddr::V4(_) => IpAddr::V4(Ipv4Addr::LOCALHOST),
+            SocketAddr::V6(_) => IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+        });
+    }
+    format!("http://{addr}")
 }
 
 /// Resolve the address to bind on: explicit `host`/`port` overrides, else
@@ -173,4 +188,25 @@ pub fn bind_addr(
         .or(snap.server_port)
         .unwrap_or(solx_config::DEFAULT_SERVER_PORT);
     Ok(SocketAddr::new(host, port))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::server_url;
+
+    #[test]
+    fn server_url_reaches_unspecified_binds_over_loopback() {
+        assert_eq!(
+            server_url("0.0.0.0:8766".parse().unwrap()),
+            "http://127.0.0.1:8766"
+        );
+        assert_eq!(
+            server_url("[::]:8766".parse().unwrap()),
+            "http://[::1]:8766"
+        );
+        assert_eq!(
+            server_url("10.0.0.5:8766".parse().unwrap()),
+            "http://10.0.0.5:8766"
+        );
+    }
 }

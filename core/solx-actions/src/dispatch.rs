@@ -177,6 +177,7 @@ impl LocalActionManager {
                 })?;
                 exec::run_command(
                     &self.config,
+                    self.token_authority(),
                     self.console.clone(),
                     self.invocations.clone(),
                     &action_ref,

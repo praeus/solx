@@ -49,7 +49,7 @@ async fn start(handle: &AppHandle) -> anyhow::Result<()> {
     if solx_host_running(port).await {
         let url = format!("http://127.0.0.1:{port}");
         eprintln!("solx: a solx host is already serving {url}; connecting to it instead of opening local storage");
-        let token = config.ensure_server_token().context("ensure server token")?;
+        let token = solx_config::credentials::root_token(&config).context("ensure server token")?;
         let app = solx_manager::App::remote(config, url, token)?;
         handle.plugin(solx_tauri_plugin::local(app))?;
         return Ok(());
@@ -62,11 +62,11 @@ async fn start(handle: &AppHandle) -> anyhow::Result<()> {
     if !app.config.server_embedded() {
         return Ok(());
     }
-    let token = app.config.ensure_server_token().context("ensure server token")?;
+    let token = solx_config::credentials::root_token(&app.config).context("ensure server token")?;
     let addr = solx_server::bind_addr(&snap, None, None)?;
     let cors = solx_server::cors_layer(addr.ip(), snap.server_cors_origins.as_deref().unwrap_or_default());
     let (tx, rx) = oneshot::channel::<()>();
-    let state = AppState { app, token: Arc::from(token.as_str()) };
+    let state = AppState::new(app)?;
     match solx_server::serve(state, addr, cors, async move {
         let _ = rx.await;
     })

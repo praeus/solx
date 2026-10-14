@@ -39,6 +39,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use solx_config::ConfigService;
 use solx_console::{ConsoleStore, InvocationStore};
+use solx_surface::auth::TokenAuthority;
 use solx_surface::error::{Result, SolxError};
 use solx_surface::internal_actions::{ActionExecutor, InternalActionRegistry};
 use solx_surface::managers::{DocManager, FileStore, TypeManager};
@@ -87,6 +88,10 @@ pub struct LocalActionManager {
     /// identity. The trait's `exec` has no room for it, and deliberately
     /// so — see [`crate::caller`].
     self_ref: OnceLock<Weak<LocalActionManager>>,
+    /// Issues the `SOLX_SERVER_URL`/`SOLX_SERVER_TOKEN` handed to each
+    /// spawned Command action. Set once by the host (see
+    /// [`Self::set_token_authority`]); unset, Command actions get neither.
+    token_authority: OnceLock<Arc<dyn TokenAuthority>>,
 }
 
 #[async_trait]
@@ -160,6 +165,7 @@ impl LocalActionManager {
             internal_registry: OnceLock::new(),
             running: Arc::new(Mutex::new(HashMap::new())),
             self_ref: OnceLock::new(),
+            token_authority: OnceLock::new(),
         })
     }
 
@@ -206,6 +212,16 @@ impl LocalActionManager {
             let _ = self.internal_registry.set(Arc::new(plugin));
         }
         let _ = self.self_ref.set(self_ref);
+    }
+
+    /// Provide the authority that credentials spawned Command actions to
+    /// call back into `solx-server`. Only the first call takes effect.
+    pub fn set_token_authority(&self, authority: Arc<dyn TokenAuthority>) {
+        let _ = self.token_authority.set(authority);
+    }
+
+    pub(crate) fn token_authority(&self) -> Option<&Arc<dyn TokenAuthority>> {
+        self.token_authority.get()
     }
 
     /// Upgrade [`Self::self_ref`], or explain the wiring bug.

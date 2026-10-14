@@ -12,6 +12,8 @@ serde_json = { workspace = true }
 fs2 = { workspace = true }
 rand = { workspace = true }
 base64 = { workspace = true }
+async-trait = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { workspace = true }

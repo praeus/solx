@@ -21,12 +21,9 @@ use solx_surface::managers::Solx;
 async fn spawn_server() -> (tempfile::TempDir, Arc<solx_manager::App>, String, String) {
     let dir = tempfile::tempdir().unwrap();
     let app = solx_manager::App::build_local_in(dir.path()).await.unwrap();
-    let token = app.config.ensure_server_token().unwrap();
+    let token = solx_config::credentials::root_token(&app.config).unwrap();
 
-    let state = AppState {
-        app: app.clone(),
-        token: Arc::from(token.as_str()),
-    };
+    let state = AppState::new(app.clone()).unwrap();
     let router = solx_server::build_router(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
