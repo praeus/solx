@@ -80,7 +80,7 @@ as `Principal::Root`. Local hosts on the same machine keep using it.
 
 **Client tokens** (persisted):
 
-- New `registry.db` next to the other databases, with a `registry_db` path
+- New `solx-registry.db` next to the other databases, with a `registry_db` path
   key (added to `RESTART_KEYS`), mirroring `actions_db`.
 - Table `client_tokens(id, token_hash, label, created_at, expires_at,
   last_used_at, revoked_at)`. Only SHA-256 hashes are stored, and lookup is
@@ -227,7 +227,7 @@ for itself.
    - Issue, the revoke-on-drop guard, expiry, the sweep.
    - Test: the token works while the action runs, then gets 401.
 3. **Client tokens and storage.**
-   - `registry.db` schema and migrations; hash lookup; `last_used_at`
+   - `solx-registry.db` schema and migrations; hash lookup; `last_used_at`
      throttling; revoke.
 4. **OTCs and the exchange route.**
    - Mint, consume and expire codes; `POST /auth/exchange`; `GET /connect`;
