@@ -35,8 +35,9 @@ pub enum Principal {
 /// should keep the credential bound until the action finishes — the same
 /// pattern as `solx_console::loopback::Registration`.
 pub struct ActionCredential {
-    /// `None` when no HTTP server is bound in this process, so there is
-    /// nothing to call back into.
+    /// `None` when the authority knows of no server to call back into. The
+    /// default authority always has one: this process's bound server, else
+    /// the one a sibling host on the same appdata dir would serve.
     pub server_url: Option<String>,
     pub token: String,
     _guard: Option<Box<dyn Any + Send + Sync>>,

@@ -76,24 +76,27 @@ pub fn root_token(config: &ConfigService) -> Result<String> {
             store_error = Some(e.clone());
             SolxError::Config(e)
         })?;
-        let value = match (stored, legacy) {
-            (Some(stored), legacy) => {
-                if legacy.is_some_and(|l| l != stored) {
-                    eprintln!(
-                        "solx: solx-config.json had a different server_token than the \
-                         credential manager; keeping the credential manager's"
-                    );
-                }
-                stored
-            }
-            (None, legacy) => {
-                let token = legacy.unwrap_or_else(generate_token);
-                store_verified(&account, &token).inspect_err(|e| {
-                    store_error = Some(e.to_string());
-                })?;
-                token
-            }
+        // When both exist, the file's copy is the newer one: once migrated,
+        // `server_token` is only written again by a fallback or rotation that
+        // couldn't reach the credential manager (or by an older build). So it
+        // wins — keeping the credential manager's would silently revive a
+        // token that was rotated away.
+        let value = match (stored.as_deref(), legacy) {
+            (Some(stored), None) => stored.to_string(),
+            (_, Some(legacy)) => legacy,
+            (None, None) => generate_token(),
         };
+        if stored.as_deref() != Some(value.as_str()) {
+            if stored.is_some() {
+                eprintln!(
+                    "solx: solx-config.json had a newer server_token than the credential \
+                     manager; moving it there"
+                );
+            }
+            store_verified(&account, &value).inspect_err(|e| {
+                store_error = Some(e.to_string());
+            })?;
+        }
         obj.remove(LEGACY_KEY);
         token = Some(value);
         Ok(())
@@ -437,9 +440,34 @@ impl SingleTokenAuthority {
     }
 
     /// Built from [`root_token`], generating it if this appdata dir has none.
+    ///
+    /// Until the host reports its own bound address (`set_server_url`),
+    /// action credentials point at [`sibling_server_url`]: a process that
+    /// serves no HTTP itself (stdio `solx-mcp`, or a host whose embedded
+    /// server is off or failed to bind) still hands its Command actions the
+    /// `solx-server` a sibling host on this appdata dir would run, which
+    /// accepts this same root token.
     pub fn from_config(config: &ConfigService) -> Result<Self> {
-        Ok(Self::new(root_token(config)?))
+        let authority = Self::new(root_token(config)?);
+        authority.set_server_url(sibling_server_url(config));
+        Ok(authority)
     }
+}
+
+/// Where a `solx-server` for this appdata dir listens, as reached from this
+/// machine: `server_host`/`server_port`, with an unset or unspecified host
+/// (`0.0.0.0`/`::`) reached over loopback.
+fn sibling_server_url(config: &ConfigService) -> String {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+    let snap = config.snapshot();
+    let port = snap.server_port.unwrap_or(crate::DEFAULT_SERVER_PORT);
+    let host = match snap.server_host.as_deref().map(str::parse::<IpAddr>) {
+        Some(Ok(IpAddr::V4(ip))) if ip.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        Some(Ok(IpAddr::V6(ip))) if ip.is_unspecified() => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        Some(Ok(ip)) => ip,
+        _ => IpAddr::V4(Ipv4Addr::LOCALHOST),
+    };
+    format!("http://{}", SocketAddr::new(host, port))
 }
 
 #[async_trait]
@@ -541,6 +569,42 @@ mod tests {
         assert_eq!(cfg.snapshot().server_token, None);
     }
 
+    /// A rotation that could only reach the file must survive the
+    /// credential manager coming back, not be replaced by the old token.
+    #[test]
+    fn rotation_during_an_outage_is_not_undone() {
+        let (_d, cfg) = config();
+        let old = root_token(&cfg).unwrap();
+        set_unavailable(true);
+        let new = rotate_root_token(&cfg);
+        set_unavailable(false);
+        let new = new.unwrap();
+        assert_ne!(old, new);
+
+        assert_eq!(root_token(&cfg).unwrap(), new);
+        assert_eq!(cfg.snapshot().server_token, None);
+        assert_eq!(
+            store().get(&root_account(&cfg)).unwrap().as_deref(),
+            Some(new.as_str())
+        );
+    }
+
+    /// A token minted in the file during an outage is the one the host
+    /// served with, so it is kept once the credential manager is back.
+    #[test]
+    fn token_minted_during_an_outage_is_kept() {
+        let (_d, cfg) = config();
+        let original = root_token(&cfg).unwrap();
+        set_unavailable(true);
+        let fallback = root_token(&cfg);
+        set_unavailable(false);
+        let fallback = fallback.unwrap();
+        assert_ne!(original, fallback);
+
+        assert_eq!(root_token(&cfg).unwrap(), fallback);
+        assert_eq!(root_token_location(&cfg), "keyring");
+    }
+
     #[test]
     fn client_token_prefers_its_own_entry_then_the_root_token() {
         let (_d, cfg) = config();
@@ -630,5 +694,28 @@ mod tests {
         auth.set_server_url("http://127.0.0.1:1".into());
         let cred = auth.issue_action_token("/a", "inv").await.unwrap();
         assert_eq!(cred.server_url.as_deref(), Some("http://127.0.0.1:1"));
+    }
+
+    /// A process serving no HTTP of its own (stdio `solx-mcp`) still gives
+    /// its Command actions a URL: the sibling host's, until it binds one.
+    #[tokio::test]
+    async fn from_config_defaults_to_the_sibling_server_url() {
+        async fn url(auth: &SingleTokenAuthority) -> Option<String> {
+            auth.issue_action_token("/a", "inv").await.unwrap().server_url
+        }
+        let (_d, cfg) = config();
+
+        let auth = SingleTokenAuthority::from_config(&cfg).unwrap();
+        assert_eq!(url(&auth).await.as_deref(), Some("http://127.0.0.1:8766"));
+        auth.set_server_url("http://127.0.0.1:1".into());
+        assert_eq!(url(&auth).await.as_deref(), Some("http://127.0.0.1:1"));
+
+        cfg.set("server_port", 9000.into()).unwrap();
+        cfg.set("server_host", "0.0.0.0".into()).unwrap();
+        assert_eq!(sibling_server_url(&cfg), "http://127.0.0.1:9000");
+        cfg.set("server_host", "::".into()).unwrap();
+        assert_eq!(sibling_server_url(&cfg), "http://[::1]:9000");
+        cfg.set("server_host", "10.0.0.5".into()).unwrap();
+        assert_eq!(sibling_server_url(&cfg), "http://10.0.0.5:9000");
     }
 }
