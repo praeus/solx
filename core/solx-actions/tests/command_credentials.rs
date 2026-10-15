@@ -1,6 +1,6 @@
 //! A spawned Command action is handed `SOLX_SERVER_URL`/`SOLX_SERVER_TOKEN`
-//! by the manager's token authority, and `action_config.env` can't override
-//! either one.
+//! by the manager's token authority. The removed `action_config.env` map is
+//! ignored, so it can neither override them nor add variables of its own.
 
 use std::sync::Arc;
 
@@ -95,19 +95,20 @@ async fn run_print_env(action_config: Option<Value>) -> Vec<String> {
 
 #[tokio::test]
 async fn command_receives_server_url_and_token() {
-    let out = run_print_env(Some(json!({ "env": { "SOLX_TEST_OTHER": "kept" } }))).await;
-    assert_eq!(out, ["issued-token", "http://127.0.0.1:9", "kept"]);
+    let out = run_print_env(None).await;
+    assert_eq!(out[..2], ["issued-token", "http://127.0.0.1:9"]);
 }
 
 #[tokio::test]
-async fn action_config_env_cannot_override_injected_vars() {
+async fn action_config_env_is_ignored() {
     let out = run_print_env(Some(json!({
         "env": {
             "SOLX_SERVER_TOKEN": "stale-token",
             "SOLX_SERVER_URL": "http://elsewhere",
-            "SOLX_TEST_OTHER": "kept",
+            "SOLX_TEST_OTHER": "not-forwarded",
         }
     })))
     .await;
-    assert_eq!(out, ["issued-token", "http://127.0.0.1:9", "kept"]);
+    assert_eq!(out[..2], ["issued-token", "http://127.0.0.1:9"]);
+    assert!(!out.iter().any(|v| v == "not-forwarded"), "{out:?}");
 }

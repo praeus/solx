@@ -253,3 +253,49 @@ async fn router_list_all_respects_path_prefix() -> anyhow::Result<()> {
     server_task.await?;
     Ok(())
 }
+
+/// A stdio-style transport carries no HTTP request, so there is no
+/// authenticated principal: the tool call runs as an unauthenticated local
+/// entry point, which `external_principal()` refuses.
+#[tokio::test]
+async fn non_http_transport_runs_with_no_principal() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    // Never touch the real OS credential manager from a test.
+    solx_config::credentials::use_memory_store_for_tests();
+    let app = solx_manager::App::build_local_in(dir.path()).await?;
+    app.actions()
+        .save(
+            "/t",
+            "probe",
+            ActionInput {
+                action_type: Some(ActionType::Internal),
+                fn_name: Some(solx_actions::test_probe::FN_NAME.into()),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
+    let server_task = tokio::spawn(async move {
+        server::SolxMcpServer::new(app, None)
+            .serve(server_transport)
+            .await
+            .expect("server serve")
+            .waiting()
+            .await
+            .expect("server waiting");
+    });
+    let client = ().serve(client_transport).await?;
+
+    let called = client
+        .call_tool(CallToolRequestParams::new("act__t__probe"))
+        .await?;
+    assert_eq!(
+        called.structured_content,
+        Some(serde_json::json!({"principal": null, "caller": null, "external": null}))
+    );
+
+    client.cancel().await?;
+    server_task.await?;
+    Ok(())
+}

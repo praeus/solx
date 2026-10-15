@@ -1,13 +1,14 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::get;
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use axum_extra::extract::Query;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use solx_surface::entities::{Action, ActionExecResult, ActionInput};
 use solx_surface::managers::Solx;
 use solx_surface::query::{ActionSearchQuery, ListOptions, Page, PathFacet};
+use solx_surface::Principal;
 
 use solx_config::EntityKind;
 
@@ -130,13 +131,21 @@ struct SearchTerm {
 /// Execute the action. The body is optional so a parameterless action can
 /// be invoked with an empty `POST` (no `Content-Type` needed) rather than
 /// forcing callers to send a literal `{}`.
+///
+/// Runs as the [`Principal`] `require_bearer` authenticated — the route
+/// layer always inserts one before this handler runs.
 async fn exec_action(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Path(reference): Path<String>,
     body: Option<Json<Value>>,
 ) -> Result<Json<ActionExecResult>, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
     let params = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
-    let result = state.app.actions().exec(&path, &name, params).await?;
+    let result = state
+        .app
+        .actions()
+        .exec_for(&principal, &path, &name, params)
+        .await?;
     Ok(Json(result))
 }

@@ -34,7 +34,7 @@ Everything phase 3 needs to plug into already exists:
 | `SingleTokenAuthority` | `solx-config/src/credentials.rs` | The default: every valid bearer is `Principal::Root`, and every action gets the root token. |
 | `build_authority(&config)` | `solx-manager/src/lib.rs` | **The one swap point.** Phase 3 adds `#[cfg(feature = "registry")]` here. |
 | `require_bearer` | `solx-server/src/auth.rs` | Calls `authenticate` and puts the `Principal` in the request extensions. Covers REST and `/mcp`. |
-| Command env injection | `solx-actions/src/exec.rs` `run_command` | Calls `issue_action_token` and sets `SOLX_SERVER_URL`/`SOLX_SERVER_TOKEN` on the child, overriding `action_config.env`. Keeps the credential alive until the child exits. |
+| Command env injection | `solx-actions/src/exec.rs` `run_command` | Calls `issue_action_token` and sets `SOLX_SERVER_URL`/`SOLX_SERVER_TOKEN` on the child. Action config can't set or override environment variables (`action_config.env` was removed). Keeps the credential alive until the child exits. |
 | Root token storage | `credentials::root_token` | OS credential manager (`solx` / `root:<appdata hash>`); legacy `server_token` is migrated out of the config file. |
 | Client token storage | `credentials::{client_token, stored_client_token, set_client_token, forget_client_token}` | Per `(appdata, server URL)` entries in the credential manager. The root token is offered only to loopback URLs. |
 | Binary-only CLI commands | `solx-cli/src/main.rs` `BinCommand` | `solx token show|rotate`. Deliberately not in `Commands`, which `.solx` scripts (including package `install.solx`) can call. |
@@ -157,41 +157,43 @@ Add binary-only CLI equivalents for local use:
 - `solx token connect-code [--label]`
 - `solx token clients`
 - `solx token revoke <id>`
-- optionally `solx token issue --label` to mint a client token directly.
+- additionally `solx token issue --label` to mint a client token directly.
 
-### Who may call the auth builtins — the open problem
+### Who may call the auth builtins — resolved: explicit plumbing
 
 The registry builtins must refuse anyone holding an action token, and anything
-running inside an action. They need the caller's `Principal`, but today it
-stops at the HTTP layer:
+running inside an action. They need the caller's `Principal`, which used to
+stop at the HTTP layer. We chose to carry it explicitly (option 2) rather than
+in a task-local (option 1), because task-locals don't cross `tokio::spawn` and
+`action-start` spawns detached tasks. This is now implemented:
 
-- `require_bearer` puts the `Principal` in the request extensions.
-- Route handlers call `state.app.actions().exec(path, name, params)`. The
-  `ActionManager` trait has no principal parameter, by design (see
-  `crate::caller` in solx-actions).
-- In-process callers inside actions (WASM and script frames) arrive with
-  `InternalCallCtx.caller = Some(..)`, which is easy to refuse.
+- `ActionManager::exec_for(principal, path, name, params)` is a required trait
+  method. `exec` still means "no principal" (CLI, stdio MCP, Tauri).
+- REST exec takes `Extension<Principal>` from `require_bearer` and calls
+  `exec_for`.
+- `/mcp` needed no task-local after all. rmcp's streamable HTTP transport puts
+  each request's `http::request::Parts` into `RequestContext::extensions`, so
+  `call_tool` reads the `Principal` from there (`request_principal` in
+  solx-mcp). Stdio has no `Parts`, so it gets `None`.
+- The principal travels through `exec_as`/`exec_as_with` into `InternalCtx`
+  and `InternalCallCtx.principal`. Nested frames (WASM, script, `script-exec`)
+  **inherit** it for attribution.
+- `action-start` moves both the principal **and** the caller into the spawned
+  task. `start_invocation` rebuilds the full `Caller` from the calling
+  action's row. Dropping the caller would let an action launched by Root
+  re-enter as an apparently external Root call.
+- Because nested frames inherit the principal, guards must check the caller
+  first. They use `InternalCallCtx::external_principal()`, which fails closed:
+  it returns `None` if an action is in the chain, if the principal is
+  `Principal::Action`, or if there is no principal.
+- Tests: `solx_actions::test_probe` (behind the `test-probe` feature, enabled
+  only from dev-dependencies) echoes what a handler receives. It covers REST,
+  `/mcp`, stdio, nested scripts and detached runs
+  (`solx-server/tests/principal.rs`, `solx-actions/src/test_probe.rs`).
 
-Options:
-
-1. **Task-local, scoped in the middleware.** `require_bearer` runs the rest of
-   the request inside `CURRENT_PRINCIPAL.scope(principal, ...)`, and the
-   builtin reads it. The task-local can live **in solx-registry** (solx-server
-   only scopes it with the feature on), so solx-surface doesn't need tokio.
-   - **Danger:** task-locals don't cross `tokio::spawn`. The `/mcp` transport
-     (rmcp streamable HTTP) may well run tool calls on spawned session tasks,
-     and `action-start` spawns detached tasks.
-   - Whatever reads the task-local must **fail closed**: a missing principal
-     means *deny*, never Root.
-   - Verify the `/mcp` path explicitly before relying on this.
-2. **Explicit plumbing.** Carry `Option<Principal>` through `exec_as_with`
-   into `InternalCallCtx`, and give the HTTP and MCP routes a way to pass it.
-   It never crosses the wire, so it can't be spoofed. More code, but it can't
-   silently drop the principal.
-
-Recommendation: **option 2** if `/mcp` turns out to spawn. Otherwise option 1
-is acceptable, with fail-closed reads and a test for each entry point (REST
-exec, `/mcp` tool call, `action-start`).
+Still open: `issue_action_token` hands Command children the root token, so
+they authenticate as Root until the registry issues real `Principal::Action`
+tokens.
 
 Policy:
 
@@ -216,6 +218,40 @@ for itself.
   expiry in `list-clients`.
 - Log redemptions and revocations to the console of the auth builtins, never
   with the token or code.
+
+### Follow-on: authorization that the principal makes possible
+
+These aren't part of phase 3. They become possible once real
+`Principal::Client`/`Principal::Action` tokens exist, and they should reuse
+`external_principal()` so they fail closed in the same way.
+
+- **Gate Command/Webhook saves on every route** (lower priority).
+  `guard_executable_action` currently covers only the
+  `entity-save-action`/`entity-delete-action` built-ins. HTTP
+  `/actions/save` and Tauri `actions-save` are left open because every
+  token is root. With the registry, `save`/`delete` of a `command` or
+  `webhook` row would be allowed only for `Principal::Root` (and possibly
+  `Client` tokens marked `admin`). It would be refused for
+  `Principal::Action`, for any call with an action `Caller`, and for no
+  principal on a network route. That closes the remaining paths an action
+  could use to self-grant, including a Command child calling back with
+  `SOLX_SERVER_TOKEN`.
+  - The local CLI (and so `install.solx`) still calls `save` directly with
+    no principal, and must keep working.
+  - Tauri needs a decision of its own. It's in-process with no token, so
+    the gate there would be a narrower permission set, for example taking
+    `actions-save` for Command/Webhook out of `default`, rather than a
+    principal check.
+- **Scope `get-env`/`set-env`.** The env store is a global, process-wide
+  map. That's by design, but it also holds system variables copied in
+  through `env_mappings`. Options:
+  - refuse `set-env` to `Principal::Action` and to action callers outside
+    the namespace they own;
+  - make `env_mappings`-seeded entries read-only;
+  - let a namespace declare which principals may read it.
+
+  Decide once there are principals to scope by. Until then, treat anything
+  in the store as readable by all content.
 
 ## Implementation steps
 

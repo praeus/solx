@@ -264,13 +264,22 @@ impl InternalActionHandler for ActionStart {
     async fn call(
         &self,
         params: &Value,
-        _ctx: &InternalCallCtx,
+        ctx: &InternalCallCtx,
     ) -> std::result::Result<Value, String> {
         let name = require_str(params, "name")?;
         let path = path_or_root(params);
         let action_params = params.get("params").cloned().unwrap_or_else(|| json!({}));
+        // Both travel into the detached run: dropping the caller while
+        // keeping the principal would let an action re-enter as an
+        // apparently external call (see `InternalCallCtx::external_principal`).
         self.executor
-            .start_invocation(path, name, action_params)
+            .start_invocation(
+                path,
+                name,
+                action_params,
+                ctx.principal.clone(),
+                ctx.caller.clone(),
+            )
             .await
             .map_err(|e| e.to_string())
     }

@@ -60,6 +60,30 @@ fn log_dir_slug(action_ref: &str) -> String {
         .collect()
 }
 
+/// `action_config.env` used to be forwarded to the child. It was removed:
+/// every package used it only to set `SOLX_SERVER_URL`, which solx now
+/// injects itself, and it was readable by anyone who could `get` the action
+/// (`crate::mask` doesn't cover it). Rows saved before the removal still
+/// carry the map, so it's ignored — and only a key other than that one is
+/// worth a warning, since that's the only case whose behavior changed.
+fn warn_on_removed_env(action_ref: &str, action_config: &Option<Value>) {
+    let Some(env) = action_config
+        .as_ref()
+        .and_then(|c| c.get("env"))
+        .and_then(Value::as_object)
+    else {
+        return;
+    };
+    for key in env.keys().filter(|k| k.as_str() != ENV_SERVER_URL) {
+        tracing::warn!(
+            action_ref = %action_ref,
+            env_key = %key,
+            "action_config.env is no longer supported and is ignored; set the \
+             variable in the command_actions entry's command instead",
+        );
+    }
+}
+
 /// Run a `Command` action. `fn_name` is a key resolved against the
 /// `command_actions` allowlist (see the module doc); the matching
 /// `CommandDef.command` is what actually executes. Params are passed as
@@ -183,57 +207,13 @@ pub async fn run_command(
             .env("SOLX_CONTROL_URL", reg.control_url());
     }
 
-    // The variables `credential` sets below. Applied after
-    // `action_config.env`, and that map's entries for them are skipped, so a
-    // token stored in action config can never stand in for the one the
-    // authority issued for this invocation.
-    let injected: Vec<(&str, &str)> = match &credential {
-        Some(c) => {
-            let mut vars = vec![(ENV_SERVER_TOKEN, c.token.as_str())];
-            if let Some(url) = &c.server_url {
-                vars.push((ENV_SERVER_URL, url.as_str()));
-            }
-            vars
-        }
-        None => Vec::new(),
-    };
-
-    // Forward any `action_config.env` map to the spawned child.
-    // String values only — non-string entries are skipped with a warning
-    // rather than silently dropped, since silently dropping a secret
-    // would be the worse failure mode.
-    if let Some(cfg) = action_config {
-        if let Some(env) = cfg.get("env").and_then(|v| v.as_object()) {
-            for (k, v) in env {
-                if let Some((_, value)) = injected.iter().find(|(name, _)| name == k) {
-                    // Packages' install scripts commonly set the same
-                    // SOLX_SERVER_URL solx injects; only a differing value
-                    // is worth a warning.
-                    if v.as_str() != Some(*value) {
-                        tracing::warn!(
-                            action_ref = %action_ref,
-                            env_key = %k,
-                            "action_config.env entry is set by solx for each invocation; ignoring it",
-                        );
-                    }
-                    continue;
-                }
-                match v.as_str() {
-                    Some(s) => {
-                        cmd.env(k, s);
-                    }
-                    None => tracing::warn!(
-                        action_ref = %action_ref,
-                        env_key = %k,
-                        "action_config.env entry is not a string; skipping",
-                    ),
-                }
-            }
+    if let Some(c) = &credential {
+        cmd.env(ENV_SERVER_TOKEN, &c.token);
+        if let Some(url) = &c.server_url {
+            cmd.env(ENV_SERVER_URL, url);
         }
     }
-    for (name, value) in &injected {
-        cmd.env(name, value);
-    }
+    warn_on_removed_env(action_ref, action_config);
     let mut child = cmd.spawn().map_err(|e| {
         SolxError::Exec(format!("spawn command key '{fn_name}' ('{command}'): {e}"))
     })?;
@@ -887,6 +867,15 @@ mod tests {
             _params: Value,
         ) -> Result<solx_surface::entities::ActionExecResult> {
             panic!("stub ActionManager::exec should not be called by these tests")
+        }
+        async fn exec_for(
+            &self,
+            _principal: &solx_surface::Principal,
+            _path: &str,
+            _name: &str,
+            _params: Value,
+        ) -> Result<solx_surface::entities::ActionExecResult> {
+            panic!("stub ActionManager::exec_for should not be called by these tests")
         }
     }
 

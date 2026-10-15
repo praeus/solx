@@ -756,6 +756,15 @@ mod tests {
         ) -> solx_surface::error::Result<ActionExecResult> {
             panic!("stub ActionManager::exec should not be called by these tests")
         }
+        async fn exec_for(
+            &self,
+            _principal: &solx_surface::Principal,
+            _path: &str,
+            _name: &str,
+            _params: Value,
+        ) -> solx_surface::error::Result<ActionExecResult> {
+            panic!("stub ActionManager::exec_for should not be called by these tests")
+        }
     }
 
     fn stub_actions() -> StubActionManager {

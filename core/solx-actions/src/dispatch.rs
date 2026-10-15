@@ -8,6 +8,7 @@ use serde_json::Value;
 use solx_surface::entities::{Action, ActionExecResult, ActionType};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::path::full_ref;
+use solx_surface::Principal;
 use uuid::Uuid;
 
 use crate::caller::Caller;
@@ -67,18 +68,23 @@ impl LocalActionManager {
     /// i.e. mint a fresh one at dispatch time, the behavior every existing
     /// caller of this method already gets.
     ///
-    /// `caller` is `Some` only on the recursive hop: a WASM guest calling
-    /// `action-exec` (see [`crate::wasm`]), which is the sole
-    /// re-entrant path into execution. It scopes `get-secret`/`set-secret`
-    /// to the *calling* action's own keys.
+    /// `caller` is `Some` only on a recursive hop from another action (a
+    /// WASM guest's `action-exec`, a script's `exec` stage). It scopes
+    /// `get-secret`/`set-secret` to the *calling* action's own keys.
+    ///
+    /// `principal` is the authenticated party the call chain started from
+    /// (see `ActionManager::exec_for`), inherited unchanged by nested
+    /// frames; `None` for local entry points.
     pub async fn exec_as(
         &self,
         path: &str,
         name: &str,
         params: Value,
         caller: Option<&Caller>,
+        principal: Option<&Principal>,
     ) -> Result<ActionExecResult> {
-        self.exec_as_with(path, name, params, caller, None).await
+        self.exec_as_with(path, name, params, caller, principal, None)
+            .await
     }
 
     /// Like [`Self::exec_as`], but lets the caller fix the `invocation_id`
@@ -111,10 +117,18 @@ impl LocalActionManager {
         name: &'a str,
         params: Value,
         caller: Option<&'a Caller>,
+        principal: Option<&'a Principal>,
         invocation_id: Option<&'a str>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ActionExecResult>> + Send + 'a>>
     {
-        Box::pin(self.exec_as_with_inner(path, name, params, caller, invocation_id))
+        Box::pin(self.exec_as_with_inner(
+            path,
+            name,
+            params,
+            caller,
+            principal,
+            invocation_id,
+        ))
     }
 
     async fn exec_as_with_inner(
@@ -123,6 +137,7 @@ impl LocalActionManager {
         name: &str,
         params: Value,
         caller: Option<&Caller>,
+        principal: Option<&Principal>,
         invocation_id: Option<&str>,
     ) -> Result<ActionExecResult> {
         let action = self.get_unmasked(path, name).await?;
@@ -222,6 +237,7 @@ impl LocalActionManager {
                     registry: self.internal_registry(),
                     action_config: action.action_config.clone(),
                     caller: caller.cloned(),
+                    principal: principal.cloned(),
                 };
                 internal::run_internal(fn_name, &params, &ctx)
                     .await
@@ -257,6 +273,7 @@ impl LocalActionManager {
                     action.fn_name.as_deref(),
                     &params,
                     frame,
+                    principal.cloned(),
                     effective_timeout,
                 )
                 .await;
@@ -278,6 +295,7 @@ impl LocalActionManager {
                 let runner = script::ActionCommandRunner {
                     actions: self.self_arc()?,
                     caller: frame,
+                    principal: principal.cloned(),
                 };
                 let initial =
                     std::collections::HashMap::from([("params".to_string(), params.clone())]);

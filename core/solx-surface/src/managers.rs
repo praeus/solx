@@ -11,6 +11,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::auth::Principal;
 use crate::entities::*;
 use crate::error::Result;
 use crate::query::*;
@@ -65,7 +66,20 @@ pub trait ActionManager: Send + Sync {
     /// Distinct path values in use, each with a count of actions at that path.
     async fn paths(&self, opts: ListOptions) -> Result<Page<PathFacet>>;
     async fn search(&self, query: ActionSearchQuery) -> Result<Page<Action>>;
+    /// Execute with no authenticated principal — local entry points (CLI,
+    /// stdio MCP, Tauri) that never ran `TokenAuthority::authenticate`.
     async fn exec(&self, path: &str, name: &str, params: Value) -> Result<ActionExecResult>;
+    /// Execute on behalf of `principal`, as established by
+    /// `TokenAuthority::authenticate` on the route that received the call.
+    /// Required, with no default, so no implementation can drop the
+    /// principal by forgetting to override it.
+    async fn exec_for(
+        &self,
+        principal: &Principal,
+        path: &str,
+        name: &str,
+        params: Value,
+    ) -> Result<ActionExecResult>;
 }
 
 /// Optional aggregate facade composing the four managers. A future

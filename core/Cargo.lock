@@ -5508,6 +5508,7 @@ name = "solx-mcp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "http 1.4.2",
  "rmcp",
  "serde_json",
  "solx-actions",

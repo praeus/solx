@@ -4,6 +4,7 @@ use solx_surface::entities::{Action, ActionExecResult, ActionInput};
 use solx_surface::error::Result;
 use solx_surface::managers::ActionManager;
 use solx_surface::query::{ActionSearchQuery, ListOptions, Page, PathFacet};
+use solx_surface::Principal;
 
 use crate::http::{
     collection_url, delete, entity_crud_url, entity_url, explicit_mode, get_json, get_json_query,
@@ -74,5 +75,18 @@ impl ActionManager for RemoteActionManager {
     async fn exec(&self, path: &str, name: &str, params: Value) -> Result<ActionExecResult> {
         let url = entity_url(&self.base_url, "actions", path, name)?;
         post_json(&self.http, &self.token, url, &params).await
+    }
+
+    /// Same request as [`Self::exec`]. A principal never crosses the wire:
+    /// the server re-derives it from this client's bearer token, so the
+    /// one passed in here has nothing to contribute.
+    async fn exec_for(
+        &self,
+        _principal: &Principal,
+        path: &str,
+        name: &str,
+        params: Value,
+    ) -> Result<ActionExecResult> {
+        self.exec(path, name, params).await
     }
 }

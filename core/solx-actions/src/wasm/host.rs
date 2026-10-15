@@ -22,6 +22,7 @@ use serde_json::Value;
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::FileStore;
 use solx_surface::path::split_ref;
+use solx_surface::Principal;
 use wasmtime::component::Component;
 use wasmtime::{Config, Engine};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
@@ -147,6 +148,9 @@ pub(super) struct HostState {
     files: Arc<dyn FileStore>,
     /// The guest currently running, as seen by anything it invokes.
     caller: Caller,
+    /// Inherited from the call that started this guest; carried on to
+    /// every nested `action-exec`.
+    principal: Option<Principal>,
     wasi: WasiCtx,
     table: ResourceTable,
 }
@@ -156,11 +160,13 @@ impl HostState {
         actions: Arc<LocalActionManager>,
         files: Arc<dyn FileStore>,
         caller: Caller,
+        principal: Option<Principal>,
     ) -> Self {
         HostState {
             actions,
             files,
             caller,
+            principal,
             wasi: WasiCtxBuilder::new().build(),
             table: ResourceTable::new(),
         }
@@ -222,7 +228,13 @@ impl sol::actions::action_exec::Host for HostState {
             serde_json::from_str(&payload).map_err(|e| format!("invalid params: {e}"))?;
         let result: solx_surface::entities::ActionExecResult = self
             .actions
-            .exec_as(&path, &name, params, Some(&self.caller))
+            .exec_as(
+                &path,
+                &name,
+                params,
+                Some(&self.caller),
+                self.principal.as_ref(),
+            )
             .await
             .map_err(|e| e.to_string())?;
         Ok(sol::actions::types::ActionResult {

@@ -27,6 +27,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::auth::Principal;
 use crate::error::Result;
 use crate::managers::{ActionManager, DocManager, FileStore, TypeManager};
 
@@ -34,17 +35,27 @@ use crate::managers::{ActionManager, DocManager, FileStore, TypeManager};
 
 /// Identity of the action that initiated an execution.
 ///
-/// Only one caller exists today: an action invoking another action. That
-/// happens in exactly one place — a WASM guest calling `action-exec`, which
-/// is the sole re-entrant path into execution (internal actions do entity
-/// CRUD only, never `exec`). Everything else — the CLI, the MCP server, the
-/// HTTP route, `solx-client` — enters through `ActionManager::exec` and has
-/// no action caller, i.e. `None`.
+/// Only one caller exists today: an action invoking another action — a WASM
+/// guest calling `action-exec`, a `Script` action's `exec` stage, or a
+/// `script-exec` run. Everything else — the CLI, the MCP server, the HTTP
+/// route, `solx-client` — enters through `ActionManager::exec`/`exec_for`
+/// and has no action caller, i.e. `None`.
 ///
 /// That containment is deliberate. A `Caller` is built by the host from a
 /// row it just read, never parsed from a request, never serialized, and
 /// never crosses the process boundary — so unlike a client-declared
 /// identity it cannot be spoofed.
+///
+/// ## Caller vs. principal
+///
+/// The *authenticated* party behind a call is a separate value, the
+/// [`Principal`], which enters only through `ActionManager::exec_for` from
+/// a route that just ran `TokenAuthority::authenticate`. It is plumbed
+/// explicitly (never a task-local) so a `tokio::spawn` on the way — e.g. a
+/// detached `action-start` run — cannot silently drop it. Nested frames
+/// inherit the originating principal for attribution, so an authorization
+/// check must look at the caller *first*: see
+/// [`InternalCallCtx::external_principal`].
 ///
 /// ## What it carries, and what it must not
 ///
@@ -205,6 +216,35 @@ pub struct InternalCallCtx {
     /// A pluggable handler can never reach a secret key through this field,
     /// even by accident: [`Caller`] (which can) never appears here.
     pub caller: Option<CallerInfo>,
+    /// Who authenticated the call this chain started from, when it came in
+    /// through an authenticated route; `None` for local entry points (CLI,
+    /// stdio MCP, Tauri). Inherited by nested frames, so on its own it does
+    /// **not** mean "an external party called this handler directly" — use
+    /// [`Self::external_principal`] for any authorization decision.
+    pub principal: Option<Principal>,
+}
+
+impl InternalCallCtx {
+    /// The principal to authorize against, failing closed: `None` when an
+    /// action is in the call chain (whatever principal it inherited), when
+    /// the principal is itself an action token, or when there is no
+    /// principal at all. A handler that gates on this must treat `None` as
+    /// *deny*, never as root.
+    pub fn external_principal(&self) -> Option<&Principal> {
+        external_principal(self.caller.is_some(), self.principal.as_ref())
+    }
+}
+
+/// The decision behind [`InternalCallCtx::external_principal`], split out so
+/// it can be tested without constructing four manager trait objects.
+fn external_principal(has_caller: bool, principal: Option<&Principal>) -> Option<&Principal> {
+    if has_caller {
+        return None;
+    }
+    match principal {
+        Some(Principal::Action { .. }) | None => None,
+        Some(p) => Some(p),
+    }
 }
 
 /// One internal action's implementation. Handlers are constructed with
@@ -226,9 +266,22 @@ pub trait InternalActionHandler: Send + Sync {
 /// 1:1 — see their doc comments in `solx-actions` for the full behavior
 /// (long-lived-host requirement, cooperative-then-forced cancellation,
 /// long-poll cadence).
+///
+/// `start_invocation` takes the starting call's `principal` and `caller` so
+/// the detached run keeps both across its `tokio::spawn`. Dropping the
+/// caller while keeping the principal would let an action launched by root
+/// re-enter as an apparently external root call — see
+/// [`InternalCallCtx::external_principal`].
 #[async_trait]
 pub trait ActionExecutor: Send + Sync {
-    async fn start_invocation(&self, path: &str, name: &str, params: Value) -> Result<Value>;
+    async fn start_invocation(
+        &self,
+        path: &str,
+        name: &str,
+        params: Value,
+        principal: Option<Principal>,
+        caller: Option<CallerInfo>,
+    ) -> Result<Value>;
     async fn stop_invocation(
         &self,
         invocation_id: &str,
@@ -284,5 +337,41 @@ impl InternalActionRegistry {
     pub fn merge(&mut self, other: InternalActionRegistry) {
         self.handlers.extend(other.handlers);
         self.seeds.extend(other.seeds);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client() -> Principal {
+        Principal::Client {
+            id: "c1".into(),
+            label: None,
+        }
+    }
+
+    fn action() -> Principal {
+        Principal::Action {
+            action_ref: "/pkg/a".into(),
+            invocation_id: "i1".into(),
+        }
+    }
+
+    #[test]
+    fn external_principal_allows_root_and_client_with_no_caller() {
+        assert_eq!(external_principal(false, Some(&Principal::Root)), Some(&Principal::Root));
+        assert_eq!(external_principal(false, Some(&client())), Some(&client()));
+    }
+
+    #[test]
+    fn external_principal_fails_closed() {
+        // No principal at all: a local entry point, never treated as root.
+        assert_eq!(external_principal(false, None), None);
+        // An action token is not an external party.
+        assert_eq!(external_principal(false, Some(&action())), None);
+        // An action in the chain wins over whatever principal it inherited.
+        assert_eq!(external_principal(true, Some(&Principal::Root)), None);
+        assert_eq!(external_principal(true, Some(&client())), None);
     }
 }

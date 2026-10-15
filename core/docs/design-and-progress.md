@@ -12,7 +12,8 @@ Companion documents:
   what logging actually reaches an operator today (short answer: almost
   nothing), and a design for action consoles, with notifications and action
   events sketched as future work. **Design discussion, not implemented.**
-- [future-security-enhancements.md](future-security-enhancements.md)
+- [security-design.md](security-design.md) — the current security model:
+  trust boundaries, identity, allowlists, secrets, and known gaps.
 - [next-steps.md](next-steps.md) — cross-repo roadmap (solx-core/solx-web/
   solx-js/Pi): the command/webhook allowlist, MCP Resources/Prompts, the
   solx-web port, and the future Pi extension.

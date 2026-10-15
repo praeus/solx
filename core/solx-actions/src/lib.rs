@@ -27,6 +27,8 @@ mod seed;
 mod store;
 #[cfg(test)]
 mod test_support;
+#[cfg(any(test, feature = "test-probe"))]
+pub mod test_probe;
 pub mod wasm;
 
 pub use invocation::set_long_lived_host;
@@ -41,8 +43,9 @@ use solx_config::ConfigService;
 use solx_console::{ConsoleStore, InvocationStore};
 use solx_surface::auth::TokenAuthority;
 use solx_surface::error::{Result, SolxError};
-use solx_surface::internal_actions::{ActionExecutor, InternalActionRegistry};
+use solx_surface::internal_actions::{ActionExecutor, CallerInfo, InternalActionRegistry};
 use solx_surface::managers::{DocManager, FileStore, TypeManager};
+use solx_surface::Principal;
 use tokio::task::AbortHandle;
 
 use db::Db;
@@ -85,8 +88,8 @@ pub struct LocalActionManager {
     ///
     /// Concrete rather than `Weak<dyn ActionManager>` so the recursive hop
     /// can reach [`Self::exec_as`], which carries the calling action's
-    /// identity. The trait's `exec` has no room for it, and deliberately
-    /// so — see [`crate::caller`].
+    /// identity. The trait's `exec`/`exec_for` have no room for it, and
+    /// deliberately so — see [`crate::caller`].
     self_ref: OnceLock<Weak<LocalActionManager>>,
     /// Issues the `SOLX_SERVER_URL`/`SOLX_SERVER_TOKEN` handed to each
     /// spawned Command action. Set once by the host (see
@@ -96,8 +99,15 @@ pub struct LocalActionManager {
 
 #[async_trait]
 impl ActionExecutor for LocalActionManager {
-    async fn start_invocation(&self, path: &str, name: &str, params: Value) -> Result<Value> {
-        LocalActionManager::start_invocation(self, path, name, params).await
+    async fn start_invocation(
+        &self,
+        path: &str,
+        name: &str,
+        params: Value,
+        principal: Option<Principal>,
+        caller: Option<CallerInfo>,
+    ) -> Result<Value> {
+        LocalActionManager::start_invocation(self, path, name, params, principal, caller).await
     }
 
     async fn stop_invocation(
@@ -204,11 +214,14 @@ impl LocalActionManager {
     pub fn set_self_ref(&self, self_ref: Weak<LocalActionManager>) {
         if let Some(strong) = self_ref.upgrade() {
             let executor: Arc<dyn ActionExecutor> = strong;
-            let plugin = solx_console::actions::plugin(
+            #[allow(unused_mut)]
+            let mut plugin = solx_console::actions::plugin(
                 self.console.clone(),
                 self.invocations.clone(),
                 executor,
             );
+            #[cfg(any(test, feature = "test-probe"))]
+            plugin.merge(test_probe::plugin());
             let _ = self.internal_registry.set(Arc::new(plugin));
         }
         let _ = self.self_ref.set(self_ref);

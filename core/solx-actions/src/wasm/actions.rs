@@ -16,6 +16,7 @@ use serde_json::Value;
 use solx_surface::entities::ActionExecResult;
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::FileStore;
+use solx_surface::Principal;
 use wasmtime::component::{HasSelf, Linker};
 use wasmtime::Store;
 
@@ -32,10 +33,13 @@ const DEFAULT_TIMEOUT_SECS: u64 = 300;
 /// Execute a custom WASM action component. `caller` identifies the action
 /// being executed — it labels the returned `ActionExecResult.action`, and
 /// it is what anything this guest invokes via `action-exec` will see as
-/// *its* caller. `fn_name` is passed through to the guest's `run` export.
+/// *its* caller. `principal` is inherited from the call that started this
+/// guest and carried on to anything it invokes. `fn_name` is passed through
+/// to the guest's `run` export.
 ///
 /// `timeout_secs` is the wall-clock ceiling for the whole invocation,
 /// including everything it recursively invokes.
+#[allow(clippy::too_many_arguments)]
 pub async fn exec(
     actions: Arc<LocalActionManager>,
     files: Arc<dyn FileStore>,
@@ -43,6 +47,7 @@ pub async fn exec(
     fn_name: Option<&str>,
     params: &Value,
     caller: Caller,
+    principal: Option<Principal>,
     timeout_secs: Option<u64>,
 ) -> Result<ActionExecResult> {
     let params_json = serde_json::to_string(params).map_err(|e| SolxError::Exec(e.to_string()))?;
@@ -57,6 +62,7 @@ pub async fn exec(
         fn_name_owned.clone(),
         params_json,
         caller,
+        principal,
     );
 
     // `spawn_blocking` used to absorb panics into a `JoinError`; without it
@@ -101,12 +107,13 @@ async fn run_guest(
     fn_name: Option<String>,
     params_json: String,
     caller: Caller,
+    principal: Option<Principal>,
 ) -> Result<ActionExecResult> {
     let eng = engine();
     let component = compile_component(wasm_bytes).await?;
 
     let action_ref = caller.action_ref().to_string();
-    let state = HostState::new(actions, files, caller);
+    let state = HostState::new(actions, files, caller, principal);
     let mut store = Store::new(eng, state);
 
     // Yield rather than trap when the epoch advances: a busy guest hands

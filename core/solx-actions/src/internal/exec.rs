@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
+use solx_surface::Principal;
 
 use crate::caller::Caller;
 use crate::script::ActionCommandRunner;
@@ -36,11 +37,13 @@ const ANON_CALLER_REF: &str = "/builtin/script/exec";
 /// Nested `exec` stages inside the script run as `caller` when this call has
 /// one (a script action or WASM guest invoking `script-exec` recursively),
 /// so they reach exactly the same secrets that caller could reach directly —
-/// otherwise they run as the caller-less identity above.
+/// otherwise they run as the caller-less identity above. Either way they
+/// carry `principal` on, like any nested frame.
 pub(super) async fn exec(
     params: &Value,
     local: &Arc<LocalActionManager>,
     caller: Option<&Caller>,
+    principal: Option<&Principal>,
 ) -> Result<Value, String> {
     let source = require_str(params, "script")?;
     let script_params = params
@@ -54,6 +57,7 @@ pub(super) async fn exec(
         caller: caller
             .cloned()
             .unwrap_or_else(|| Caller::from_action(ANON_CALLER_REF, None)),
+        principal: principal.cloned(),
     };
 
     let initial = HashMap::from([("params".to_string(), script_params)]);
@@ -98,7 +102,7 @@ mod tests {
     #[tokio::test]
     async fn runs_a_json_only_script_and_returns_its_result() {
         let (_d, local) = test_local().await;
-        let v = exec(&json!({"script": "json 5"}), &local, None)
+        let v = exec(&json!({"script": "json 5"}), &local, None, None)
             .await
             .unwrap();
         assert_eq!(v, Value::from(5));
@@ -111,6 +115,7 @@ mod tests {
             &json!({"script": r#"json '"$params.mode"'"#, "params": {"mode": "fast"}}),
             &local,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -120,14 +125,14 @@ mod tests {
     #[tokio::test]
     async fn missing_script_param_errors() {
         let (_d, local) = test_local().await;
-        let err = exec(&json!({}), &local, None).await.unwrap_err();
+        let err = exec(&json!({}), &local, None, None).await.unwrap_err();
         assert!(err.contains("missing required param: script"), "{err}");
     }
 
     #[tokio::test]
     async fn invalid_script_syntax_surfaces_as_an_error() {
         let (_d, local) = test_local().await;
-        let err = exec(&json!({"script": "unsupported stuff here"}), &local, None)
+        let err = exec(&json!({"script": "unsupported stuff here"}), &local, None, None)
             .await
             .unwrap_err();
         assert!(!err.is_empty(), "{err}");

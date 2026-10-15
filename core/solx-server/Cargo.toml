@@ -35,6 +35,8 @@ serde = { workspace = true }
 mime_guess = { workspace = true }
 
 [dev-dependencies]
+# For the principal-propagation tests (`solx_actions::test_probe`).
+solx-actions = { workspace = true, features = ["test-probe"] }
 reqwest = { workspace = true }
 solx-client = { workspace = true }
 tempfile = "3"

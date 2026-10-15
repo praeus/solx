@@ -18,6 +18,7 @@ use serde_json::Value;
 use solx_scripts::CommandRunner;
 use solx_surface::error::{Result, SolxError};
 use solx_surface::path::split_ref;
+use solx_surface::Principal;
 
 use crate::caller::Caller;
 use crate::LocalActionManager;
@@ -25,6 +26,9 @@ use crate::LocalActionManager;
 pub struct ActionCommandRunner {
     pub actions: Arc<LocalActionManager>,
     pub caller: Caller,
+    /// Inherited from the call that started this script; carried on to
+    /// every nested `exec` stage.
+    pub principal: Option<Principal>,
 }
 
 #[async_trait]
@@ -85,7 +89,13 @@ impl ActionCommandRunner {
         let (path, name) = split_ref(&reference)?;
         let result = self
             .actions
-            .exec_as(&path, &name, params, Some(&self.caller))
+            .exec_as(
+                &path,
+                &name,
+                params,
+                Some(&self.caller),
+                self.principal.as_ref(),
+            )
             .await?;
         serde_json::to_value(&result)
             .map_err(|e| SolxError::Invalid(format!("serialize exec result: {e}")))

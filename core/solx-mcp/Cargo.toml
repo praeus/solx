@@ -29,9 +29,15 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # backs `streamable_http_service()`, which `solx-server` mounts as an HTTP
 # route sharing the same `SolxMcpServer`/`Arc<App>` — see solx-server/Cargo.toml.
 rmcp = { version = "3.0.0", features = ["server", "transport-io", "transport-streamable-http-server"] }
+# Only to name `http::request::Parts`, which the streamable HTTP transport
+# puts in `RequestContext::extensions` — how `call_tool` reaches the
+# `Principal` that `solx-server`'s `require_bearer` stored on the request.
+http = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+# For the stdio principal test (`solx_actions::test_probe`).
+solx-actions = { workspace = true, features = ["test-probe"] }
 # Extra features for the in-process client/server integration test only —
 # additive on top of the binary's own "server"/"transport-io" features for
 # `cargo test`, not part of the shipped `solx-mcp` binary.

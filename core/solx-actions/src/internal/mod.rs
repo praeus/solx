@@ -40,6 +40,7 @@ use serde_json::Value;
 use solx_surface::entities::{ActionType, Document, DocumentInput};
 use solx_surface::internal_actions::{InternalActionRegistry, InternalCallCtx};
 use solx_surface::managers::{ActionManager, DocManager, FileStore, TypeManager};
+use solx_surface::Principal;
 
 use crate::caller::Caller;
 use crate::LocalActionManager;
@@ -92,13 +93,18 @@ pub struct InternalCtx {
     /// `/builtin/...` row itself.
     pub action_config: Option<Value>,
     /// The action that *invoked* this one, when there is one. Set only on
-    /// the recursive hop from a WASM guest; `None` for the CLI, MCP, and
-    /// HTTP, none of which are actions. `get-secret`/`set-secret` scope to
+    /// a recursive hop from another action (WASM `action-exec`, a script's
+    /// `exec` stage, a detached run started by an action); `None` for the
+    /// CLI, MCP, and HTTP, none of which are actions. `get-secret`/`set-secret` scope to
     /// this — see [`crate::caller`] for why it can't be spoofed.
     ///
     /// **Invariant:** read-only input to key resolution. No handler may
     /// return it, or any key inside it, in its result value.
     pub caller: Option<Caller>,
+    /// The authenticated party this call chain started from — see
+    /// `solx_surface::InternalCallCtx::principal`. Inherited by nested
+    /// frames, so authorization must check `caller` first.
+    pub principal: Option<Principal>,
 }
 
 impl InternalCtx {
@@ -112,6 +118,7 @@ impl InternalCtx {
             actions: self.actions.clone(),
             files: self.files.clone(),
             caller: self.caller.as_ref().map(Caller::info),
+            principal: self.principal.clone(),
         }
     }
 }
@@ -187,7 +194,9 @@ pub async fn run_internal(
         "open-url" => open_url::open_url(params, &ctx.config).await,
 
         // ── scripting ────────────────────────────────────────────────────
-        "script-exec" => exec::exec(params, &ctx.local, ctx.caller.as_ref()).await,
+        "script-exec" => {
+            exec::exec(params, &ctx.local, ctx.caller.as_ref(), ctx.principal.as_ref()).await
+        }
 
         // ── secrets (per-caller scoped) ──────────────────────────────────
         "get-secret" => secrets::get_secret(params, ctx.caller.as_ref()).await,
@@ -470,6 +479,7 @@ mod tests {
                 registry,
                 action_config,
                 caller: None,
+                principal: None,
             },
         )
     }

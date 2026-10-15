@@ -36,6 +36,7 @@ use solx_surface::error::SolxError;
 use solx_surface::managers::Solx;
 use solx_surface::path::full_ref;
 use solx_surface::query::{ActionSearchQuery, ExcludeMode, ListOptions};
+use solx_surface::Principal;
 
 use crate::{error, tools};
 
@@ -315,6 +316,19 @@ fn force_tooling_scope(path: &str, mut args: Map<String, Value>) -> Value {
     Value::Object(args)
 }
 
+/// The [`Principal`] `solx-server`'s `require_bearer` attached to the HTTP
+/// request this tool call arrived on. The streamable HTTP transport hands
+/// each request's `http::request::Parts` (extensions included) to the
+/// handler through `RequestContext::extensions`; stdio has no `Parts`, so
+/// it gets `None` — the unauthenticated local entry point.
+fn request_principal(ctx: &RequestContext<RoleServer>) -> Option<Principal> {
+    ctx.extensions
+        .get::<http::request::Parts>()?
+        .extensions
+        .get::<Principal>()
+        .cloned()
+}
+
 impl ServerHandler for SolxMcpServer {
     fn get_info(&self) -> InitializeResult {
         let mut info = InitializeResult::new(ServerCapabilities::builder().enable_tools().build());
@@ -406,7 +420,15 @@ impl ServerHandler for SolxMcpServer {
             _ => None,
         };
 
-        let exec_result = self.app.actions().exec(&path, &name, params).await;
+        let exec_result = match request_principal(&ctx) {
+            Some(principal) => {
+                self.app
+                    .actions()
+                    .exec_for(&principal, &path, &name, params)
+                    .await
+            }
+            None => self.app.actions().exec(&path, &name, params).await,
+        };
         if let Some(handle) = tail_handle {
             handle.stop_and_drain().await;
         }

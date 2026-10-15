@@ -106,8 +106,20 @@ above apply.
 **The file store rejects traversal.** Absolute paths and `../` escapes out of
 the files root are refused.
 
-**The server binds loopback only.** `solx-server` listens on `127.0.0.1` and
-gates every route behind a bearer token generated on first start.
+**The server binds loopback by default, and every route needs a bearer
+token.** `solx-server` listens on `127.0.0.1` unless `server_host` in
+`solx-config.json` (or `--host`) says otherwise. Every route except
+`/health` requires a bearer token, which is generated on first start. Setting
+`server_host` to a LAN address or `0.0.0.0` allows non-local access. In that
+case the bearer token is the only gate, traffic is not encrypted (no TLS),
+and CORS is limited to the origins listed in `server_cors_origins`.
+
+**MCP access follows the tooling exclusions.** `exclusions.tooling` in
+`solx-config.json` (along with `tool_exclude` and the `solx:hidden` tag)
+removes actions, documents and types from what a model can reach over MCP.
+Excluded actions are left out of discovery, and they're refused even when
+called by name. Every `/builtin/*` call made over MCP is forced into the
+tooling scope, so a model can't opt out with its own `excludeMode`.
 
 ### What is not enforced
 
@@ -116,10 +128,18 @@ everything running through solx today is trusted by construction.
 
 - **Anything saved to the actions database is executable.** There is no
   approval or confirmation step at execution time.
-- **Callers are undifferentiated.** solx tracks exactly one kind of caller
-  identity — which action invoked another — and uses it only to scope
-  secrets. CLI, MCP, and HTTP callers are all simply "not an action." There
-  is no permission system mapping a caller to the entities it may reach.
+- **Callers are undifferentiated.** solx tracks which action invoked another
+  and uses that only to scope secrets. Authenticated HTTP and `/mcp` calls
+  now carry the `Principal` behind the bearer token, but nothing authorizes
+  on it yet. Every valid token is root.
+- **Every client and Command action shares one root token.** A Command
+  action receives the root token, and it keeps working after the action
+  exits. The token registry
+  ([docs/token-registry-plan.md](docs/token-registry-plan.md)) will replace
+  it with per-client and per-invocation tokens.
+- **The in-process env store is global.** Any caller can read and write
+  `get-env`/`set-env`, including the system variables mapped in through
+  `env_mappings`. Don't map a secret into it.
 - **No package signing or verification.** `install-package` will run the
   `install.solx` of any local directory you point it at, and grant whatever
   its manifest declares.
@@ -128,10 +148,11 @@ everything running through solx today is trusted by construction.
 - **Loopback capabilities are bearer-style.** OAuth loopbacks, action
   consoles, and HTTP streams are reachable by anyone who knows the
   unguessable id, without a further caller check.
-- **`solx-server` has no rate limiting, audit log, or token rotation.**
+- **`solx-server` has no rate limiting or audit log.** `solx token rotate`
+  exists, but running hosts keep accepting the old token until they restart.
 
-See [docs/future-security-enhancements.md](docs/future-security-enhancements.md)
-for the reasoning behind each and the intended direction.
+See [docs/security-design.md](docs/security-design.md) for how each control
+is implemented, the full list of known gaps, and the intended direction.
 
 ## Running solx safely
 
@@ -141,17 +162,24 @@ for the reasoning behind each and the intended direction.
 - **Read a package's manifest before installing it.** The `command_actions`
   and `allowed_base_urls` blocks in `solx-package.json` are a complete list
   of the shell access and outbound hosts it's asking for.
-- **Scope MCP catalogues.** `SOLX_MCP_PATH_PREFIX` limits an MCP instance to
-  one path subtree. Give a model the smallest catalogue that does its job
-  rather than every action you own.
+- **Use tooling exclusions to limit what a model can reach.** List anything
+  a model shouldn't see or call under `exclusions.tooling` in
+  `solx-config.json`, for example
+  `"tooling": { "actions": ["*/_private/*"], "documents": ["/personal"] }`.
+  `SOLX_MCP_PATH_PREFIX` only sets which actions a model *discovers* by
+  default. It doesn't restrict what can be called, so don't rely on it for
+  access control.
 - **Treat the server token as a credential.** It is full access to the
   instance, including command execution. solx keeps it in the OS credential
   manager rather than `solx-config.json`; `solx token show` prints it and
   `solx token rotate` replaces it. Don't commit it, and don't put it in a
   shared config file. Command actions receive it as `SOLX_SERVER_TOKEN` and
   should never read it from anywhere else.
-- **Don't expose `solx-server` beyond loopback.** If you tunnel or proxy it,
-  you have made a shell-execution endpoint reachable from wherever the tunnel
-  terminates. Put real authentication in front of it.
+- **Think before exposing `solx-server` beyond loopback.** Setting
+  `server_host`, or tunnelling or proxying the server, makes a
+  shell-execution endpoint reachable from the network, protected only by
+  the bearer token and without TLS. Keep it on a trusted network, put TLS
+  (and ideally real authentication) in front of it, and set
+  `server_cors_origins` to only the browser origins you use.
 - **Prefer WASM for third-party logic.** The `custom-action` world is the
   only genuinely sandboxed dispatch kind.

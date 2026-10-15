@@ -97,8 +97,9 @@ action." There is no package signing and no general permission system.
 Treat a solx instance as running with your own privileges, and scope what you
 install accordingly. [SECURITY.md](SECURITY.md) has the full threat model,
 the complete list of known gaps, and guidance on running solx safely;
-[docs/future-security-enhancements.md](docs/future-security-enhancements.md)
-has the reasoning behind each gap and the intended direction.
+[docs/security-design.md](docs/security-design.md) describes how each
+control is implemented, the reasoning behind each gap, and the intended
+direction.
 
 ## Surfaces
 

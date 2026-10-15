@@ -8,6 +8,7 @@ use serde_json::Value;
 use solx_surface::entities::{Action, ActionExecResult, ActionInput};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::ActionManager;
+use solx_surface::Principal;
 use solx_surface::path::{full_ref, normalize_path, validate_name};
 use solx_surface::query::{
     ActionSearchQuery, ExcludeMode, ListOptions, ListSchema, ListSql, Page, PathFacet, SortOrder,
@@ -396,11 +397,24 @@ impl ActionManager for LocalActionManager {
         Ok(Page::new(items, total, limit, offset))
     }
 
-    /// Entry point for every *external* caller — the CLI, the MCP server,
-    /// the HTTP route, `solx-client`. None of them is an action, so the
-    /// caller is `None`; see [`LocalActionManager::exec_as`].
+    /// Entry point for every unauthenticated *external* caller — the CLI,
+    /// stdio MCP, Tauri. None of them is an action and none ran
+    /// `TokenAuthority::authenticate`, so both caller and principal are
+    /// `None`; see [`LocalActionManager::exec_as`].
     async fn exec(&self, path: &str, name: &str, params: Value) -> Result<ActionExecResult> {
-        self.exec_as(path, name, params, None).await
+        self.exec_as(path, name, params, None, None).await
+    }
+
+    /// Entry point for authenticated routes — the HTTP REST exec and the
+    /// `/mcp` transport. Not an action either, so the caller is `None`.
+    async fn exec_for(
+        &self,
+        principal: &Principal,
+        path: &str,
+        name: &str,
+        params: Value,
+    ) -> Result<ActionExecResult> {
+        self.exec_as(path, name, params, None, Some(principal)).await
     }
 }
 
