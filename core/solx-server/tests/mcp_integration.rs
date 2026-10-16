@@ -31,7 +31,12 @@ async fn spawn_server() -> (tempfile::TempDir, Arc<solx_manager::App>, String, S
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
     });
 
     (dir, app, format!("http://{addr}/mcp"), token)

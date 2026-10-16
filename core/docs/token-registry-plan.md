@@ -1,8 +1,46 @@
 # Token registry — implementation plan
 
-Status: **Ready to implement.** Phases 1 and 2 are done (see "Where things
-stand"). This document is the plan for phase 3, so it can be picked up on
-its own.
+Status: **Implemented** (2026-10-16). The follow-on work under
+"Authorization that the principal makes possible" is still open. Where the
+implementation differs from the plan below:
+
+- **`/connect` needs a click.** The page fills the code in from the fragment
+  and drops it from the address bar, but only posts it when the person
+  clicks Connect, so a scanner that does run scripts can't spend it.
+- **Links for a `0.0.0.0` bind.** With no `server_public_url`, a host on an
+  unspecified address advertises its primary LAN address in connect links
+  (`solx_registry::advertised_url`), not loopback. `/auth/exchange`'s
+  `server_url` falls back to the request's `Host`, the address the client
+  actually reached.
+- **What counts as a failure.** Only a well-formed 8-digit code that doesn't
+  redeem counts against the budget; malformed input and requests turned away
+  by the per-IP backoff (`429`, one second) don't.
+- **The sweep also removes client tokens** that are revoked or expired, so
+  `list-clients` shows only tokens that still work.
+- **Extra fields.** `create-connect-code` also returns `server_url`, and
+  `solx token connect-code` takes `--token-ttl` beside `--ttl` (the code's
+  lifetime).
+- **Per-link address.** `create-connect-code` takes `public_url`
+  (`solx token connect-code --url`, "Address for the link" in the desktop
+  app) to use another address for one link, e.g. a Tailscale IP. Both it
+  and `server_public_url` accept a bare IP or host name, which gets
+  `http://` and the server's port (`solx_config::normalize_public_url`).
+- **Logging** of redemptions, issues and revocations goes to `tracing`
+  (stderr), not an action console.
+- **Reverse proxies** on the same machine are documented, not detected:
+  treating every peer as remote when `server_public_url` is set would also
+  lock out the local CLI.
+- **Remote `exec` drops the principal.** With a host running, the CLI's App
+  is remote and presents the loopback root token, so without a change every
+  `solx exec` and `.solx` script (a package's `install.solx` included) would
+  have run the auth builtins as Root. `solx-client`'s `exec` now sends
+  `X-Solx-Principal: none` and the REST exec route honours it by calling
+  `exec`; `exec_for` doesn't send it, so `solx token …` still runs as Root.
+  The header can only drop a principal.
+- **Feature wiring.** The workspace dependency table sets
+  `default-features = false` for solx-manager, solx-mcp, solx-server and
+  solx-cli, so a dependent can really turn `registry` off; solx-mcp has its
+  own default-on `registry` feature, which solx-server's forwards to.
 
 ## Goal
 

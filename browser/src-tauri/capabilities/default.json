@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window. It hosts package widgets, so it never gets solx:config; solx:packages only installs official catalog packages by name.",
+  "description": "Capability for the main window. It hosts package widgets, so it never gets solx:config or solx:auth; solx:packages only installs official catalog packages by name.",
   "windows": ["main"],
   "permissions": [
     "core:default",

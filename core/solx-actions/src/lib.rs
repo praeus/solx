@@ -95,6 +95,10 @@ pub struct LocalActionManager {
     /// spawned Command action. Set once by the host (see
     /// [`Self::set_token_authority`]); unset, Command actions get neither.
     token_authority: OnceLock<Arc<dyn TokenAuthority>>,
+    /// Plugins handed in by the host through [`Self::add_plugin`] (e.g.
+    /// `solx-registry`'s `/builtin/auth/*`), merged into
+    /// [`Self::internal_registry`] by [`Self::set_self_ref`].
+    extra_plugins: Mutex<Vec<InternalActionRegistry>>,
 }
 
 #[async_trait]
@@ -176,6 +180,7 @@ impl LocalActionManager {
             running: Arc::new(Mutex::new(HashMap::new())),
             self_ref: OnceLock::new(),
             token_authority: OnceLock::new(),
+            extra_plugins: Mutex::new(Vec::new()),
         })
     }
 
@@ -222,9 +227,24 @@ impl LocalActionManager {
             );
             #[cfg(any(test, feature = "test-probe"))]
             plugin.merge(test_probe::plugin());
+            for extra in self.extra_plugins.lock().unwrap().drain(..) {
+                plugin.merge(extra);
+            }
             let _ = self.internal_registry.set(Arc::new(plugin));
         }
         let _ = self.self_ref.set(self_ref);
+    }
+
+    /// Add an internal-action plugin from a crate `solx-actions` can't
+    /// depend on without a cycle (e.g. `solx-registry`, which sits behind
+    /// `solx-manager`): its seeds are written to the catalogue now, and
+    /// its handlers join the registry when [`Self::set_self_ref`] builds
+    /// it, so this must be called first.
+    pub async fn add_plugin(&self, plugin: InternalActionRegistry) -> Result<()> {
+        let conn = self.db.connect().await?;
+        seed::seed_builtins(&conn, plugin.seed_actions()).await?;
+        self.extra_plugins.lock().unwrap().push(plugin);
+        Ok(())
     }
 
     /// Provide the authority that credentials spawned Command actions to

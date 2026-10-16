@@ -11,29 +11,100 @@ options ride in the query string, and the HTTP method carries the verb.
 - **Base URL** — `http://127.0.0.1:8766` by default. The bind address and
   port come from `--host`/`--port`, else the config's `server_host`/
   `server_port`.
-- **Auth** — every route except `/health` requires
-  `Authorization: Bearer <token>`. The token is generated on first run and
-  stored in the config; `solx server start` prints it.
+- **Auth** — every route except `/health`, `/auth/exchange` and `/connect`
+  requires `Authorization: Bearer <token>`. Three kinds of token are
+  accepted:
+  - the **root token**, generated on first run and kept in the OS credential
+    manager (`solx token show` prints it). It is accepted **from loopback
+    peers only**: clients on the server's own machine use it;
+  - **client tokens**, one per device, from a connect code (below) or
+    `solx token issue`. They expire (90 days by default,
+    `client_token_ttl_days`) and can be listed and revoked one by one;
+  - **action tokens**, one per external Command invocation, handed to the
+    command as `SOLX_SERVER_TOKEN` and revoked when it ends.
+
+  A rejected token is a `401` with the usual `{kind, message}` body.
 - **CORS** — on a loopback bind, permissive, so a browser page can call the
   server directly. On any other bind, only the origins listed in the config's
   `server_cors_origins` are allowed (none by default). Either way, the bearer
   token is the only real gate.
 
+A server built without the `registry` cargo feature (it is on by default)
+has only the root token, accepted from anywhere, and no `/auth/exchange` or
+`/connect`.
+
 ### Serving other machines
 
 Set `server_host` to `0.0.0.0` (or a specific interface IP), or start the
-server with `--host`. On another machine, point a client at it with
-`server_url` (or `SOLX_SERVER_URL`) and give it the server's token (run
-`solx token show` on the server's machine; the client takes it as
-`SOLX_SERVER_TOKEN`, or in the desktop app's Settings). The server prints a warning at startup when it isn't bound
-to loopback, because:
+server with `--host`. If clients should use a different address than the one
+bound (a `0.0.0.0` bind, a reverse proxy, a Tailscale name or IP), set
+`server_public_url`; connect links use it. It takes a full URL
+(`https://solx.example.com`, used as is) or a bare IP or host name
+(`100.101.102.103`), which gets `http://` and `server_port`. To use a
+different address for one link only, pass
+`solx token connect-code --url <URL|HOST>`, or fill in "Address for the
+link" in the desktop app.
 
-- The single token grants full access (read/write on every entity, action
-  execution and `/mcp`). The only way to revoke it is to rotate it, and
-  rotating it breaks every client, local ones included.
-- Traffic is plain HTTP, so the token is sent unencrypted. Run it over a
-  private network (Tailscale/WireGuard) or behind a TLS reverse proxy (Caddy,
-  nginx). Don't expose it directly to the internet.
+Then connect each device with its own token:
+
+1. On the server's machine, run `solx token connect-code` (or use
+   "Connect another device" in the desktop app's settings). It prints an
+   8-digit code such as `1234-5678`, a link
+   (`<public url>/connect#code=12345678`) and the server address. The code
+   works once and expires after 10 minutes (`--ttl` changes that).
+2. On the other device, either open the link in a browser, run
+   `solx connect <link>` (or `solx connect <server address>` and type the
+   code), or enter the address and code in the desktop client's or
+   solx-web's Settings. `solx connect --print` only prints the token, for an
+   MCP client's configuration.
+
+`solx token clients` lists the devices and `solx token revoke <id>` cuts one
+off; the revocation applies on its next request. The server prints a warning
+at startup when it isn't bound to loopback, because traffic is plain HTTP and
+tokens are sent unencrypted. Run it over a private network
+(Tailscale/WireGuard) or behind a TLS reverse proxy (Caddy, nginx), and don't
+expose it directly to the internet.
+
+Behind a reverse proxy **on the same machine**, every request reaches the
+server from loopback, so the root token is accepted from anywhere the proxy
+is. Don't give the root token to remote clients in that setup either.
+
+### Connecting another device
+
+| Method | Route | Body | Returns |
+| --- | --- | --- | --- |
+| `POST` | `/auth/exchange` | `{"code": "1234-5678"}` | `{token, client_id, expires_at, server_url}` |
+| `GET` | `/connect` | — | a static HTML page |
+
+`/auth/exchange` redeems a connect code for a client token. It needs no
+bearer token. Spaces and dashes in the code are ignored. `server_url` is
+`server_public_url` if set, else the address the request reached. A wrong,
+expired or spent code is a `401`; the same peer's next attempt within a
+second is a `429`. Every failure, from any peer and any solx process on the
+host, counts against a global budget: after 10, every pending code is
+invalidated and a new one has to be made.
+
+`/connect` changes nothing. The code travels in the URL fragment, which the
+browser never sends, and the page's script fills it into a form that posts
+to `/auth/exchange` when the person clicks **Connect**. It then shows the
+token once, to copy into a client. Link previewers and mail scanners fetch
+pages without submitting forms, so they can't spend a code.
+
+Codes and client tokens are created by four root-only actions under
+`/builtin/auth`: `create-connect-code {label?, code_ttl_secs?,
+token_ttl_secs?, public_url?}`, `list-clients`, `revoke-client {id}` and
+`issue-client {label, token_ttl_secs?}`. They refuse every caller except the
+root token (over REST or `/mcp`) and the trusted local entry points that run
+them as root: `solx token …` and the desktop Settings window's `auth_exec`.
+A client token, an action token, an action calling them and a local call
+with no principal (`solx exec`, stdio `solx-mcp`) are all refused.
+
+`POST /actions/{ref}` normally runs as whoever the bearer token belongs to.
+A request with `X-Solx-Principal: none` runs with no principal instead, as a
+local call would. `solx-client`'s `exec` always sends it (only `exec_for`
+doesn't), so the CLI and the `.solx` scripts it runs can't reach the
+root-only actions just because they present the loopback root token. The
+header can only drop a principal, never grant one.
 
 ## Entity references in the URL
 
@@ -279,7 +350,8 @@ reference. Exclusions behave as on the routes: options objects carry
 | `files_put` | raw bytes body; `x-solx-path` header (percent-encoded) | `PUT /files/{relPath}` (returns the path) |
 | `files_delete` | `relPath` | `DELETE /files/{relPath}` |
 | `info` | — | stands in for `/health`: `{mode, client, version, serverUrl?, embeddedServer?}` |
-| `connect` / `disconnect` | `serverUrl, token` / — | client build only |
+| `connect` / `disconnect` | `serverUrl, credential` / — | client build only; `credential` is a connect code, a connect link (which also supplies the server) or a token. A code is redeemed at `POST /auth/exchange` first |
+| `auth_exec` | `name, params?` | `POST /actions/builtin/auth/{name}` run as root; `solx:auth` only, server builds only |
 | `config_get` | — | none — `{raw, effective, path, appdata, restartKeys}` for `solx-config.json`; `solx:config` only |
 | `config_update` | `changes` (top-level keys; `null` removes) | none — validated write, returns `{config, changedKeys, restartRequired}`; `solx:config` only |
 
@@ -289,3 +361,9 @@ desktop app grants only to its Settings window. Package widgets run as JS in
 the main window, and config holds the `command_actions`/`allowed_base_urls`
 allowlists that solx keeps out of reach of actions, MCP and scripts. Server
 builds only; a client build refuses them.
+
+`auth_exec` is likewise its own `solx:auth` permission, granted only to the
+Settings window. It runs one of the four `/builtin/auth/*` actions (and
+nothing else) as root, which ordinary IPC can't: plain `actions_exec` calls
+carry no principal, so the builtins refuse them, and a package widget can't
+mint access for itself.

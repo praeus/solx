@@ -125,8 +125,32 @@ describe('host', () => {
     expect(last().cmd).toBe('plugin:solx|info');
 
     reply = () => null;
-    await solx.host.connect('http://h:8766', 'tok');
-    expect(last()).toMatchObject({ cmd: 'plugin:solx|connect', args: { serverUrl: 'http://h:8766', token: 'tok' } });
+    await solx.host.connect('http://h:8766', '1234-5678');
+    expect(last()).toMatchObject({
+      cmd: 'plugin:solx|connect',
+      args: { serverUrl: 'http://h:8766', credential: '1234-5678' },
+    });
+  });
+});
+
+describe('auth', () => {
+  test('runs the auth builtins through auth_exec with snake_case params', async () => {
+    reply = () => ({ display_code: '1234-5678', url: null, server_url: null, expires_at: 't' });
+    await expect(solx.auth.createConnectCode({ label: 'phone', codeTtlSecs: 60 })).resolves.toMatchObject({
+      display_code: '1234-5678',
+    });
+    expect(last()).toMatchObject({
+      cmd: 'plugin:solx|auth_exec',
+      args: { name: 'create-connect-code', params: { label: 'phone', code_ttl_secs: 60 } },
+    });
+
+    reply = () => ({ clients: [{ id: 'c1' }] });
+    await expect(solx.auth.listClients()).resolves.toEqual([{ id: 'c1' }]);
+    expect(last()).toMatchObject({ args: { name: 'list-clients', params: {} } });
+
+    reply = () => ({ revoked: 'c1' });
+    await solx.auth.revokeClient('c1');
+    expect(last()).toMatchObject({ args: { name: 'revoke-client', params: { id: 'c1' } } });
   });
 });
 

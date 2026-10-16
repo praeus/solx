@@ -423,19 +423,40 @@ fn test_store() -> &'static MemoryStore {
 
 // ── the default authority ────────────────────────────────────────────────────
 
+/// Where an authority's action credentials point: [`sibling_server_url`]
+/// until the host reports its own bound address via `set_server_url`.
+/// Shared by [`SingleTokenAuthority`] and the token registry.
+pub struct ServerUrlSlot(RwLock<Option<String>>);
+
+impl ServerUrlSlot {
+    pub fn new(initial: Option<String>) -> Self {
+        Self(RwLock::new(initial))
+    }
+
+    pub fn get(&self) -> Option<String> {
+        self.0.read().ok().and_then(|u| u.clone())
+    }
+
+    pub fn set(&self, url: String) {
+        if let Ok(mut slot) = self.0.write() {
+            *slot = Some(url);
+        }
+    }
+}
+
 /// One shared token for everything: every valid bearer is
 /// [`Principal::Root`], and every external action is handed the same token.
 /// This is solx's original trust model, unchanged.
 pub struct SingleTokenAuthority {
     token: String,
-    server_url: RwLock<Option<String>>,
+    server_url: ServerUrlSlot,
 }
 
 impl SingleTokenAuthority {
     pub fn new(token: impl Into<String>) -> Self {
         Self {
             token: token.into(),
-            server_url: RwLock::new(None),
+            server_url: ServerUrlSlot::new(None),
         }
     }
 
@@ -457,7 +478,7 @@ impl SingleTokenAuthority {
 /// Where a `solx-server` for this appdata dir listens, as reached from this
 /// machine: `server_host`/`server_port`, with an unset or unspecified host
 /// (`0.0.0.0`/`::`) reached over loopback.
-fn sibling_server_url(config: &ConfigService) -> String {
+pub fn sibling_server_url(config: &ConfigService) -> String {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
     let snap = config.snapshot();
     let port = snap.server_port.unwrap_or(crate::DEFAULT_SERVER_PORT);
@@ -480,16 +501,102 @@ impl TokenAuthority for SingleTokenAuthority {
         &self,
         _action_ref: &str,
         _invocation_id: &str,
+        _ttl: std::time::Duration,
     ) -> Option<ActionCredential> {
-        let server_url = self.server_url.read().ok().and_then(|u| u.clone());
-        Some(ActionCredential::new(server_url, self.token.clone()))
+        Some(ActionCredential::new(
+            self.server_url.get(),
+            self.token.clone(),
+        ))
     }
 
     fn set_server_url(&self, url: String) {
-        if let Ok(mut slot) = self.server_url.write() {
-            *slot = Some(url);
-        }
+        self.server_url.set(url);
     }
+}
+
+// ── connect input ────────────────────────────────────────────────────────────
+
+/// What a person typed or pasted into the one "code, link or token" field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectCredential {
+    /// An 8-digit connect code, digits only, to redeem at `/auth/exchange`.
+    Code(String),
+    /// A bearer token, used as entered (trimmed).
+    Token(String),
+}
+
+/// [`parse_connect_input`]'s result: the credential plus the server it is
+/// for, when one is known.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectInput {
+    pub credential: ConnectCredential,
+    pub server_url: Option<String>,
+}
+
+/// Classify the single connect field, shared by the CLI and the desktop
+/// client (`web/web/src/api/connectInput.ts` is the TypeScript twin, with
+/// the same test cases):
+/// - a link containing `#code=` is a code, and its origin becomes the
+///   server URL when `server_url` is empty;
+/// - exactly 8 digits once spaces and dashes are removed is a code;
+/// - anything else non-empty is a token, trimmed.
+///
+/// Tokens are 44-character base64, never exactly 8 digits, so this can't
+/// be ambiguous. A malformed code (7 digits, say) comes back as a token and
+/// fails verification like any other wrong token.
+pub fn parse_connect_input(server_url: Option<&str>, input: &str) -> Result<ConnectInput> {
+    let given = server_url
+        .map(|u| u.trim().trim_end_matches('/'))
+        .filter(|u| !u.is_empty())
+        .map(String::from);
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(SolxError::Invalid(
+            "enter a connect code, a connect link or a token".into(),
+        ));
+    }
+    if let Some((before, code)) = input.split_once("#code=") {
+        let digits = connect_code_digits(code)
+            .ok_or_else(|| SolxError::Invalid("the connect link's code is not 8 digits".into()))?;
+        return Ok(ConnectInput {
+            credential: ConnectCredential::Code(digits),
+            server_url: given.or_else(|| connect_link_base(before)),
+        });
+    }
+    let credential = match connect_code_digits(input) {
+        Some(digits) => ConnectCredential::Code(digits),
+        None => ConnectCredential::Token(input.to_string()),
+    };
+    Ok(ConnectInput {
+        credential,
+        server_url: given,
+    })
+}
+
+/// The server a connect link (`<public url>/connect`, fragment already cut
+/// off) points at: the link minus its `/connect`, so a public URL under a
+/// reverse-proxy prefix (`https://example.com/solx`) keeps the prefix.
+fn connect_link_base(link: &str) -> Option<String> {
+    let mut url = url::Url::parse(link).ok().filter(|u| u.has_host())?;
+    url.set_query(None);
+    let path = url.path().trim_end_matches('/');
+    let path = path.strip_suffix("/connect").unwrap_or(path).to_string();
+    url.set_path(&path);
+    Some(url.as_str().trim_end_matches('/').to_string())
+}
+
+/// The 8 digits of a connect code typed as `12345678`, `1234-5678` or
+/// `1234 5678`, or `None` if `input` is anything else.
+pub fn connect_code_digits(input: &str) -> Option<String> {
+    let input = input.trim();
+    if !input
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == '-' || c == ' ')
+    {
+        return None;
+    }
+    let digits: String = input.chars().filter(char::is_ascii_digit).collect();
+    (digits.len() == 8).then_some(digits)
 }
 
 #[cfg(test)]
@@ -687,12 +794,13 @@ mod tests {
     #[tokio::test]
     async fn action_credential_carries_token_and_bound_url() {
         let auth = SingleTokenAuthority::new("secret");
-        let cred = auth.issue_action_token("/a", "inv").await.unwrap();
+        let ttl = std::time::Duration::from_secs(60);
+        let cred = auth.issue_action_token("/a", "inv", ttl).await.unwrap();
         assert_eq!(cred.token, "secret");
         assert_eq!(cred.server_url, None);
 
         auth.set_server_url("http://127.0.0.1:1".into());
-        let cred = auth.issue_action_token("/a", "inv").await.unwrap();
+        let cred = auth.issue_action_token("/a", "inv", ttl).await.unwrap();
         assert_eq!(cred.server_url.as_deref(), Some("http://127.0.0.1:1"));
     }
 
@@ -701,7 +809,11 @@ mod tests {
     #[tokio::test]
     async fn from_config_defaults_to_the_sibling_server_url() {
         async fn url(auth: &SingleTokenAuthority) -> Option<String> {
-            auth.issue_action_token("/a", "inv").await.unwrap().server_url
+            let ttl = std::time::Duration::from_secs(60);
+            auth.issue_action_token("/a", "inv", ttl)
+                .await
+                .unwrap()
+                .server_url
         }
         let (_d, cfg) = config();
 
@@ -717,5 +829,62 @@ mod tests {
         assert_eq!(sibling_server_url(&cfg), "http://[::1]:9000");
         cfg.set("server_host", "10.0.0.5".into()).unwrap();
         assert_eq!(sibling_server_url(&cfg), "http://10.0.0.5:9000");
+    }
+
+    fn code(digits: &str) -> ConnectCredential {
+        ConnectCredential::Code(digits.into())
+    }
+
+    #[test]
+    fn digits_with_spaces_or_dashes_are_codes() {
+        for input in ["12345678", "1234-5678", " 1234 5678 "] {
+            let parsed = parse_connect_input(Some("http://10.0.0.5:8766"), input).unwrap();
+            assert_eq!(parsed.credential, code("12345678"), "{input:?}");
+            assert_eq!(parsed.server_url.as_deref(), Some("http://10.0.0.5:8766"));
+        }
+    }
+
+    #[test]
+    fn a_connect_link_is_a_code_and_supplies_the_server() {
+        let link = "http://10.0.0.5:8766/connect#code=12345678";
+        let parsed = parse_connect_input(None, link).unwrap();
+        assert_eq!(parsed.credential, code("12345678"));
+        assert_eq!(parsed.server_url.as_deref(), Some("http://10.0.0.5:8766"));
+
+        // A reverse-proxy prefix in the public URL survives.
+        let parsed =
+            parse_connect_input(None, "https://example.com/solx/connect#code=12345678").unwrap();
+        assert_eq!(
+            parsed.server_url.as_deref(),
+            Some("https://example.com/solx")
+        );
+
+        // An explicit server wins over the link's origin.
+        let parsed = parse_connect_input(Some("https://solx.example.com/"), link).unwrap();
+        assert_eq!(
+            parsed.server_url.as_deref(),
+            Some("https://solx.example.com")
+        );
+
+        assert!(parse_connect_input(None, "http://h/connect#code=123").is_err());
+    }
+
+    #[test]
+    fn a_generated_token_is_a_token() {
+        let token = generate_token();
+        assert_eq!(token.len(), 44);
+        let parsed = parse_connect_input(None, &format!(" {token} ")).unwrap();
+        assert_eq!(parsed.credential, ConnectCredential::Token(token));
+        assert_eq!(parsed.server_url, None);
+    }
+
+    #[test]
+    fn seven_digits_are_a_token_and_empty_input_is_refused() {
+        let parsed = parse_connect_input(None, "1234567").unwrap();
+        assert_eq!(
+            parsed.credential,
+            ConnectCredential::Token("1234567".into())
+        );
+        assert!(parse_connect_input(None, "   ").is_err());
     }
 }

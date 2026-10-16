@@ -206,3 +206,31 @@
 .config-arrow {
   color: var(--text-faint);
 }
+
+/* ── Connect another device ─────────────────────────────────────────── */
+
+.config-connect-code {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+
+.config-connect-code__digits {
+  font-family: var(--font-mono);
+  font-size: 2.5rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  user-select: all;
+}
+
+.config-connect-code__link {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}

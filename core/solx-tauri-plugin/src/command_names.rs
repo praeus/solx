@@ -3,7 +3,8 @@
 // `tauri::generate_handler!` in `lib.rs` must match (both checked by unit
 // tests in `lib.rs`). The `config_*` commands belong to the separate
 // `config` permission set (permissions/config.toml), and the `packages_*`
-// commands to `packages` (permissions/packages.toml), not `default`.
+// commands to `packages` (permissions/packages.toml), and the `auth_*`
+// commands to `auth` (permissions/auth.toml), not `default`.
 // Included textually by both, so it can't depend on anything.
 const COMMANDS: &[&str] = &[
     "types_save",
@@ -40,4 +41,5 @@ const COMMANDS: &[&str] = &[
     "packages_catalog",
     "packages_install",
     "packages_uninstall",
+    "auth_exec",
 ];

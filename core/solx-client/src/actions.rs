@@ -1,11 +1,13 @@
 use async_trait::async_trait;
 use serde_json::Value;
+use solx_surface::auth::NO_PRINCIPAL_HEADER;
 use solx_surface::entities::{Action, ActionExecResult, ActionInput};
 use solx_surface::error::Result;
 use solx_surface::managers::ActionManager;
 use solx_surface::query::{ActionSearchQuery, ListOptions, Page, PathFacet};
 use solx_surface::Principal;
 
+use crate::error::{read_response, transport_err};
 use crate::http::{
     collection_url, delete, entity_crud_url, entity_url, explicit_mode, get_json, get_json_query,
     post_json, put_json,
@@ -71,15 +73,27 @@ impl ActionManager for RemoteActionManager {
         get_json_query(&self.http, &self.token, url, &query).await
     }
 
-    /// `POST` on the action's own URL, with the params as the body.
+    /// `POST` on the action's own URL, with the params as the body, asking
+    /// the server to run it with no principal ([`NO_PRINCIPAL_HEADER`]), as
+    /// `exec` means locally.
     async fn exec(&self, path: &str, name: &str, params: Value) -> Result<ActionExecResult> {
         let url = entity_url(&self.base_url, "actions", path, name)?;
-        post_json(&self.http, &self.token, url, &params).await
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .header(NO_PRINCIPAL_HEADER, "none")
+            .json(&params)
+            .send()
+            .await
+            .map_err(transport_err)?;
+        read_response(resp).await
     }
 
-    /// Same request as [`Self::exec`]. A principal never crosses the wire:
-    /// the server re-derives it from this client's bearer token, so the
-    /// one passed in here has nothing to contribute.
+    /// The same request without [`NO_PRINCIPAL_HEADER`]. The principal
+    /// itself never crosses the wire: the server re-derives it from this
+    /// client's bearer token, so the one passed in here has nothing to
+    /// contribute beyond "run with one".
     async fn exec_for(
         &self,
         _principal: &Principal,
@@ -87,6 +101,7 @@ impl ActionManager for RemoteActionManager {
         name: &str,
         params: Value,
     ) -> Result<ActionExecResult> {
-        self.exec(path, name, params).await
+        let url = entity_url(&self.base_url, "actions", path, name)?;
+        post_json(&self.http, &self.token, url, &params).await
     }
 }

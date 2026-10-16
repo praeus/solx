@@ -20,12 +20,14 @@ solx-config = { workspace = true }
 solx-manager = { path = "../solx-manager", default-features = false }
 # Package install/uninstall runs a package's install.solx with the CLI's script
 # runner, so only a build that owns the managers (`local`) has them.
-solx-cli = { workspace = true, optional = true }
+solx-cli = { workspace = true, optional = true, default-features = false }
 solx-packages = { workspace = true, optional = true }
 tauri = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 percent-encoding = "2"
+# `connect` redeems connect codes at a solx-server's `/auth/exchange`.
+solx-client = { workspace = true }
 
 [build-dependencies]
 tauri-plugin = { version = "2", features = ["build"] }

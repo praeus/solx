@@ -1,10 +1,11 @@
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use axum::{Extension, Json, Router};
 use axum_extra::extract::Query;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use solx_surface::auth::NO_PRINCIPAL_HEADER;
 use solx_surface::entities::{Action, ActionExecResult, ActionInput};
 use solx_surface::managers::Solx;
 use solx_surface::query::{ActionSearchQuery, ListOptions, Page, PathFacet};
@@ -133,19 +134,29 @@ struct SearchTerm {
 /// forcing callers to send a literal `{}`.
 ///
 /// Runs as the [`Principal`] `require_bearer` authenticated — the route
-/// layer always inserts one before this handler runs.
+/// layer always inserts one before this handler runs — unless the caller
+/// sends `X-Solx-Principal: none` ([`NO_PRINCIPAL_HEADER`]), which runs it
+/// with no principal, like a local `exec`. `solx-client`'s `exec` does, so
+/// the CLI and its scripts can't reach root-only built-ins just because
+/// they present the loopback root token.
 async fn exec_action(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
+    headers: HeaderMap,
     Path(reference): Path<String>,
     body: Option<Json<Value>>,
 ) -> Result<Json<ActionExecResult>, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
     let params = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
-    let result = state
-        .app
-        .actions()
-        .exec_for(&principal, &path, &name, params)
-        .await?;
+    let drop_principal = headers
+        .get(NO_PRINCIPAL_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("none"));
+    let actions = state.app.actions();
+    let result = if drop_principal {
+        actions.exec(&path, &name, params).await?
+    } else {
+        actions.exec_for(&principal, &path, &name, params).await?
+    };
     Ok(Json(result))
 }

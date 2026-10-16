@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use anyhow::Context;
 use clap::Parser;
@@ -54,25 +54,29 @@ async fn main() -> anyhow::Result<()> {
         snap.server_cors_origins.as_deref().unwrap_or_default(),
     );
     let state = AppState::new(app)?;
-    let auth = state.auth.clone();
-    let router = solx_server::build_router_with_cors(state, cors);
-
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("bind {addr}"))?;
-    auth.set_server_url(solx_server::server_url(listener.local_addr()?));
+    solx_server::announce_bound(&state, listener.local_addr()?);
+    let router = solx_server::build_router_with_cors(state, cors);
     tracing::info!("solx-server listening on http://{addr}");
     println!("solx-server listening on http://{addr}");
     if !host.is_loopback() {
         // Off loopback, anyone who can reach the port can attempt auth, and
         // the bearer token travels in cleartext.
-        let warning = "solx-server is reachable from the network: the bearer token is the \
+        let warning = "solx-server is reachable from the network: bearer tokens are the \
                        only gate and traffic is unencrypted HTTP. Use a private network \
-                       (e.g. Tailscale/WireGuard) or a TLS reverse proxy.";
+                       (e.g. Tailscale/WireGuard) or a TLS reverse proxy. Connect other \
+                       devices with `solx token connect-code`.";
         tracing::warn!("{warning}");
         eprintln!("WARNING: {warning}");
     }
 
-    axum::serve(listener, router).await.context("serve")?;
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .context("serve")?;
     Ok(())
 }

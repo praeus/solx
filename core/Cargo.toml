@@ -7,6 +7,8 @@ members = [
     "solx-docs",
     "solx-console",
     "solx-actions",
+    "solx-registry",
+    "solx-certs",
     "solx-scripts",
     "solx-packages",
     "solx-manager",
@@ -35,7 +37,7 @@ schemars    = { version = "0.8", features = ["uuid1", "chrono", "preserve_order"
 
 # Runtime / backend (only pulled in by impl crates, never by solx-surface).
 tokio      = { version = "1", features = ["full"] }
-libsql     = "0.6"
+libsql     = "0.10"
 jsonschema = { version = "0.28", default-features = false }
 base64     = "0.22"
 mime_guess = "2"
@@ -55,6 +57,16 @@ serde_html_form = "0.2"
 tower-http = { version = "0.5", features = ["cors"] }
 futures    = "0.3"
 
+# TLS and certificates (solx-certs; see docs/tls-plan.md). rustls with the
+# `ring` provider, as reqwest's `rustls-tls` already uses, so the Windows
+# build needs no cmake/NASM for aws-lc.
+rcgen      = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring", "x509-parser"] }
+rustls     = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = { version = "1", features = ["std"] }
+time       = "0.3"
+sha2       = "0.10"
+aes-gcm    = "0.10"
+
 # Local crates
 solx-surface  = { path = "solx-surface" }
 solx-config   = { path = "solx-config" }
@@ -63,11 +75,15 @@ solx-files    = { path = "solx-files" }
 solx-docs     = { path = "solx-docs" }
 solx-console  = { path = "solx-console" }
 solx-actions  = { path = "solx-actions" }
+solx-registry = { path = "solx-registry" }
+solx-certs    = { path = "solx-certs" }
 solx-scripts  = { path = "solx-scripts" }
 solx-packages = { path = "solx-packages" }
-solx-manager  = { path = "solx-manager" }
-solx-cli      = { path = "solx-cli" }
+# default-features off for the crates with a `registry` feature, so a member
+# can really turn it off; each dependent forwards its own default-on feature.
+solx-manager  = { path = "solx-manager", default-features = false }
+solx-cli      = { path = "solx-cli", default-features = false }
 solx-client   = { path = "solx-client" }
-solx-mcp      = { path = "solx-mcp" }
-solx-server   = { path = "solx-server" }
+solx-mcp      = { path = "solx-mcp", default-features = false }
+solx-server   = { path = "solx-server", default-features = false }
 solx-tauri-plugin = { path = "solx-tauri-plugin" }

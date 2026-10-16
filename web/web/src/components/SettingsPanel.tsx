@@ -9,10 +9,15 @@
  * is local-only to a running `solx-server`/`solx-cli` process by design —
  * so those fields are gone, not moved.
  *
+ * One field takes a connect code (`1234-5678`), a connect link or a token
+ * (see `api/connectInput.ts`); a code is redeemed for this client's own
+ * token at the server's `/auth/exchange` before anything is stored.
+ *
  * In the solx desktop app the host owns the connection instead: a local
  * (server-build) host just reports where its embedded `solx-server` is
- * listening, and a client-build host takes the URL/token via `connectHost`
- * — verified and persisted on the Rust side, never in `localStorage`.
+ * listening, and a client-build host takes the URL and credential via
+ * `connectHost` — redeemed, verified and persisted on the Rust side, never
+ * in `localStorage`.
  *
  * Config is still not exposed over HTTP, but a local desktop host can edit
  * it: "Open solx settings…" opens the separate Settings window
@@ -29,6 +34,7 @@ import { useHealth } from "../api/hooks";
 import { InstallTab } from "./settings/InstallTab";
 import { TabBar, type TabDefinition } from "./TabBar";
 import {
+  connectBrowser,
   connectHost,
   connectionLabel,
   disconnectHost,
@@ -50,7 +56,7 @@ export function SettingsPanel({ open, onClose }: Props) {
   const queryClient = useQueryClient();
 
   const [serverUrl, setServerUrl] = useState("");
-  const [serverToken, setServerToken] = useState("");
+  const [credential, setCredential] = useState("");
   const [savedFlash, setSavedFlash] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -64,11 +70,11 @@ export function SettingsPanel({ open, onClose }: Props) {
     setSaveError(null);
     if (IN_TAURI) {
       setServerUrl(getHostInfo()?.serverUrl ?? "");
-      setServerToken("");
+      setCredential("");
     } else {
       setServerUrl(getStoredServerUrl());
       // Never load the saved token back into the UI; a blank field keeps it.
-      setServerToken("");
+      setCredential("");
     }
   }, [open]);
 
@@ -87,16 +93,17 @@ export function SettingsPanel({ open, onClose }: Props) {
 
   const handleSave = async () => {
     setSaveError(null);
-    if (!IN_TAURI) {
-      setConnection(serverUrl, serverToken.trim() || getStoredServerToken());
-      setServerToken("");
+    if (!IN_TAURI && !credential.trim()) {
+      // Only the URL changed: keep the saved token.
+      setConnection(serverUrl, getStoredServerToken());
       afterChange();
       return;
     }
     setSaving(true);
     try {
-      await connectHost(serverUrl, serverToken);
-      setServerToken("");
+      if (IN_TAURI) await connectHost(serverUrl, credential);
+      else await connectBrowser(serverUrl, credential);
+      setCredential("");
       afterChange();
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : String(e));
@@ -190,25 +197,30 @@ export function SettingsPanel({ open, onClose }: Props) {
           </label>
 
           <label className="settings-panel__field">
-            <span className="settings-panel__label">Server Token</span>
+            <span className="settings-panel__label">Connect code or token</span>
             <input
               className="settings-panel__input"
-              type="password"
-              value={serverToken}
-              onChange={(e) => setServerToken(e.target.value)}
+              // A code is typed while reading it off another screen, so it
+              // stays visible; anything else is masked like a password.
+              type={/^[0-9 -]*$/.test(credential) ? "text" : "password"}
+              value={credential}
+              onChange={(e) => setCredential(e.target.value)}
               placeholder={
                 hasStoredToken
-                  ? "•••••••• saved — enter a new token to replace it"
-                  : "bearer token (run `solx token show` on the server's machine)"
+                  ? "•••••••• saved — enter a code or token to replace it"
+                  : "1234-5678, a connect link, or a token"
               }
-              autoComplete="new-password"
+              autoComplete="off"
+              spellCheck={false}
             />
           </label>
 
           <div className="dialog__hint">
+            Get a code on the solx host with <code>solx token connect-code</code>, or from the desktop
+            app's settings ("Connect another device"). Pasting a connect link fills in the server too.{" "}
             {IN_TAURI
-              ? "Checked, then stored in this computer's credential manager (not shared with other solx tools)."
-              : "Stored in this browser client only."}
+              ? "The token is checked, then stored in this computer's credential manager (not shared with other solx tools)."
+              : "The token is stored in this browser only."}
           </div>
           {saveError && <div className="dialog__hint settings-panel__error">{saveError}</div>}
 

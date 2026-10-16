@@ -13,8 +13,13 @@ path = "src/lib.rs"
 name = "solx-mcp"
 path = "src/main.rs"
 
+[features]
+# The token registry; see solx-manager's `registry` feature.
+default = ["registry"]
+registry = ["solx-manager/registry"]
+
 [dependencies]
-solx-manager = { workspace = true }
+solx-manager = { workspace = true, default-features = false, features = ["local"] }
 solx-surface = { workspace = true }
 solx-config = { workspace = true }
 # Only for `set_long_lived_host` — everything else about action execution

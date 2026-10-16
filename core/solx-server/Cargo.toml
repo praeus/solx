@@ -9,8 +9,17 @@ description = "HTTP server hosting the local solx managers, so multiple solx-cli
 name = "solx-server"
 path = "src/main.rs"
 
+[features]
+# The token registry: client tokens, connect codes (`/auth/exchange`,
+# `/connect`) and root-token-from-loopback-only. Implies the manager's
+# feature, so the two can't get out of sync. Off, every bearer is the root
+# token, as before.
+default = ["registry"]
+registry = ["solx-manager/registry", "solx-mcp/registry", "dep:solx-registry"]
+
 [dependencies]
-solx-manager = { workspace = true }
+solx-manager = { workspace = true, default-features = false, features = ["local"] }
+solx-registry = { workspace = true, optional = true }
 solx-surface = { workspace = true }
 solx-config = { workspace = true }
 # Only for `set_long_lived_host` — everything else about action execution
@@ -19,7 +28,7 @@ solx-actions = { workspace = true }
 # `streamable_http_service()` — mounts the same `SolxMcpServer` the stdio
 # `solx-mcp` binary uses, as an MCP-over-HTTP route sharing this process's
 # `Arc<App>`. See routes/mcp.rs.
-solx-mcp = { workspace = true }
+solx-mcp = { workspace = true, default-features = false }
 axum = { workspace = true }
 axum-extra = { workspace = true }
 tower-http = { workspace = true }

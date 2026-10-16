@@ -1,0 +1,8 @@
+"$schema" = "schemas/schema.json"
+
+[[set]]
+identifier = "auth"
+description = "Allows running the /builtin/auth/* builtins as the root principal: creating connect codes, and issuing, listing and revoking client tokens, i.e. granting other devices access to this solx host. Grant only to a window that never loads package widgets (the desktop app's Settings window), never alongside widget-hosting content."
+permissions = [
+    "allow-auth-exec",
+]

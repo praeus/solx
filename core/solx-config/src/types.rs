@@ -147,6 +147,18 @@ pub struct SolxConfig {
     /// open. Off loopback, `None` means no cross-origin browser access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_cors_origins: Option<Vec<String>>,
+    /// The address other machines use to reach this `solx-server`, when it
+    /// isn't the bind address: a `0.0.0.0` bind, a reverse proxy, a
+    /// Tailscale name or IP. Connect links (`<url>/connect#code=…`) and the
+    /// `server_url` returned by `/auth/exchange` use it. A full URL is used
+    /// as is; a bare IP or host name gets `http://` and `server_port`.
+    /// Defaults to the bound address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_public_url: Option<String>,
+    /// Lifetime of a client token issued by the token registry (connect
+    /// codes, `solx token issue`), in days. Defaults to 90.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_token_ttl_days: Option<i64>,
     /// Whether a host that runs the local managers in-process (e.g. the
     /// solx desktop app's server build) also exposes them over HTTP, as an
     /// embedded `solx-server` on `server_host`/`server_port`. Defaults to

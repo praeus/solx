@@ -54,5 +54,7 @@ test-probe = []
 [dev-dependencies]
 solx-types = { workspace = true }
 solx-docs = { workspace = true }
+# Action tokens issued by the real registry (`tests/command_credentials.rs`).
+solx-registry = { workspace = true }
 tempfile = "3"
 serial_test = "3"

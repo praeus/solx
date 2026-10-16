@@ -6,8 +6,16 @@
  * Which keys need a restart comes from the host (`view.restartKeys`), not
  * from here — see `RESTART_KEYS` in solx-config.
  */
-import { useMemo, useRef, useState, type ReactNode } from "react";
-import type { ConfigView, ExclusionLists, PackageResult, SolxConfigFile, ToolRule } from "@solx/tauri";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type {
+  ClientInfo,
+  ConfigView,
+  ConnectCode,
+  ExclusionLists,
+  PackageResult,
+  SolxConfigFile,
+  ToolRule,
+} from "@solx/tauri";
 import { ChipTagInput } from "../components/ChipTagInput";
 import { JsonEditField } from "../components/JsonEditField";
 import { getTauri } from "../api/connection";
@@ -699,6 +707,8 @@ interface ServerDraft {
   host: string;
   port: string;
   origins: string[];
+  publicUrl: string;
+  tokenDays: string;
 }
 
 function ServerEditor({ draft, setDraft, view }: SectionEditorProps<ServerDraft>) {
@@ -738,10 +748,32 @@ function ServerEditor({ draft, setDraft, view }: SectionEditorProps<ServerDraft>
       </div>
       {!isLoopbackHost(draft.host) && (
         <div className="config-warning">
-          Reachable from the network: the bearer token is the only gate, and traffic is unencrypted HTTP. Use a
-          private network (e.g. Tailscale/WireGuard) or a TLS reverse proxy.
+          Reachable from the network: bearer tokens are the only gate, and traffic is unencrypted HTTP. Use a
+          private network (e.g. Tailscale/WireGuard) or a TLS reverse proxy. Other devices connect with a code
+          from "Connect another device"; this machine's root token is refused from the network.
         </div>
       )}
+      <Field
+        label="Public address"
+        view={view}
+        keys={["server_public_url"]}
+        hint="What other devices should use to reach this server, when it isn't the address above: a 0.0.0.0 bind, a reverse proxy, a Tailscale name or IP. Used in connect links. An IP or host name gets this server's port; a full URL is used as is."
+      >
+        <TextInput
+          value={draft.publicUrl}
+          placeholder="http://my-laptop.tailnet.ts.net:8766"
+          mono
+          onChange={(publicUrl) => setDraft({ ...draft, publicUrl })}
+        />
+      </Field>
+      <Field label="Client token lifetime (days)" view={view} keys={["client_token_ttl_days"]}>
+        <TextInput
+          type="number"
+          value={draft.tokenDays}
+          placeholder={`${view.effective.client_token_ttl_days} (default)`}
+          onChange={(tokenDays) => setDraft({ ...draft, tokenDays })}
+        />
+      </Field>
       <Field
         label="Allowed browser origins"
         view={view}
@@ -755,8 +787,8 @@ function ServerEditor({ draft, setDraft, view }: SectionEditorProps<ServerDraft>
         />
       </Field>
       <span className="dialog__hint">
-        HTTP clients authenticate with a bearer token kept in this computer's credential manager, not in
-        solx-config.json. Run <code>solx token show</code> on this machine to get it.
+        Clients on this machine use the root token, kept in its credential manager (
+        <code>solx token show</code>). Other devices get a token of their own from a connect code.
       </span>
     </>
   );
@@ -771,6 +803,8 @@ const server: SectionDef<ServerDraft> = {
     host: raw.server_host ?? "",
     port: raw.server_port == null ? "" : String(raw.server_port),
     origins: raw.server_cors_origins ?? [],
+    publicUrl: raw.server_public_url ?? "",
+    tokenDays: raw.client_token_ttl_days == null ? "" : String(raw.client_token_ttl_days),
   }),
   toConfig: (draft) => ({
     // Stored only when off, so the default (on) stays implicit.
@@ -778,6 +812,8 @@ const server: SectionDef<ServerDraft> = {
     server_host: draft.host.trim() || undefined,
     server_port: parseNumberInput(draft.port),
     server_cors_origins: nonEmpty(draft.origins),
+    server_public_url: draft.publicUrl.trim() || undefined,
+    client_token_ttl_days: parseNumberInput(draft.tokenDays),
   }),
   Editor: ServerEditor,
 };
@@ -978,6 +1014,270 @@ const packages: SectionDef<null> = {
   readOnly: true,
 };
 
+// ── connect another device ──────────────────────────────────────────────
+//
+// Not a draft either: codes and tokens live in the host's token registry,
+// reached through `auth_exec` (the `solx:auth` permission, which only this
+// window holds).
+
+function errorText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+function formatCountdown(secs: number): string {
+  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+}
+
+function formatDate(iso: string | null): string {
+  return iso ? new Date(iso).toLocaleString() : "never";
+}
+
+/** Remembers the last "Address for the link" in this window. */
+const LINK_ADDRESS_KEY = "solx.connectLinkAddress";
+
+function DevicesView({ view }: SectionEditorProps<null>) {
+  const [label, setLabel] = useState("");
+  const [linkAddress, setLinkAddress] = useState(() => {
+    try {
+      return localStorage.getItem(LINK_ADDRESS_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const [code, setCode] = useState<ConnectCode | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [clients, setClients] = useState<ClientInfo[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setClients(await getTauri().auth.listClients());
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const remaining = code ? Math.max(0, Math.round((Date.parse(code.expires_at) - now) / 1000)) : 0;
+
+  // While a code is showing: count down, and watch for the device that
+  // redeems it to appear in the list.
+  useEffect(() => {
+    if (!code) return;
+    const tick = window.setInterval(() => setNow(Date.now()), 1000);
+    const poll = window.setInterval(() => void refresh(), 4000);
+    return () => {
+      window.clearInterval(tick);
+      window.clearInterval(poll);
+    };
+  }, [code, refresh]);
+
+  useEffect(() => {
+    if (code && remaining === 0) setCode(null);
+  }, [code, remaining]);
+
+  const create = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await getTauri().auth.createConnectCode({
+        label: label.trim() || undefined,
+        publicUrl: linkAddress.trim() || undefined,
+      });
+      setNow(Date.now());
+      setCode(next);
+      setLabel("");
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async (id: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await getTauri().auth.revokeClient(id);
+      await refresh();
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+      setConfirming(null);
+    }
+  };
+
+  const copy = async (what: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(what);
+      window.setTimeout(() => setCopied(null), 1500);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+
+  const loopbackOnly = isLoopbackHost(view.raw.server_host) && !view.raw.server_public_url;
+
+  return (
+    <>
+      {!view.effective.server_embedded && (
+        <div className="config-warning">
+          The HTTP server is off (see "HTTP server"), so other devices have nothing to connect to. Codes made now
+          still work once it's on, until they expire.
+        </div>
+      )}
+      {view.effective.server_embedded && loopbackOnly && (
+        <div className="config-warning">
+          The HTTP server only listens on this machine ({view.effective.server_host}). To connect another device,
+          set its address to 0.0.0.0 or this machine's network address in "HTTP server", then restart.
+        </div>
+      )}
+
+      <div className="dialog__input-row">
+        <input
+          className="dialog__input"
+          value={label}
+          placeholder="Device name (optional), e.g. work laptop"
+          spellCheck={false}
+          onChange={(e) => setLabel(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !busy) void create();
+          }}
+        />
+        <button
+          type="button"
+          className="dialog__btn dialog__btn--primary"
+          disabled={busy}
+          onClick={() => void create()}
+        >
+          {code ? "New code" : "Create connect code"}
+        </button>
+      </div>
+      <Field
+        label="Address for the link (optional)"
+        view={view}
+        hint={
+          <>
+            Use a different address than {view.raw.server_public_url ? "the public address" : "this machine's network address"},
+            e.g. its Tailscale IP. An IP or host name gets this server's port; a full URL is used as is.
+          </>
+        }
+      >
+        <TextInput
+          value={linkAddress}
+          placeholder="100.101.102.103"
+          mono
+          onChange={(v) => {
+            setLinkAddress(v);
+            try {
+              localStorage.setItem(LINK_ADDRESS_KEY, v);
+            } catch {
+              // Not remembered; it still applies to this code.
+            }
+          }}
+        />
+      </Field>
+
+      {code && (
+        <div className="config-connect-code" aria-live="polite">
+          <span className="dialog__hint">On the other device, enter this code</span>
+          <span className="config-connect-code__digits">{code.display_code}</span>
+          {code.server_url && (
+            <span className="dialog__hint">
+              with the server address <code>{code.server_url}</code>{" "}
+              <button type="button" className="dialog__btn" onClick={() => void copy("address", code.server_url!)}>
+                {copied === "address" ? "Copied" : "Copy"}
+              </button>
+            </span>
+          )}
+          {code.url && (
+            <span className="dialog__hint config-connect-code__link">
+              or open <code>{code.url}</code>{" "}
+              <button type="button" className="dialog__btn" onClick={() => void copy("link", code.url!)}>
+                {copied === "link" ? "Copied" : "Copy link"}
+              </button>
+            </span>
+          )}
+          <span className="dialog__hint">
+            Expires in {formatCountdown(remaining)}. It works once, and anyone who has it can connect until then.
+          </span>
+        </div>
+      )}
+      {error && <div className="dialog__error">{error}</div>}
+
+      <span className="dialog__label">Connected devices</span>
+      {clients === null ? (
+        <span className="dialog__hint">Loading…</span>
+      ) : !clients.length ? (
+        <span className="dialog__hint">No other devices have a token.</span>
+      ) : (
+        <div className="config-rows">
+          {clients.map((c) => (
+            <div className="config-card config-card--package" key={c.id}>
+              <button
+                type="button"
+                className="config-icon-btn config-card__close"
+                disabled={busy}
+                aria-label={`Revoke ${c.label ?? c.id}`}
+                title="Revoke"
+                onClick={() => setConfirming(c.id)}
+              >
+                ✕
+              </button>
+              <div className="config-card__title">{c.label ?? "Unnamed device"}</div>
+              <span className="dialog__hint">
+                Connected {formatDate(c.created_at)} · last used {formatDate(c.last_used_at)} · expires{" "}
+                {formatDate(c.expires_at)}
+              </span>
+              {confirming === c.id && (
+                <div className="config-warning">
+                  Revoke this device's token? Its next request is refused, and it needs a new code to reconnect.
+                  <div className="dialog__input-row config-confirm">
+                    <button type="button" className="dialog__btn" disabled={busy} onClick={() => setConfirming(null)}>
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="dialog__btn dialog__btn--primary"
+                      disabled={busy}
+                      onClick={() => void revoke(c.id)}
+                    >
+                      Revoke
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+const devices: SectionDef<null> = {
+  id: "devices",
+  title: "Connect another device",
+  description: (
+    <>
+      Give another computer, browser or MCP client a token of its own: create a code here and enter it there (or
+      run <code>solx token connect-code</code> on this machine). Each device can be revoked on its own.
+    </>
+  ),
+  fromConfig: () => null,
+  toConfig: () => ({}),
+  Editor: DevicesView,
+  readOnly: true,
+};
+
 // ── raw ─────────────────────────────────────────────────────────────────
 
 function RawEditor({ draft, setDraft }: SectionEditorProps<string>) {
@@ -1015,6 +1315,7 @@ export const SECTIONS: SectionDef<any>[] = [
   limits,
   environment,
   server,
+  devices,
   storage,
   packages,
   raw,

@@ -1,10 +1,10 @@
 # Security design
 
-Status as of 2026-10-14. This describes what solx-core enforces today, and
+Status as of 2026-10-16. This describes what solx-core enforces today, and
 what it doesn't. It replaces the old `future-security-enhancements.md`,
 which predated the `command_actions` and `allowed_base_urls` allowlists, the
-outbound-URL gate on the `/builtin/web/*` built-ins, and moving the bearer
-token into the OS credential store.
+outbound-URL gate on the `/builtin/web/*` built-ins, moving the bearer
+token into the OS credential store, and the token registry.
 
 [SECURITY.md](../SECURITY.md) is the short, user-facing version. This
 document is for people changing the code. It names the module that owns
@@ -34,15 +34,19 @@ or an LLM over MCP. The model rests on four assumptions:
 | Entry point | Authenticated? | Enters through | Principal | Notes |
 |---|---|---|---|---|
 | `solx` CLI (local mode) | No (OS user) | `ActionManager::exec`, plus direct `save` | `None` | Can save Command/Webhook rows. Package installs depend on this. |
-| `solx` CLI (remote mode) | Bearer token | `solx-client` → HTTP | Derived on the server | Only loopback URLs get the root token automatically (`credentials::is_loopback_url`). |
+| `solx` CLI (remote mode) | Bearer token | `solx-client` → HTTP | `None` for `exec` (`X-Solx-Principal: none`); derived on the server for `exec_for` | Only loopback URLs get the root token automatically (`credentials::is_loopback_url`). |
+| `solx token connect-code\|clients\|revoke\|issue` | No (OS user) | `exec_for(&Root, "/builtin/auth", …)` | `Root` | Trusted entry point (§3.4). Against a running host, Root comes from the loopback root token. |
 | `solx-mcp` over stdio | No (parent process) | `exec` | `None` | |
-| `solx-server` REST | Bearer token | `exec_for` | From `require_bearer` | |
-| `solx-server` `/mcp` | Bearer token | `exec_for` | From `require_bearer` via `http::request::Parts` | |
+| `solx-server` REST | Bearer token | `exec_for` | From `require_bearer` | Root token from loopback peers only. |
+| `solx-server` `/mcp` | Bearer token | `exec_for` | From `require_bearer` via `http::request::Parts` | Same. |
+| `solx-server` `/auth/exchange` | No (connect code) | `Registry::redeem` | — | Global failure budget, per-IP backoff (§3.4). |
 | Tauri plugin (desktop app) | No (in-process) | `exec`, direct `save` | `None` | Gated per window by Tauri capabilities (§2.4). |
-| Spawned Command child | `SOLX_SERVER_TOKEN` | HTTP | `Root` today | See §3.3. |
+| Tauri `auth_exec` (Settings window) | No (in-process) | `exec_for(&Root, "/builtin/auth", …)` | `Root` | `solx:auth` only; four builtin names only. |
+| Spawned Command child | `SOLX_SERVER_TOKEN` | HTTP | `Action` | Per-invocation token, revoked when the child ends (§3.3). |
 
-`/health` is the only route without authentication. It reports the build
-version and commit and nothing about stored data.
+`/health`, `/auth/exchange` and `/connect` are the only routes without
+authentication. `/health` reports the build version and commit and nothing
+about stored data; `/connect` is a static page.
 
 ### 2.2 Two identities: `Caller` and `Principal`
 
@@ -74,11 +78,9 @@ principal is itself an action token, or when there is no principal. Without
 this check, an action could re-enter with an inherited principal and look
 like an external call.
 
-> **Status.** The principal plumbing (`exec_for`, `external_principal`,
-> carrying the principal through WASM/script/`action-start`) is in the
-> working tree and not yet committed. Nothing authorizes on `Principal` yet.
-> It exists for the token registry's auth built-ins (§8). Every accepted
-> bearer is still `Principal::Root`.
+With the token registry (§3.4), accepted bearers map to all three
+principals: the root token to `Root`, client tokens to `Client`, and
+per-invocation action tokens to `Action`.
 
 ### 2.3 What identity is used for today
 
@@ -86,8 +88,10 @@ like an external call.
   *caller's* `action_config.secrets` (§5.1).
 - **Caller-only built-ins.** `console-print`, `action-cancelled`,
   `get-secret` and `set-secret` refuse to run without an action caller.
-- **Nothing else.** CLI, MCP and HTTP callers are all treated as "not an
-  action". There is no per-entity permission check.
+- **The auth built-ins.** `/builtin/auth/*` run only when
+  `external_principal()` is `Root` (§3.4).
+- **Nothing else.** A `Client` or `Action` principal can do everything
+  except the auth built-ins. There is no per-entity permission check.
 
 ### 2.4 Desktop app (Tauri capabilities)
 
@@ -102,6 +106,10 @@ grants them per window:
 - `config`: read and edit `solx-config.json`, and install arbitrary package
   zips. This set can edit the allowlists. It must only go to a window that
   never loads package widgets, such as the Settings window.
+- `auth`: `auth_exec`, which runs the four `/builtin/auth/*` built-ins as
+  `Root` (connect codes, client tokens). Granted to the Settings window
+  only, for the same reason as `config`. A unit test in the desktop app
+  checks the main window's capability holds neither.
 
 ## 3. Authentication
 
@@ -137,6 +145,13 @@ grants them per window:
   including `/mcp`. On success it stores the resulting `Principal` in the
   request extensions. On failure it returns a 401 with a JSON
   `unauthorized` body.
+- **Root from loopback only.** With the registry on, `require_bearer`
+  refuses `Principal::Root` unless the peer (`ConnectInfo<SocketAddr>`) is a
+  loopback address. Without peer information it refuses (fail closed), so
+  every host serves with `into_make_service_with_connect_info`. Behind a
+  reverse proxy on the same machine, every request comes from loopback and
+  this check can't tell them apart; that is documented rather than
+  detected.
 - **CORS.** Permissive on a loopback bind, because the bearer token is the
   gate and browser clients such as `@solx/http` need access. On a
   non-loopback bind, only the origins listed in `server_cors_origins` are
@@ -151,12 +166,71 @@ grants them per window:
 way an action gets a token: action config has no way to set or override
 environment variables. `SOLX_SERVER_URL` is set only when the process has
 bound an HTTP server (`solx-server`, the CLI's embedded server, or the
-desktop app with `server_embedded`). The credential is kept alive until the child exits, so a
-revoking guard can be attached (§8).
+desktop app with `server_embedded`). The credential is kept alive until the
+child exits.
 
-With today's `SingleTokenAuthority`, the issued token is **the root token**.
-Every Command action can call back with full access, and it can keep that
-access after it exits.
+With the registry, the token is a fresh **action token**
+(`Principal::Action`), valid for the invocation's timeout plus 60 seconds.
+`run_command` calls `TokenAuthority::release` once the child is done, on
+every path after spawn (success, failure, timeout); detached runs do the
+same inside their spawned task, so they release at completion, not when
+`action-start` returns. For early returns and panics, the credential's
+guard queues its id on drop, without any I/O, and the registry deletes
+queued rows at the start of its next database call, so the token is
+rejected from the next authentication in that process. A row left by a
+crash, or by a process that never touches the registry again, dies at
+`expires_at`.
+
+An action token can still do everything except the auth built-ins,
+including saving Command rows (gap 7). What it adds is expiry, revocation
+and attribution. Without the registry, the token is the root token, which
+keeps working after the action exits.
+
+### 3.4 The token registry (`solx-registry`)
+
+Behind the `registry` cargo feature, on by default (solx-manager,
+solx-server, solx-mcp and solx-cli; the desktop app's `server` feature lists
+it explicitly). `build_authority` returns a `Registry` instead of
+`SingleTokenAuthority`.
+
+- **Storage.** `solx-registry.db` in the database dir: `tokens` (client and
+  action rows), `connect_codes`, and `registry_state` (the failure counter).
+  Only SHA-256 hashes of tokens and codes are stored, and lookups are by
+  hash, so no constant-time comparison is needed past the root token.
+  Everything is in the database, not process memory, so a revocation in one
+  process applies in every other one on its next request, and a sibling
+  `solx-server` accepts action tokens minted by stdio `solx-mcp`.
+- **Authentication.** The root token first, compared in memory with
+  `constant_time_eq`. Then one indexed lookup of unrevoked, unexpired rows.
+  No cache. `last_used_at` is written at most once a minute per token.
+- **Client tokens** expire after `client_token_ttl_days` (90). Revoking sets
+  `revoked_at`. The sweep (on open, and every 10 minutes in long-lived
+  hosts) deletes expired and revoked rows and expired or spent codes.
+- **Connect codes.** 8 random digits from the OS RNG (about 26.6 bits),
+  single use (an atomic `UPDATE … WHERE consumed_at IS NULL AND
+  expires_at > now` in an `IMMEDIATE` transaction), 10 minutes by default.
+  The main threat is guessing, so there is a **global failure budget**:
+  every failed redemption of a well-formed code increments a counter in the
+  database, shared by every process and peer, and at 10 every pending code
+  is deleted and the counter starts over. Neither a success nor a new code
+  resets it. An attacker's odds are about 10 in 10^8 per batch of codes.
+  `/auth/exchange` adds a one-second per-IP backoff (`429`) after a failure.
+- **Code hashes hide little.** There are only 10^8 codes, so anyone who can
+  read `solx-registry.db` can recover a pending one. That reader already has
+  local access, and codes live 10 minutes.
+- **`/connect`** is static and changes no state. The code rides in the URL
+  fragment, which browsers never send, and the page's form only posts it
+  when a person clicks.
+- **Auth built-ins.** `/builtin/auth/{create-connect-code, list-clients,
+  revoke-client, issue-client}`, registered through
+  `LocalActionManager::add_plugin`. Each refuses unless
+  `external_principal()` is `Root`: client tokens, action tokens, any action
+  in the chain, and calls with no principal (stdio MCP, `solx exec`, plain
+  Tauri IPC) are refused. The trusted ways in run them with
+  `exec_for(&Principal::Root, …)`: the binary-only `solx token …` commands
+  (not in `Commands`, so scripts can't reach them) and the Settings window's
+  `auth_exec`. `list-clients` never returns tokens or hashes. Redemptions,
+  issues and revocations are logged (never the token or code).
 
 ## 4. Execution controls by action type
 
@@ -370,26 +444,18 @@ These are bearer-style: holding the id or token is the only check.
   router call's own `path_prefix` overrides it, and it doesn't restrict
   `call_tool`. Use tooling exclusions for access control.
 
-## 8. Planned: the token registry
+## 8. Next: authorizing on the principal
 
-[token-registry-plan.md](token-registry-plan.md) (phase 3, not started) adds
-an optional `solx-registry` crate behind `build_authority`:
-
-- per-invocation **action tokens**, revoked when the invocation ends through
-  the `ActionCredential` guard;
-- per-client **client tokens**, obtained by redeeming a one-time code, and
-  individually listable and revocable.
-
-Phases 1 and 2 are done: the `TokenAuthority` seam, credential-store storage,
-and the `Principal` in request extensions. The principal plumbing in §2.2 is
-the groundwork for deciding who may call the auth built-ins.
-
-Once real `Client` and `Action` principals exist, the plan's "Follow-on"
-section uses them for two more things:
+The token registry ([token-registry-plan.md](token-registry-plan.md)) is in
+place (§3.4). Now that real `Client` and `Action` principals exist, the
+plan's "Follow-on" section uses them for two more things:
 
 - gating `command`/`webhook` saves on every route, not just the built-ins
   (gap 7);
 - scoping `get-env`/`set-env` (gap 6).
+
+TLS for off-loopback serving, and pinning the server's root during the
+exchange, are planned separately in [tls-plan.md](tls-plan.md).
 
 ## 9. Known gaps
 
@@ -398,11 +464,13 @@ These are accepted for now. Each one is a candidate for future hardening.
 1. **No approval step at execution time.** Any row in the actions database
    runs when called. The allowlists limit *what* a row can point at, not
    *whether* it runs.
-2. **One root token for everything.** Every HTTP client, MCP client and
-   Command child holds the same token, and a child keeps it after exiting.
-   Rotating it breaks every client. Fixed by §8.
-3. **No authorization on identity.** `Principal` is carried but never
-   checked. CLI, stdio MCP and Tauri are unauthenticated local entry points.
+2. **Client and action tokens aren't scoped.** They expire and can be
+   revoked one by one (§3.4), but each can do everything the root token
+   can, apart from the auth built-ins. With the `registry` feature off, every
+   client and Command child shares the root token.
+3. **Little authorization on identity.** Only the auth built-ins check the
+   `Principal`. CLI, stdio MCP and Tauri are unauthenticated local entry
+   points.
 4. **No package signing.** Catalog checksums come from the same release as
    the zips. A local directory or zip is trusted unconditionally, including
    its declared grants.
@@ -420,12 +488,16 @@ These are accepted for now. Each one is a candidate for future hardening.
 8. **Command children inherit solx's environment**, and timeouts don't kill
    process trees (§4.1).
 9. **Off-loopback serving has no TLS**, and the bearer token is the only
-   gate (§3.2).
+   gate (§3.2). Planned in [tls-plan.md](tls-plan.md): a local root CA
+   with a non-exportable key, TLS serving, and client pinning.
 10. **Bearer-style loopback ids** for streams, consoles and OAuth (§6).
-11. **No rate limiting or audit log** on `solx-server`. Rotation exists but
-    only takes effect on restart.
+11. **No general rate limiting or audit log** on `solx-server`. Only
+    `/auth/exchange` is throttled. Root-token rotation exists but only takes
+    effect on restart.
 12. **Package actions aren't held to tooling exclusions** (§7). Exclude any
     package action that reads sensitive entities on a model's behalf.
+13. **A same-machine reverse proxy defeats root-from-loopback-only** (§3.2):
+    every request reaches the server from loopback.
 
 ## 10. Rules for changing this code
 
@@ -438,6 +510,10 @@ These are accepted for now. Each one is a candidate for future hardening.
   look like an external call.
 - Any built-in that authorizes on identity uses `external_principal()` and
   treats `None` as deny, never as root.
+- Any new host that serves solx-server's router uses
+  `into_make_service_with_connect_info::<SocketAddr>()`, or the root token
+  is refused from every peer.
+- Never log a token or connect code, and never return a token hash.
 - A handler never returns a `Caller`'s secret keys, or anything derived from
   them other than the decrypted value they protect.
 - New credential fields under `action_config.auth` are masked automatically.

@@ -10,6 +10,7 @@
 //! side, the `list`/`search` split — see `types.rs` and `docs.rs`.
 
 mod actions;
+mod connect;
 mod docs;
 mod error;
 mod files;
@@ -17,6 +18,7 @@ mod http;
 mod types;
 
 pub use actions::RemoteActionManager;
+pub use connect::{exchange_connect_code, Exchanged};
 pub use docs::RemoteDocManager;
 pub use files::RemoteFileStore;
 pub use types::RemoteTypeManager;

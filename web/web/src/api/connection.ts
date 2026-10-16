@@ -5,7 +5,8 @@
  *
  * - **Browser**: `solx-server` over HTTP via `@solx/http`. There is no
  *   backend to hold `serverUrl`/`serverToken` for us, so the browser keeps
- *   them itself in `localStorage`, entered via `SettingsPanel`. Anything
+ *   them itself in `localStorage`, entered via `SettingsPanel` (a token, or
+ *   a connect code redeemed for one by {@link connectBrowser}). Anything
  *   else `solx.config.*` used to expose (`dataDirectory`, package registry,
  *   …) is local-only to a running `solx-server`/`solx-cli` process and has
  *   no browser-side counterpart.
@@ -20,6 +21,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { connectHttp } from "@solx/http";
 import type { RemoteSolx } from "@solx/surface";
 import { connectTauri, type HostInfo, type TauriSolx } from "@solx/tauri";
+import { parseConnectInput } from "./connectInput";
 
 /** True when running inside the solx desktop app's webview. */
 export const IN_TAURI = isTauri();
@@ -103,12 +105,55 @@ export function setConnection(serverUrl: string, serverToken: string): void {
 }
 
 /**
- * Desktop client build: point the host at a `solx-server`. The host checks
- * the URL/token before persisting them, so this rejects (with a
- * `SolxError`) on a bad URL or token.
+ * Redeem a connect code at `serverUrl`'s `POST /auth/exchange` for this
+ * client's own token. Rejects with the server's message on a wrong,
+ * expired or spent code.
  */
-export async function connectHost(serverUrl: string, serverToken: string): Promise<void> {
-  await tauriSolx().host.connect(serverUrl, serverToken);
+async function exchangeConnectCode(
+  serverUrl: string,
+  code: string,
+): Promise<{ token: string; serverUrl: string | null }> {
+  const res = await fetch(`${serverUrl}/auth/exchange`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  if (res.status === 404) {
+    throw new Error(`${serverUrl} doesn't accept connect codes; ask for a token instead.`);
+  }
+  const body = (await res.json().catch(() => ({}))) as {
+    token?: string;
+    server_url?: string | null;
+    message?: string;
+  };
+  if (!res.ok || !body.token) throw new Error(body.message ?? `HTTP ${res.status}`);
+  return { token: body.token, serverUrl: body.server_url?.trim() || null };
+}
+
+/**
+ * Browser: connect from the one "connect code, link or token" field. A code
+ * (or a connect link, which also supplies the server) is redeemed first;
+ * either way the resulting token is stored as {@link setConnection} does.
+ */
+export async function connectBrowser(serverUrl: string, credential: string): Promise<void> {
+  const parsed = parseConnectInput(serverUrl, credential);
+  const url = parsed.serverUrl ?? DEFAULT_SERVER_URL;
+  if (parsed.credential.kind === "token") {
+    setConnection(url, parsed.credential.token);
+    return;
+  }
+  const exchanged = await exchangeConnectCode(url, parsed.credential.code);
+  setConnection(exchanged.serverUrl ?? url, exchanged.token);
+}
+
+/**
+ * Desktop client build: point the host at a `solx-server`. `credential` is
+ * the same one field as in the browser: the host redeems a connect code (or
+ * link) first, then checks the URL/token before persisting them, so this
+ * rejects (with a `SolxError`) on a bad URL, code or token.
+ */
+export async function connectHost(serverUrl: string, credential: string): Promise<void> {
+  await tauriSolx().host.connect(serverUrl, credential);
   await refreshHostInfo();
   notify();
 }

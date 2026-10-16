@@ -55,6 +55,11 @@ pub struct App {
     /// credentials spawned Command actions. `Some` only for local wiring: a
     /// remote `App` serves nothing and runs no actions itself.
     authority: Option<Arc<dyn TokenAuthority>>,
+    /// The same authority as the token registry, for the routes and hosts
+    /// that manage client tokens and connect codes. `Some` only for local
+    /// wiring.
+    #[cfg(feature = "registry")]
+    registry: Option<Arc<solx_registry::Registry>>,
 }
 
 impl App {
@@ -169,9 +174,15 @@ impl App {
             .await
             .context("open actions db")?,
         );
+        let authority = build_authority(&config).await?;
+        // Plugins must be added before `set_self_ref`, which merges them.
+        #[cfg(feature = "registry")]
+        actions_concrete
+            .add_plugin(solx_registry::actions::plugin(authority.registry.clone()))
+            .await
+            .context("register the token registry's builtins")?;
         actions_concrete.set_self_ref(Arc::downgrade(&actions_concrete));
-        let authority = build_authority(&config)?;
-        actions_concrete.set_token_authority(authority.clone());
+        actions_concrete.set_token_authority(authority.authority.clone());
         let actions: Arc<dyn ActionManager> = actions_concrete;
 
         Ok(Arc::new(App {
@@ -181,7 +192,9 @@ impl App {
             actions,
             files,
             remote_url: None,
-            authority: Some(authority),
+            authority: Some(authority.authority),
+            #[cfg(feature = "registry")]
+            registry: Some(authority.registry),
         }))
     }
 
@@ -225,6 +238,8 @@ impl App {
             files,
             remote_url,
             authority: None,
+            #[cfg(feature = "registry")]
+            registry: None,
         }))
     }
 
@@ -238,15 +253,45 @@ impl App {
     pub fn authority(&self) -> Option<Arc<dyn TokenAuthority>> {
         self.authority.clone()
     }
+
+    /// The token registry behind [`Self::authority`]. `None` for a remote
+    /// app.
+    #[cfg(feature = "registry")]
+    pub fn registry(&self) -> Option<Arc<solx_registry::Registry>> {
+        self.registry.clone()
+    }
 }
 
-/// The one place the token authority is chosen. Today that's always the
-/// single shared `server_token`.
+/// What [`build_authority`] chose.
 #[cfg(feature = "local")]
-fn build_authority(config: &ConfigService) -> Result<Arc<dyn TokenAuthority>> {
-    let authority = solx_config::credentials::SingleTokenAuthority::from_config(config)
-        .context("prepare server token")?;
-    Ok(Arc::new(authority))
+struct BuiltAuthority {
+    authority: Arc<dyn TokenAuthority>,
+    #[cfg(feature = "registry")]
+    registry: Arc<solx_registry::Registry>,
+}
+
+/// The one place the token authority is chosen: the token registry with
+/// the `registry` feature, else the single shared root token.
+#[cfg(feature = "local")]
+async fn build_authority(config: &Arc<ConfigService>) -> Result<BuiltAuthority> {
+    #[cfg(feature = "registry")]
+    {
+        let registry = solx_registry::Registry::open(config.clone())
+            .await
+            .context("open the token registry")?;
+        Ok(BuiltAuthority {
+            authority: registry.clone(),
+            registry,
+        })
+    }
+    #[cfg(not(feature = "registry"))]
+    {
+        let authority = solx_config::credentials::SingleTokenAuthority::from_config(config)
+            .context("prepare server token")?;
+        Ok(BuiltAuthority {
+            authority: Arc::new(authority),
+        })
+    }
 }
 
 impl App {

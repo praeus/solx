@@ -10,8 +10,13 @@ description = "Wires the solx manager implementations together (local or remote,
 # wasmtime, libsql, keyring, ...). Without it, `App` can only proxy to a
 # remote `solx-server` via `solx-client` — what a thin client (e.g. the
 # Tauri client build) wants.
-default = ["local"]
+default = ["local", "registry"]
 local = ["dep:solx-types", "dep:solx-files", "dep:solx-docs", "dep:solx-actions"]
+# The token registry (`solx-registry`): scoped, expiring client and action
+# tokens and connect codes instead of one shared root token. Without it,
+# every bearer is the root token, as before. Hosts that depend on this crate
+# with `default-features = false` must enable it themselves.
+registry = ["local", "dep:solx-registry"]
 
 [dependencies]
 solx-surface = { workspace = true }
@@ -20,5 +25,6 @@ solx-types = { workspace = true, optional = true }
 solx-files = { workspace = true, optional = true }
 solx-docs = { workspace = true, optional = true }
 solx-actions = { workspace = true, optional = true }
+solx-registry = { workspace = true, optional = true }
 solx-client = { workspace = true }
 anyhow = { workspace = true }

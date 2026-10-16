@@ -109,10 +109,32 @@ the files root are refused.
 **The server binds loopback by default, and every route needs a bearer
 token.** `solx-server` listens on `127.0.0.1` unless `server_host` in
 `solx-config.json` (or `--host`) says otherwise. Every route except
-`/health` requires a bearer token, which is generated on first start. Setting
-`server_host` to a LAN address or `0.0.0.0` allows non-local access. In that
-case the bearer token is the only gate, traffic is not encrypted (no TLS),
-and CORS is limited to the origins listed in `server_cors_origins`.
+`/health`, `/auth/exchange` and the static `/connect` page requires a bearer
+token. Setting `server_host` to a LAN address or `0.0.0.0` allows non-local
+access. In that case bearer tokens are the only gate, traffic is not
+encrypted (no TLS), and CORS is limited to the origins listed in
+`server_cors_origins`.
+
+**The root token is accepted from this machine only.** The root token is
+generated on first start and kept in the OS credential manager. Requests
+carrying it from any other machine are refused. Other devices each get their
+own client token by redeeming a single-use connect code (`solx token
+connect-code` on the host, or "Connect another device" in the desktop app's
+settings). Client tokens expire after 90 days by default, and each can be
+listed and revoked on its own (`solx token clients`, `solx token revoke`).
+Only the root token can create codes or manage client tokens.
+
+**Command actions get a token that dies with them.** Each external Command
+invocation is handed its own token as `SOLX_SERVER_TOKEN`, revoked as soon
+as the invocation ends.
+
+**Connect codes are guarded against guessing.** A code is 8 random digits,
+works once, and expires after 10 minutes. Every failed attempt, from any
+address, counts against a shared budget: after 10 failures every pending code
+is invalidated. The database stores only hashes of tokens and codes, but a
+code's hash doesn't hide it from someone who can read `solx-registry.db`,
+since there are only 10^8 codes. Such a person already has local access, and
+codes are short-lived.
 
 **MCP access follows the tooling exclusions.** `exclusions.tooling` in
 `solx-config.json` (along with `tool_exclude` and the `solx:hidden` tag)
@@ -128,15 +150,13 @@ everything running through solx today is trusted by construction.
 
 - **Anything saved to the actions database is executable.** There is no
   approval or confirmation step at execution time.
-- **Callers are undifferentiated.** solx tracks which action invoked another
-  and uses that only to scope secrets. Authenticated HTTP and `/mcp` calls
-  now carry the `Principal` behind the bearer token, but nothing authorizes
-  on it yet. Every valid token is root.
-- **Every client and Command action shares one root token.** A Command
-  action receives the root token, and it keeps working after the action
-  exits. The token registry
-  ([docs/token-registry-plan.md](docs/token-registry-plan.md)) will replace
-  it with per-client and per-invocation tokens.
+- **Client and action tokens aren't scoped.** A client token, or a Command
+  action's own token, can do everything the root token can except create
+  connect codes and manage client tokens. What they add is expiry,
+  revocation and knowing who is calling.
+- **A reverse proxy on the same machine hides remote callers.** Every
+  request then arrives from loopback, so the root token is accepted through
+  the proxy. Don't hand the root token to remote clients in that setup.
 - **The in-process env store is global.** Any caller can read and write
   `get-env`/`set-env`, including the system variables mapped in through
   `env_mappings`. Don't map a secret into it.
@@ -148,8 +168,9 @@ everything running through solx today is trusted by construction.
 - **Loopback capabilities are bearer-style.** OAuth loopbacks, action
   consoles, and HTTP streams are reachable by anyone who knows the
   unguessable id, without a further caller check.
-- **`solx-server` has no rate limiting or audit log.** `solx token rotate`
-  exists, but running hosts keep accepting the old token until they restart.
+- **`solx-server` has no general rate limiting or audit log.** Only connect
+  code exchanges are throttled. `solx token rotate` exists, but running hosts
+  keep accepting the old root token until they restart.
 
 See [docs/security-design.md](docs/security-design.md) for how each control
 is implemented, the full list of known gaps, and the intended direction.
@@ -169,17 +190,25 @@ is implemented, the full list of known gaps, and the intended direction.
   `SOLX_MCP_PATH_PREFIX` only sets which actions a model *discovers* by
   default. It doesn't restrict what can be called, so don't rely on it for
   access control.
-- **Treat the server token as a credential.** It is full access to the
-  instance, including command execution. solx keeps it in the OS credential
-  manager rather than `solx-config.json`; `solx token show` prints it and
-  `solx token rotate` replaces it. Don't commit it, and don't put it in a
-  shared config file. Command actions receive it as `SOLX_SERVER_TOKEN` and
-  should never read it from anywhere else.
+- **Treat every token as a credential.** The root token and each client
+  token are full access to the instance, including command execution. solx
+  keeps them in the OS credential manager rather than `solx-config.json`;
+  `solx token show` prints the root token and `solx token rotate` replaces
+  it. Don't commit tokens, and don't put them in a shared config file.
+  Command actions receive their own token as `SOLX_SERVER_TOKEN` and should
+  never read one from anywhere else.
+- **Give each device its own token, and revoke what you don't use.** Use a
+  connect code per device rather than copying the root token around, and
+  revoke a device's token (`solx token revoke`) when you stop using it or
+  lose it.
+- **Treat a connect code like a password while it's live.** Anyone who has
+  it can connect until it is used or expires. Share it over a channel you
+  trust, or read it off the screen.
 - **Think before exposing `solx-server` beyond loopback.** Setting
   `server_host`, or tunnelling or proxying the server, makes a
   shell-execution endpoint reachable from the network, protected only by
-  the bearer token and without TLS. Keep it on a trusted network, put TLS
-  (and ideally real authentication) in front of it, and set
+  bearer tokens and without TLS. Keep it on a trusted network, put TLS (and
+  ideally real authentication) in front of it, and set
   `server_cors_origins` to only the browser origins you use.
 - **Prefer WASM for third-party logic.** The `custom-action` world is the
   only genuinely sandboxed dispatch kind.

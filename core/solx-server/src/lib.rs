@@ -40,8 +40,14 @@ use state::AppState;
 pub const BUILD_COMMIT: &str = env!("SOLX_BUILD_COMMIT");
 pub const BUILD_COMMIT_DATE: &str = env!("SOLX_BUILD_COMMIT_DATE");
 
-/// Build the full router: an unauthenticated `/health`, plus every data
+/// Build the full router: an unauthenticated `/health` (and, with the
+/// token registry, `/auth/exchange` and `/connect`), plus every data
 /// route behind the bearer-auth middleware.
+///
+/// Serve it with `into_make_service_with_connect_info::<SocketAddr>()`
+/// (as [`serve`] does): with the registry on, the root token is accepted
+/// only from loopback peers, and a server without peer addresses treats
+/// every peer as remote.
 ///
 /// CORS is wide open (`CorsLayer::permissive()`) so browser-based clients
 /// (e.g. `solx-web`'s frontend, via `@solx/http`) can call this server
@@ -65,6 +71,13 @@ pub fn build_router_with_cors(state: AppState, cors: CorsLayer) -> Router {
         auth::require_bearer,
     ));
 
+    #[allow(unused_mut)]
+    let mut public = Router::new();
+    #[cfg(feature = "registry")]
+    if state.registry.is_some() {
+        public = public.merge(routes::connect::router());
+    }
+
     Router::new()
         // Stays unauthenticated, and deliberately reports only what the
         // binary was built from -- enough to spot a stale server, nothing
@@ -80,6 +93,7 @@ pub fn build_router_with_cors(state: AppState, cors: CorsLayer) -> Router {
                 }))
             }),
         )
+        .merge(public)
         .merge(protected)
         .layer(cors)
         .with_state(state)
@@ -135,17 +149,38 @@ pub async fn serve(
 ) -> std::io::Result<SocketAddr> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?;
-    state.auth.set_server_url(server_url(bound));
+    announce_bound(&state, bound);
     let router = build_router_with_cors(state, cors);
     tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, router)
-            .with_graceful_shutdown(shutdown)
-            .await
+        if let Err(e) = axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown)
+        .await
         {
             tracing::warn!("embedded solx-server on {bound} exited: {e}");
         }
     });
     Ok(bound)
+}
+
+/// Tell the authority where this process now serves HTTP, and start the
+/// token registry's periodic sweep. For every host that binds a server,
+/// [`serve`] included.
+pub fn announce_bound(state: &AppState, bound: SocketAddr) {
+    state.auth.set_server_url(server_url(bound));
+    #[cfg(feature = "registry")]
+    if let Some(registry) = &state.registry {
+        // A loopback bind isn't reachable from elsewhere, so it says nothing
+        // about where other devices should connect; keep the configured
+        // address for links (the CLI's embedded server binds loopback even
+        // when the host it stands in for is on the network).
+        if !bound.ip().is_loopback() {
+            registry.set_advertised_url(solx_registry::advertised_url(bound));
+        }
+        registry.spawn_sweeper();
+    }
 }
 
 /// The URL a spawned Command action uses to reach a server bound on

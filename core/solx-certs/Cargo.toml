@@ -1,0 +1,46 @@
+[package]
+name = "solx-certs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Local certificate authority for solx-server TLS: a root CA with a non-exportable key (Windows CNG, preferably on the TPM) or PEM files, and the server certificates it signs. Library and CLI."
+
+[[bin]]
+name = "solx-certs"
+path = "src/main.rs"
+
+[features]
+# The Windows CNG backend (non-exportable keys, TPM or software KSP, stored
+# in CurrentUser\My). Ignored on other platforms, which only have the file
+# backend.
+default = ["cng"]
+cng = ["dep:windows-sys", "dep:schannel"]
+
+[dependencies]
+# `appdata_dir()` only, for the CLI's default `--dir`.
+solx-config = { workspace = true }
+rcgen = { workspace = true }
+rustls-pki-types = { workspace = true }
+time = { workspace = true }
+sha2 = { workspace = true }
+aes-gcm = { workspace = true }
+base64 = { workspace = true }
+rand = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+# Wraps the file backend's CA key under a key kept in the OS credential
+# manager. Same backends as solx-config.
+keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", optional = true, features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+schannel = { version = "0.1", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+# Verifies issued chains the way a TLS client would.
+webpki = { package = "rustls-webpki", version = "0.103", default-features = false, features = ["ring", "std"] }

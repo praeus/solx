@@ -72,6 +72,10 @@ export interface SolxConfigFile {
   server_port?: number;
   server_host?: string;
   server_cors_origins?: string[];
+  /** The address other machines use to reach this server, for connect links. */
+  server_public_url?: string;
+  /** Lifetime of a client token, in days (default 90). */
+  client_token_ttl_days?: number;
   server_embedded?: boolean;
   console_max_entries?: number;
   console_ttl_days?: number;
@@ -103,6 +107,7 @@ export interface EffectiveConfig {
   server_host: string;
   server_port: number;
   server_embedded: boolean;
+  client_token_ttl_days: number;
   console_max_entries: number;
   console_ttl_days: number;
   background_timeout_secs: number;

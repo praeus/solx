@@ -1,4 +1,6 @@
 pub mod actions;
+#[cfg(feature = "registry")]
+pub mod connect;
 pub mod docs;
 pub mod exclude;
 pub mod files;

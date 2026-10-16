@@ -362,6 +362,14 @@ impl ConfigService {
         self.db_dir().join("solx-console.db")
     }
 
+    /// The token registry's database (client tokens, action tokens and
+    /// connect codes). A fixed name like the console's, shared by every
+    /// process on this appdata dir: that's what lets a CLI process mint a
+    /// connect code that a running host then redeems.
+    pub fn registry_db_path(&self) -> PathBuf {
+        self.db_dir().join("solx-registry.db")
+    }
+
     pub fn types_db_path(&self) -> PathBuf {
         self.db_dir().join(
             self.snapshot()
@@ -438,6 +446,25 @@ impl ConfigService {
             Some(n) if n > 0 => n,
             _ => 10,
         }
+    }
+
+    /// Lifetime of a client token issued by the token registry, in days.
+    /// Defaults to 90.
+    pub fn client_token_ttl_days(&self) -> i64 {
+        match self.snapshot().client_token_ttl_days {
+            Some(n) if n > 0 => n,
+            _ => 90,
+        }
+    }
+
+    /// `server_public_url` as a full URL (see [`normalize_public_url`]: a bare
+    /// host gets `http://` and `server_port`); `None` when unset or invalid.
+    pub fn server_public_url(&self) -> Option<String> {
+        let snap = self.snapshot();
+        let port = snap.server_port.unwrap_or(DEFAULT_SERVER_PORT);
+        snap.server_public_url
+            .filter(|u| !u.trim().is_empty())
+            .and_then(|u| normalize_public_url(&u, port).ok())
     }
 
     /// TTL (in days) before a terminal invocation row is swept away.
@@ -743,6 +770,56 @@ const LEGACY_KEYS: &[(&str, &str)] = &[
     ("tool_exclude", "mcp_exclude"),
 ];
 
+/// The address other machines use to reach a solx-server, as a URL without a
+/// trailing slash. Takes either a full `http://`/`https://` URL (a path is
+/// kept, for a reverse proxy under a prefix) or a bare host, optionally with
+/// a port: an IP (`100.101.102.103`, `fd7a::1`) or a name
+/// (`my-laptop.tailnet.ts.net`). A bare host gets `http://` and, when it
+/// names no port, `default_port`.
+pub fn normalize_public_url(input: &str, default_port: u16) -> Result<String> {
+    let input = input.trim();
+    let input = if input.contains("://") {
+        input
+    } else {
+        input.trim_end_matches('/')
+    };
+    let bad = |why: &str| {
+        Err(SolxError::Invalid(format!(
+            "{input:?} {why}: expected an http(s) URL, or an IP address or host name"
+        )))
+    };
+    if input.is_empty() {
+        return bad("is empty");
+    }
+    if input.contains("://") {
+        let Ok(url) = url::Url::parse(input) else {
+            return bad("is not a valid URL");
+        };
+        if !matches!(url.scheme(), "http" | "https") || !url.has_host() {
+            return bad("is not an http(s) URL with a host");
+        }
+        if url.query().is_some() || url.fragment().is_some() {
+            return bad("has a query or fragment");
+        }
+        return Ok(url.as_str().trim_end_matches('/').to_string());
+    }
+    // A bare IPv6 address needs brackets before it can be read as a host.
+    let host = match input.parse::<std::net::Ipv6Addr>() {
+        Ok(ip) => format!("[{ip}]"),
+        Err(_) => input.to_string(),
+    };
+    let Ok(mut url) = url::Url::parse(&format!("http://{host}")) else {
+        return bad("is not a valid host");
+    };
+    if !url.has_host() || url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
+        return bad("is not a bare host");
+    }
+    if url.port().is_none() {
+        let _ = url.set_port(Some(default_port));
+    }
+    Ok(url.as_str().trim_end_matches('/').to_string())
+}
+
 /// Strictly validate a whole raw config object.
 ///
 /// [`ConfigService::snapshot`] deliberately never fails — a type error there
@@ -771,6 +848,16 @@ pub fn validate(value: &Value) -> Result<SolxConfig> {
             return invalid(format!(
                 "token_store {store:?} must be \"keyring\" or \"config\""
             ));
+        }
+    }
+    if let Some(url) = cfg
+        .server_public_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if let Err(e) = normalize_public_url(url, DEFAULT_SERVER_PORT) {
+            return invalid(format!("server_public_url: {e}"));
         }
     }
     if cfg.server_port == Some(0) {
@@ -1279,5 +1366,54 @@ mod tests {
         assert!(!is_base_url("api.example.com"));
         assert!(!is_base_url("ftp://x"));
         assert!(!is_base_url("https://"));
+    }
+
+    #[test]
+    fn public_urls_accept_full_urls_and_bare_hosts() {
+        let n = |s: &str| normalize_public_url(s, 8766);
+        assert_eq!(n("100.101.102.103").unwrap(), "http://100.101.102.103:8766");
+        assert_eq!(
+            n(" 100.101.102.103:9000/ ").unwrap(),
+            "http://100.101.102.103:9000"
+        );
+        assert_eq!(n("fd7a:115c::1").unwrap(), "http://[fd7a:115c::1]:8766");
+        assert_eq!(
+            n("my-laptop.tailnet.ts.net").unwrap(),
+            "http://my-laptop.tailnet.ts.net:8766"
+        );
+        // A full URL is kept as given: no port is added, a path survives.
+        assert_eq!(
+            n("https://solx.example.com/").unwrap(),
+            "https://solx.example.com"
+        );
+        assert_eq!(
+            n("https://example.com/solx/").unwrap(),
+            "https://example.com/solx"
+        );
+        for bad in [
+            "",
+            "ftp://x",
+            "http://",
+            "host/path",
+            "http://h/?q=1",
+            "a b",
+        ] {
+            assert!(n(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_bare_public_host_gets_the_configured_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = ConfigService::open_in(dir.path()).unwrap();
+        cfg.set("server_port", 9100.into()).unwrap();
+        cfg.set("server_public_url", "100.101.102.103".into())
+            .unwrap();
+        assert_eq!(
+            cfg.server_public_url().as_deref(),
+            Some("http://100.101.102.103:9100")
+        );
+        let err = validate(&serde_json::json!({ "server_public_url": "ftp://x" })).unwrap_err();
+        assert!(err.to_string().contains("server_public_url"), "{err}");
     }
 }

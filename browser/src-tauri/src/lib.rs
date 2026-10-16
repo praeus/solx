@@ -66,6 +66,21 @@ pub(crate) fn restart(app: &AppHandle) {
     app.restart();
 }
 
+#[cfg(test)]
+mod tests {
+    /// Package widgets run in the main window, so it must never hold the
+    /// permissions that edit the allowlists or mint access for other devices.
+    #[test]
+    fn only_the_settings_window_may_edit_config_or_manage_tokens() {
+        let main = include_str!("../capabilities/default.json");
+        let settings = include_str!("../capabilities/settings.json");
+        for permission in ["\"solx:config\"", "\"solx:auth\""] {
+            assert!(!main.contains(permission), "main window grants {permission}");
+            assert!(settings.contains(permission), "settings window lacks {permission}");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();

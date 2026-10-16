@@ -944,6 +944,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
+name = "cmake"
+version = "0.1.58"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0f78a02292a74a88ac736019ab962ece0bc380e3f977bf72e376c5d78ff0678"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "cobs"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3322,9 +3331,9 @@ dependencies = [
 
 [[package]]
 name = "libsql"
-version = "0.6.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe18646e4ef8db446bc3e3f5fb96131483203bc5f4998ff149f79a067530c01c"
+checksum = "d6bca1704194048f0f0bbc8a8e05ba85c0c67628b03bd59346dd2fdd946a1588"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3333,6 +3342,8 @@ dependencies = [
  "bincode",
  "bitflags 2.13.1",
  "bytes",
+ "chrono",
+ "crc32fast",
  "fallible-iterator 0.3.0",
  "futures",
  "http 0.2.12",
@@ -3360,19 +3371,21 @@ dependencies = [
 
 [[package]]
 name = "libsql-ffi"
-version = "0.5.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f2a50a585a1184a43621a9133b7702ba5cb7a87ca5e704056b19d8005de6faf"
+checksum = "f232292810b6298d17466b59bf8077d075fb016d89c281ca9dc968ea4a3b9d03"
 dependencies = [
  "bindgen",
  "cc",
+ "cmake",
+ "glob",
 ]
 
 [[package]]
 name = "libsql-hrana"
-version = "0.2.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aeaf5d19e365465e1c23d687a28c805d7462531b3f619f0ba49d3cf369890a3e"
+checksum = "1ceb7fa4a6b75b9eeffe2a375bde04ee8f48910d135a83ffd4191ddfd346c25c"
 dependencies = [
  "base64 0.21.7",
  "bytes",
@@ -3382,9 +3395,9 @@ dependencies = [
 
 [[package]]
 name = "libsql-rusqlite"
-version = "0.33.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae65c66088dcd309abbd5617ae046abac2a2ee0a7fdada5127353bd68e0a27ea"
+checksum = "699682e3695674ab37edc251b31e6fb4b5b81fb8ebabe3efc8cf2d24bb0347f5"
 dependencies = [
  "bitflags 2.13.1",
  "fallible-iterator 0.2.0",
@@ -3414,9 +3427,9 @@ dependencies = [
 
 [[package]]
 name = "libsql-sys"
-version = "0.8.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c05b61c226781d6f5e26e3e7364617f19c0c1d5332035802e9229d6024cec05"
+checksum = "cf4a7f2d76f49442c273a892a574a272b8b35f4bf0b1b25a475f2cc95885fe0f"
 dependencies = [
  "bytes",
  "libsql-ffi",
@@ -3428,9 +3441,9 @@ dependencies = [
 
 [[package]]
 name = "libsql_replication"
-version = "0.6.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cf40c4c2c01462da758272976de0a23d19b4e9c714db08efecf262d896655b5"
+checksum = "a2c8989755a2e5bec262ef4a7cfbf4765ae07b965cc39341168327d33c88f473"
 dependencies = [
  "aes",
  "async-stream",
@@ -5693,6 +5706,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde_json",
  "solx-actions",
+ "solx-client",
  "solx-config",
  "solx-manager",
  "solx-packages",
@@ -5807,6 +5821,7 @@ dependencies = [
  "solx-config",
  "solx-docs",
  "solx-files",
+ "solx-registry",
  "solx-surface",
  "solx-types",
 ]
@@ -5816,6 +5831,7 @@ name = "solx-mcp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "http 1.5.0",
  "rmcp",
  "serde_json",
  "solx-actions",
@@ -5844,6 +5860,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "solx-registry"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "libsql",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2",
+ "solx-config",
+ "solx-surface",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "solx-scripts"
 version = "0.1.0"
 dependencies = [
@@ -5868,6 +5903,7 @@ dependencies = [
  "solx-config",
  "solx-manager",
  "solx-mcp",
+ "solx-registry",
  "solx-surface",
  "tokio",
  "tower-http 0.5.2",
@@ -5895,6 +5931,7 @@ dependencies = [
  "serde",
  "serde_json",
  "solx-cli",
+ "solx-client",
  "solx-config",
  "solx-manager",
  "solx-packages",

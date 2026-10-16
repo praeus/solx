@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use serde_json::{json, Value};
+use solx_config::credentials::ConnectCredential;
 use solx_config::{ConfigService, EntityKind};
+use solx_surface::auth::Principal;
 use solx_surface::entities::{
     Action, ActionExecResult, ActionInput, Document, DocumentInput, TypeEntity, TypeInput,
 };
@@ -476,27 +478,39 @@ pub(crate) fn info(state: State<'_, SolxState>) -> HostInfo {
     }
 }
 
-/// Client builds only: point at a `solx-server`. The connection is checked
-/// (one cheap authenticated call) before it's persisted, so a wrong URL or
-/// token is reported here rather than on the next unrelated request.
+/// Client builds only: point at a `solx-server`. `credential` is the one
+/// "connect code or token" field: a connect code (or a whole connect link,
+/// which also supplies the server URL) is redeemed at the server's
+/// `/auth/exchange` first; a token is used as given. The connection is then
+/// checked (one cheap authenticated call) before it's persisted, so a wrong
+/// URL or token is reported here rather than on the next unrelated request.
 #[command]
 pub(crate) async fn connect(
     state: State<'_, SolxState>,
     server_url: String,
-    token: String,
+    credential: String,
 ) -> Result<()> {
     let Backend::Client { config } = &state.backend else {
         return Err(SolxError::Invalid(
             "this build runs solx locally; there is nothing to connect to".into(),
         ));
     };
-    let server_url = server_url.trim().trim_end_matches('/').to_string();
-    let token = token.trim().to_string();
-    if server_url.is_empty() || token.is_empty() {
+    let parsed = solx_config::credentials::parse_connect_input(Some(&server_url), &credential)?;
+    let Some(mut server_url) = parsed.server_url else {
         return Err(SolxError::Invalid(
-            "both a server URL and a token are required".into(),
+            "enter the server's address, or paste a connect link".into(),
         ));
-    }
+    };
+    let token = match parsed.credential {
+        ConnectCredential::Code(code) => {
+            let exchanged = solx_client::exchange_connect_code(&server_url, &code).await?;
+            if let Some(url) = exchanged.server_url.filter(|u| !u.trim().is_empty()) {
+                server_url = url.trim().trim_end_matches('/').to_string();
+            }
+            exchanged.token
+        }
+        ConnectCredential::Token(token) => token,
+    };
     let app = solx_manager::App::remote(config.clone(), server_url.clone(), token.clone())
         .map_err(|e| SolxError::Config(format!("{e:#}")))?;
     app.docs()
@@ -531,6 +545,60 @@ pub(crate) fn disconnect(state: State<'_, SolxState>) -> Result<()> {
     })?;
     state.replace(None);
     Ok(())
+}
+
+// ── auth ── (`solx:auth` permission only)
+//
+// The desktop host's trusted way into the `/builtin/auth/*` builtins, which
+// refuse a call with no principal — and ordinary Tauri IPC has none, so a
+// package widget can't mint access for itself. This command runs them as
+// Root instead, and is granted to the Settings window alone.
+
+/// The builtins `auth_exec` may run, by name under `/builtin/auth`.
+const AUTH_ACTIONS: &[&str] = &[
+    "create-connect-code",
+    "list-clients",
+    "revoke-client",
+    "issue-client",
+];
+
+fn check_auth_action(name: &str) -> Result<()> {
+    if AUTH_ACTIONS.contains(&name) {
+        Ok(())
+    } else {
+        Err(SolxError::Invalid(format!(
+            "auth_exec: '{name}' is not one of {}",
+            AUTH_ACTIONS.join(", ")
+        )))
+    }
+}
+
+/// Run one `/builtin/auth/*` builtin as `Principal::Root` and return its
+/// result. Host builds only: a client's tokens are managed on its server.
+#[command]
+pub(crate) async fn auth_exec(
+    state: State<'_, SolxState>,
+    name: String,
+    params: Option<Value>,
+) -> Result<Value> {
+    if matches!(state.backend, Backend::Client { .. }) {
+        return Err(SolxError::Invalid(
+            "connect codes and client tokens are managed on the solx host, not from a client"
+                .into(),
+        ));
+    }
+    check_auth_action(&name)?;
+    let out = state
+        .app()?
+        .actions()
+        .exec_for(
+            &Principal::Root,
+            "/builtin/auth",
+            &name,
+            params.unwrap_or_else(|| json!({})),
+        )
+        .await?;
+    Ok(out.result)
 }
 
 // ── config ── (no HTTP equivalent, by design: `solx:config` permission only)
@@ -585,6 +653,7 @@ fn config_view(config: &ConfigService) -> ConfigView {
             "server_host": snap.server_host.filter(|h| !h.trim().is_empty()).unwrap_or_else(|| "127.0.0.1".into()),
             "server_port": snap.server_port.unwrap_or(solx_config::DEFAULT_SERVER_PORT),
             "server_embedded": config.server_embedded(),
+            "client_token_ttl_days": config.client_token_ttl_days(),
             "console_max_entries": config.console_max_entries(),
             "console_ttl_days": config.console_ttl_days(),
             "background_timeout_secs": config.background_timeout_secs(),
@@ -841,5 +910,20 @@ mod tests {
         assert!(entity("/a", "").is_err());
         assert!(entity("/a", "b/c").is_err());
         assert!(entity("/a/../b", "c").is_err());
+    }
+
+    #[test]
+    fn auth_exec_runs_only_the_auth_builtins() {
+        for name in AUTH_ACTIONS {
+            assert!(check_auth_action(name).is_ok(), "{name}");
+        }
+        for name in [
+            "",
+            "entity-save-action",
+            "../console/print",
+            "list-clients ",
+        ] {
+            assert!(check_auth_action(name).is_err(), "{name:?}");
+        }
     }
 }

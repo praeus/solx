@@ -16,8 +16,9 @@
 //!
 //! Hosts grant access with the `solx:default` capability permission. The
 //! `config_*` commands (editing `solx-config.json`) are a separate
-//! `solx:config` set, meant only for a window that never loads package
-//! widgets — see `commands`' config section.
+//! `solx:config` set, and `auth_exec` (connect codes and client tokens)
+//! is `solx:auth`; both are meant only for a window that never loads
+//! package widgets — see `commands`' config and auth sections.
 
 mod commands;
 mod state;
@@ -86,6 +87,7 @@ fn build<R: Runtime>(state: SolxState) -> TauriPlugin<R> {
             commands::packages_catalog,
             commands::packages_install,
             commands::packages_uninstall,
+            commands::auth_exec,
         ])
         .setup(move |app, _api| {
             app.manage(state);
@@ -111,8 +113,14 @@ mod tests {
         let default = include_str!("../permissions/default.toml");
         let config = include_str!("../permissions/config.toml");
         let packages = include_str!("../permissions/packages.toml");
+        let auth = include_str!("../permissions/auth.toml");
         let lib = include_str!("lib.rs");
-        let sets = [("config_", config), ("packages_", packages), ("", default)];
+        let sets = [
+            ("config_", config),
+            ("packages_", packages),
+            ("auth_", auth),
+            ("", default),
+        ];
         for cmd in COMMANDS {
             let perm = format!("\"allow-{}\"", cmd.replace('_', "-"));
             let home = sets

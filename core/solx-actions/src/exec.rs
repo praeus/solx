@@ -169,14 +169,18 @@ pub async fn run_command(
     let registration =
         console_loopback::register(console, invocations, action_ref, invocation_id).await;
 
+    let timeout = Duration::from_secs(timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS));
+
     // How this invocation reaches `solx-server`: handed to the child as
     // `SOLX_SERVER_URL`/`SOLX_SERVER_TOKEN`, the only supported way for an
-    // action to get a token. Kept bound like `registration`, since an
-    // authority may revoke a per-invocation token when this drops.
+    // action to get a token. Valid for the invocation's timeout, and
+    // released below once the child is done. Kept bound like
+    // `registration`: an authority's guard on it revokes the token on drop,
+    // as a fallback for early returns and panics.
     let credential = match authority {
         Some(authority) => {
             authority
-                .issue_action_token(action_ref, invocation_id)
+                .issue_action_token(action_ref, invocation_id, timeout)
                 .await
         }
         None => None,
@@ -232,22 +236,29 @@ pub async fn run_command(
         }
     };
 
-    let timeout = Duration::from_secs(timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS));
     let wait = async {
         let (_, out) = tokio::join!(feed, child.wait_with_output());
         out
     };
 
-    let output = match tokio::time::timeout(timeout, wait).await {
-        Ok(res) => res.map_err(|e| SolxError::Exec(e.to_string()))?,
-        Err(_) => {
-            return Err(SolxError::Exec(format!(
-                "command key '{fn_name}' timed out after {}s",
-                timeout.as_secs()
-            )))
-        }
+    let result = match tokio::time::timeout(timeout, wait).await {
+        Ok(Ok(output)) => command_result(fn_name, output),
+        Ok(Err(e)) => Err(SolxError::Exec(e.to_string())),
+        Err(_) => Err(SolxError::Exec(format!(
+            "command key '{fn_name}' timed out after {}s",
+            timeout.as_secs()
+        ))),
     };
 
+    // The child is gone (on timeout, `kill_on_drop` reaped it when `wait`
+    // dropped), so its token is no longer needed, however it ended.
+    if let (Some(authority), Some(credential)) = (authority, &credential) {
+        authority.release(credential).await;
+    }
+    result
+}
+
+fn command_result(fn_name: &str, output: std::process::Output) -> Result<Value> {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

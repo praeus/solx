@@ -13,6 +13,7 @@
  */
 import type { RemoteSolx } from '@solx/surface';
 import { TauriActionManager } from './actions.js';
+import { TauriAuth } from './auth.js';
 import { TauriConfig } from './config.js';
 export { TauriPackages } from './packages.js';
 export type { CatalogEntry, CatalogEntryState, CatalogView, PackageOpResult } from './packages.js';
@@ -28,6 +29,8 @@ export { TauriFileStore } from './files.js';
 export { TauriTypeManager } from './types.js';
 export type { InvokeArgs, InvokeFn, InvokeOptions } from './invoke.js';
 export { TauriConfig } from './config.js';
+export { TauriAuth } from './auth.js';
+export type { ClientInfo, ConnectCode, CreateConnectCodeOptions, IssuedClient } from './auth.js';
 export type {
   CommandDef,
   ConfigChanges,
@@ -62,9 +65,14 @@ export class TauriHost {
     return this.t.call('info');
   }
 
-  /** Client builds: point the host at a `solx-server` (checked, then persisted by the host). */
-  async connect(serverUrl: string, token: string): Promise<void> {
-    await this.t.call('connect', { serverUrl, token });
+  /**
+   * Client builds: point the host at a `solx-server` (checked, then
+   * persisted by the host). `credential` is a connect code (`1234-5678`),
+   * a connect link (which also supplies the server, so `serverUrl` may be
+   * empty) or a token; the host redeems a code before connecting.
+   */
+  async connect(serverUrl: string, credential: string): Promise<void> {
+    await this.t.call('connect', { serverUrl, credential });
   }
 
   /** Client builds: forget the server. */
@@ -89,6 +97,11 @@ export interface TauriSolx extends RemoteSolx {
    * `solx:packages` (the main and Settings windows) and a local host.
    */
   packages: TauriPackages;
+  /**
+   * Connect codes and client tokens. Only works in a window granted
+   * `solx:auth` (the desktop app's Settings window) on a host build.
+   */
+  auth: TauriAuth;
 }
 
 /**
@@ -109,5 +122,6 @@ export function connectTauri(invoke: InvokeFn): TauriSolx {
     host: new TauriHost(t),
     config: new TauriConfig(t),
     packages: new TauriPackages(t),
+    auth: new TauriAuth(t),
   };
 }

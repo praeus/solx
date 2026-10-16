@@ -9,6 +9,7 @@
     "build": "bunx tsc --noEmit && bunx vite build",
     "preview": "bunx vite preview",
     "typecheck": "bunx tsc --noEmit",
+    "test": "bun test",
     "lint": "bunx tsc --noEmit"
   },
   "dependencies": {

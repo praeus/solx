@@ -14,5 +14,6 @@
       "@solx/widgets/host": ["../../js/packages/widgets/src/host/index.ts"]
     }
   },
-  "include": ["src/**/*", "vite.config.ts"]
+  "include": ["src/**/*", "vite.config.ts"],
+  "exclude": ["src/**/*.test.ts"]
 }
