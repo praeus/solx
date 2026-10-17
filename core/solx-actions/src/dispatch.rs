@@ -8,7 +8,7 @@ use serde_json::Value;
 use solx_surface::entities::{Action, ActionExecResult, ActionType};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::path::full_ref;
-use solx_surface::{ExcludeMode, ExecScope, Principal};
+use solx_surface::{ExcludeMode, ExecContext};
 use uuid::Uuid;
 
 use crate::caller::Caller;
@@ -21,7 +21,7 @@ fn timeout_secs(action_config: &Option<Value>) -> Option<u64> {
     action_config.as_ref()?.get("timeout_secs")?.as_u64()
 }
 
-/// Params for an internal built-in run in [`ExecScope::Tooling`], with the
+/// Params for an internal built-in run under [`ExcludeMode::Tooling`], with the
 /// tooling exclusion mode forced on.
 ///
 /// The entity built-ins (`entity-list-documents`, `entity-get-type`,
@@ -51,7 +51,7 @@ pub(crate) fn force_tooling_scope(params: Value) -> Value {
 }
 
 impl LocalActionManager {
-    /// Hold one frame of a call chain to its [`ExecScope`]. Under `Tooling`,
+    /// Hold one frame of a call chain to its [`ExcludeMode`]. Under `Tooling`,
     /// an action excluded from tooling (`exclusions.tooling`, the legacy
     /// `tool_exclude`/`mcp_exclude`, or `solx:hidden`) is refused as if it
     /// did not exist, and an internal built-in runs in the tooling scope.
@@ -59,18 +59,22 @@ impl LocalActionManager {
     /// Runs on every frame, not just the first, which is the point: the MCP
     /// server's own check sees only the tool the model called, and that tool
     /// can be a Script or WASM action, or `action-start`, that calls another.
-    fn enforce_scope(&self, scope: ExecScope, action: &Action, params: Value) -> Result<Value> {
-        if scope == ExecScope::Unrestricted {
-            return Ok(params);
+    fn enforce_scope(&self, mode: ExcludeMode, action: &Action, params: Value) -> Result<Value> {
+        match mode {
+            ExcludeMode::Tooling => {
+                self.config
+                    .exclusion_policy()
+                    .guard_action(ExcludeMode::Tooling, action, false)?;
+                Ok(if action.action_type == Some(ActionType::Internal) {
+                    force_tooling_scope(params)
+                } else {
+                    params
+                })
+            }
+            // User exclusions are a display convenience, not access
+            // control, so the call chain doesn't enforce them.
+            ExcludeMode::None | ExcludeMode::User => Ok(params),
         }
-        self.config
-            .exclusion_policy()
-            .guard_action(ExcludeMode::Tooling, action, false)?;
-        Ok(if action.action_type == Some(ActionType::Internal) {
-            force_tooling_scope(params)
-        } else {
-            params
-        })
     }
 
     /// Resolve a WASM action's `bin_name` to bytes: try the shared
@@ -113,28 +117,20 @@ impl LocalActionManager {
     /// i.e. mint a fresh one at dispatch time, the behavior every existing
     /// caller of this method already gets.
     ///
-    /// `caller` is `Some` only on a recursive hop from another action (a
-    /// WASM guest's `action-exec`, a script's `exec` stage). It scopes
-    /// `get-secret`/`set-secret` to the *calling* action's own keys.
-    ///
-    /// `principal` is the authenticated party the call chain started from
-    /// (see `ActionManager::exec_for`), inherited unchanged by nested
-    /// frames; `None` for local entry points.
-    ///
-    /// `scope` is inherited the same way. Under [`ExecScope::Tooling`] every
-    /// frame of the chain is held to the tooling exclusions (see
-    /// [`Self::enforce_scope`]).
+    /// `ctx` is the chain's [`ExecContext`]. Its caller is `Some` only on a
+    /// recursive hop from another action (a WASM guest's `action-exec`, a
+    /// script's `exec` stage), and scopes `get-secret`/`set-secret` to the
+    /// *calling* action's own keys. Its principal and exclusion mode were
+    /// fixed where the chain entered; under [`ExcludeMode::Tooling`] every
+    /// frame is held to the tooling exclusions (see [`Self::enforce_scope`]).
     pub async fn exec_as(
         &self,
         path: &str,
         name: &str,
         params: Value,
-        caller: Option<&Caller>,
-        principal: Option<&Principal>,
-        scope: ExecScope,
+        ctx: &ExecContext,
     ) -> Result<ActionExecResult> {
-        self.exec_as_with(path, name, params, caller, principal, scope, None)
-            .await
+        self.exec_as_with(path, name, params, ctx, None).await
     }
 
     /// Like [`Self::exec_as`], but lets the caller fix the `invocation_id`
@@ -161,43 +157,29 @@ impl LocalActionManager {
     /// `start_invocation`'s spawned task) can then simply trust — the same
     /// trick `#[async_trait]` uses under the hood for object-safe trait
     /// methods, applied by hand here since this isn't a trait method.
-    #[allow(clippy::too_many_arguments)]
     pub fn exec_as_with<'a>(
         &'a self,
         path: &'a str,
         name: &'a str,
         params: Value,
-        caller: Option<&'a Caller>,
-        principal: Option<&'a Principal>,
-        scope: ExecScope,
+        ctx: &'a ExecContext,
         invocation_id: Option<&'a str>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ActionExecResult>> + Send + 'a>>
     {
-        Box::pin(self.exec_as_with_inner(
-            path,
-            name,
-            params,
-            caller,
-            principal,
-            scope,
-            invocation_id,
-        ))
+        Box::pin(self.exec_as_with_inner(path, name, params, ctx, invocation_id))
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn exec_as_with_inner(
         &self,
         path: &str,
         name: &str,
         params: Value,
-        caller: Option<&Caller>,
-        principal: Option<&Principal>,
-        scope: ExecScope,
+        ctx: &ExecContext,
         invocation_id: Option<&str>,
     ) -> Result<ActionExecResult> {
         let (action, secrets) = self.get_with_secrets(path, name).await?;
         let action_ref = full_ref(&action.path, &action.name)?;
-        let params = self.enforce_scope(scope, &action, params)?;
+        let params = self.enforce_scope(ctx.exclude_mode(), &action, params)?;
 
         // Internal built-ins mix two wire-key conventions (camelCase
         // entity/search structs, snake_case raw-key handlers) — see
@@ -292,9 +274,7 @@ impl LocalActionManager {
                     local: self.self_arc()?,
                     registry: self.internal_registry(),
                     action_config: action.action_config.clone(),
-                    caller: caller.cloned(),
-                    principal: principal.cloned(),
-                    scope,
+                    exec: ctx.clone(),
                 };
                 internal::run_internal(fn_name, &params, &ctx)
                     .await
@@ -306,16 +286,19 @@ impl LocalActionManager {
                 })?;
                 let bytes = self.load_wasm_bytes(&action, &action_ref, bin_name).await?;
                 // A new caller frame: anything this guest invokes is invoked
-                // by *this* action, not by whoever invoked it. The incoming
-                // `caller` is therefore dropped rather than forwarded, so a
-                // guest can never reach an outer action's secret keys.
+                // by *this* action, not by whoever invoked it. `enter`
+                // replaces the incoming caller rather than forwarding it, so
+                // a guest can never reach an outer action's secret keys.
                 // `with_invocation` rather than `from_action` so a detached
                 // run's guest is stamped with the id `start_invocation`
                 // already committed to the `invocations` row — for a plain
                 // `exec_as` call this is exactly the freshly-minted id above,
                 // so behavior is unchanged from before this method existed.
-                let frame =
-                    Caller::with_invocation(&action_ref, Some(secrets.clone()), invocation_id);
+                let frame = ctx.enter(Caller::with_invocation(
+                    &action_ref,
+                    Some(secrets.clone()),
+                    invocation_id,
+                ));
                 // WASM execution reports its own success/message (a guest can
                 // report a handled failure without erroring the host call), so
                 // it returns a full ActionExecResult directly rather than
@@ -327,8 +310,6 @@ impl LocalActionManager {
                     action.fn_name.as_deref(),
                     &params,
                     frame,
-                    principal.cloned(),
-                    scope,
                     effective_timeout,
                 )
                 .await;
@@ -342,13 +323,13 @@ impl LocalActionManager {
                 // for this action's own identity, not the incoming one — a
                 // script's nested `exec` calls must never reach an outer
                 // action's secret keys.
-                let frame =
-                    Caller::with_invocation(&action_ref, Some(secrets.clone()), invocation_id);
                 let runner = script::ActionCommandRunner {
                     actions: self.self_arc()?,
-                    caller: frame,
-                    principal: principal.cloned(),
-                    scope,
+                    ctx: ctx.enter(Caller::with_invocation(
+                        &action_ref,
+                        Some(secrets.clone()),
+                        invocation_id,
+                    )),
                 };
                 let initial =
                     std::collections::HashMap::from([("params".to_string(), params.clone())]);
@@ -420,7 +401,7 @@ mod tests {
         let (action, _) = m.get_with_secrets("/t", "list-docs").await.unwrap();
         let params = m
             .enforce_scope(
-                ExecScope::Tooling,
+                ExcludeMode::Tooling,
                 &action,
                 serde_json::json!({"excludeMode": "none"}),
             )
@@ -429,7 +410,7 @@ mod tests {
 
         let params = m
             .enforce_scope(
-                ExecScope::Unrestricted,
+                ExcludeMode::None,
                 &action,
                 serde_json::json!({"excludeMode": "none"}),
             )

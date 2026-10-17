@@ -120,26 +120,9 @@ pub trait TokenAuthority: Send + Sync {
 /// never raise it.
 pub const NO_PRINCIPAL_HEADER: &str = "x-solx-principal";
 
-/// Which exclusions a call chain is held to, fixed where it enters solx and
-/// inherited unchanged by every nested frame, exactly like the principal.
-///
-/// `Tooling` is set by the MCP server: every action in the chain, however
-/// deeply nested (a script's `exec` stage, a WASM guest's `action-exec`, a
-/// detached `action-start` run), is refused if `exclusions.tooling` or
-/// `solx:hidden` excludes it, and every internal built-in in the chain lists
-/// and searches in the tooling scope. Without this, a model could reach an
-/// excluded action by calling one it is allowed to call that calls it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum ExecScope {
-    /// No exclusions enforced: local and operator entry points.
-    #[default]
-    Unrestricted,
-    /// Held to the tooling exclusions at every hop.
-    Tooling,
-}
-
 /// Request header a client sends (with the value `tooling`) to run an action
-/// in [`ExecScope::Tooling`]. `solx-client`'s remote `exec_tooling` sends it,
+/// in [`crate::query::ExcludeMode::Tooling`], via
+/// [`crate::ExecContext::tooling`]. `solx-client`'s remote `exec_tooling` sends it,
 /// so an MCP server proxying to a remote host keeps the scope across the
 /// wire. Like [`NO_PRINCIPAL_HEADER`], it can only restrict a call, never
 /// widen it, so the server honors it from any authenticated caller.

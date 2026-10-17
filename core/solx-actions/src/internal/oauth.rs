@@ -389,7 +389,7 @@ pub(super) async fn oauth_await(params: &Value, ctx: &InternalCtx) -> Result<Val
 /// Fails closed: no caller (CLI/HTTP/MCP), or a lookup error, is "not
 /// cancelled" — a missing signal must never abort a real login.
 async fn caller_cancelled(ctx: &InternalCtx) -> bool {
-    let Some(caller) = &ctx.caller else {
+    let Some(caller) = ctx.exec.caller() else {
         return false;
     };
     ctx.local

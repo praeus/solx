@@ -46,9 +46,9 @@ use solx_config::ConfigService;
 use solx_console::{ConsoleStore, InvocationStore};
 use solx_surface::auth::TokenAuthority;
 use solx_surface::error::{Result, SolxError};
-use solx_surface::internal_actions::{ActionExecutor, CallerInfo, InternalActionRegistry};
+use solx_surface::internal_actions::{ActionExecutor, InternalActionRegistry};
 use solx_surface::managers::{DocManager, FileStore, TypeManager};
-use solx_surface::{ExecScope, Principal};
+use solx_surface::ExecContextInfo;
 use tokio::task::AbortHandle;
 
 use db::Db;
@@ -111,12 +111,9 @@ impl ActionExecutor for LocalActionManager {
         path: &str,
         name: &str,
         params: Value,
-        principal: Option<Principal>,
-        scope: ExecScope,
-        caller: Option<CallerInfo>,
+        exec: ExecContextInfo,
     ) -> Result<Value> {
-        LocalActionManager::start_invocation(self, path, name, params, principal, scope, caller)
-            .await
+        LocalActionManager::start_invocation(self, path, name, params, exec).await
     }
 
     async fn stop_invocation(

@@ -16,11 +16,10 @@ use serde_json::Value;
 use solx_surface::entities::ActionExecResult;
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::FileStore;
-use solx_surface::{ExecScope, Principal};
+use solx_surface::ExecContext;
 use wasmtime::component::{HasSelf, Linker};
 use wasmtime::Store;
 
-use crate::caller::Caller;
 use crate::LocalActionManager;
 
 use super::host::{compile_component, engine, CustomAction, HostState};
@@ -30,30 +29,27 @@ use super::host::{compile_component, engine, CustomAction, HostState};
 /// *yield* but never terminates it, so a hard bound is still needed.
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
 
-/// Execute a custom WASM action component. `caller` identifies the action
-/// being executed — it labels the returned `ActionExecResult.action`, and
-/// it is what anything this guest invokes via `action-exec` will see as
-/// *its* caller. `principal` is inherited from the call that started this
-/// guest and carried on to anything it invokes. `fn_name` is passed through
+/// Execute a custom WASM action component. `ctx` is the guest's own frame
+/// (from `ExecContext::enter`): its caller is the action being executed,
+/// which labels the returned `ActionExecResult.action` and is what anything
+/// this guest invokes via `action-exec` sees as *its* caller; its principal
+/// and exclusion mode carry on to anything the guest invokes. `fn_name` is passed through
 /// to the guest's `run` export.
 ///
 /// `timeout_secs` is the wall-clock ceiling for the whole invocation,
 /// including everything it recursively invokes.
-#[allow(clippy::too_many_arguments)]
 pub async fn exec(
     actions: Arc<LocalActionManager>,
     files: Arc<dyn FileStore>,
     wasm_bytes: Arc<Vec<u8>>,
     fn_name: Option<&str>,
     params: &Value,
-    caller: Caller,
-    principal: Option<Principal>,
-    scope: ExecScope,
+    ctx: ExecContext,
     timeout_secs: Option<u64>,
 ) -> Result<ActionExecResult> {
     let params_json = serde_json::to_string(params).map_err(|e| SolxError::Exec(e.to_string()))?;
     let fn_name_owned = fn_name.map(str::to_string);
-    let action_ref = caller.action_ref().to_string();
+    let action_ref = super::host::frame_caller(&ctx).action_ref().to_string();
     let timeout = Duration::from_secs(timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS));
 
     let run = run_guest(
@@ -62,9 +58,7 @@ pub async fn exec(
         wasm_bytes,
         fn_name_owned.clone(),
         params_json,
-        caller,
-        principal,
-        scope,
+        ctx,
     );
 
     // `spawn_blocking` used to absorb panics into a `JoinError`; without it
@@ -102,22 +96,19 @@ pub async fn exec(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_guest(
     actions: Arc<LocalActionManager>,
     files: Arc<dyn FileStore>,
     wasm_bytes: Arc<Vec<u8>>,
     fn_name: Option<String>,
     params_json: String,
-    caller: Caller,
-    principal: Option<Principal>,
-    scope: ExecScope,
+    ctx: ExecContext,
 ) -> Result<ActionExecResult> {
     let eng = engine();
     let component = compile_component(wasm_bytes).await?;
 
-    let action_ref = caller.action_ref().to_string();
-    let state = HostState::new(actions, files, caller, principal, scope);
+    let action_ref = super::host::frame_caller(&ctx).action_ref().to_string();
+    let state = HostState::new(actions, files, ctx);
     let mut store = Store::new(eng, state);
 
     // Yield rather than trap when the epoch advances: a busy guest hands

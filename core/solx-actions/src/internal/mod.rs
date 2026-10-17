@@ -40,9 +40,8 @@ use serde_json::Value;
 use solx_surface::entities::{ActionType, Document, DocumentInput};
 use solx_surface::internal_actions::{InternalActionRegistry, InternalCallCtx};
 use solx_surface::managers::{ActionManager, DocManager, FileStore, TypeManager};
-use solx_surface::{ExecScope, Principal};
+use solx_surface::ExecContext;
 
-use crate::caller::Caller;
 use crate::LocalActionManager;
 
 pub mod doc_fields;
@@ -91,22 +90,18 @@ pub struct InternalCtx {
     /// `fn_name` dispatched to this handler, which for a built-in is the
     /// `/builtin/...` row itself.
     pub action_config: Option<Value>,
-    /// The action that *invoked* this one, when there is one. Set only on
-    /// a recursive hop from another action (WASM `action-exec`, a script's
-    /// `exec` stage, a detached run started by an action); `None` for the
-    /// CLI, MCP, and HTTP, none of which are actions. `get-secret`/`set-secret` scope to
-    /// this — see [`crate::caller`] for why it can't be spoofed.
+    /// The chain this call belongs to. Its caller is the action that
+    /// *invoked* this one, set only on a recursive hop from another action
+    /// (WASM `action-exec`, a script's `exec` stage, a detached run started
+    /// by an action); `None` for the CLI, MCP, and HTTP, none of which are
+    /// actions. `get-secret`/`set-secret` scope to it — see
+    /// [`crate::caller`] for why it can't be spoofed. The principal is
+    /// inherited by nested frames, so authorization must check the caller
+    /// first (`ExecContextInfo::external_principal`).
     ///
-    /// **Invariant:** read-only input to key resolution. No handler may
-    /// return it, or any key inside it, in its result value.
-    pub caller: Option<Caller>,
-    /// The authenticated party this call chain started from — see
-    /// `solx_surface::InternalCallCtx::principal`. Inherited by nested
-    /// frames, so authorization must check `caller` first.
-    pub principal: Option<Principal>,
-    /// The exclusions this chain is held to — see
-    /// `solx_surface::InternalCallCtx::scope`.
-    pub scope: ExecScope,
+    /// **Invariant:** the caller is read-only input to key resolution. No
+    /// handler may return it, or any key inside it, in its result value.
+    pub exec: ExecContext,
 }
 
 impl InternalCtx {
@@ -119,9 +114,7 @@ impl InternalCtx {
             types: self.types.clone(),
             actions: self.actions.clone(),
             files: self.files.clone(),
-            caller: self.caller.as_ref().map(Caller::info),
-            principal: self.principal.clone(),
-            scope: self.scope,
+            exec: self.exec.info(),
         }
     }
 }
@@ -197,8 +190,8 @@ pub async fn run_internal(
         "open-url" => open_url::open_url(params, &ctx.config).await,
 
         // ── secrets (per-caller scoped) ──────────────────────────────────
-        "get-secret" => secrets::get_secret(params, ctx.caller.as_ref()).await,
-        "set-secret" => secrets::set_secret(params, ctx.caller.as_ref()).await,
+        "get-secret" => secrets::get_secret(params, ctx.exec.caller()).await,
+        "set-secret" => secrets::set_secret(params, ctx.exec.caller()).await,
 
         // ── everything else: consult the plugin registry ──────────────────
         // Action consoles (`console_*`) and asynchronous actions
@@ -448,9 +441,7 @@ mod tests {
                 local,
                 registry,
                 action_config,
-                caller: None,
-                principal: None,
-                scope: ExecScope::Unrestricted,
+                exec: ExecContext::local(),
             },
         )
     }
@@ -1124,7 +1115,7 @@ mod tests {
     #[tokio::test]
     async fn secrets_are_refused_without_an_action_caller() {
         let (_d, ctx) = test_ctx(None).await;
-        assert!(ctx.caller.is_none());
+        assert!(ctx.exec.caller().is_none());
 
         let err = run_internal("get-secret", &json!({"name": "FOO"}), &ctx)
             .await
@@ -1142,7 +1133,7 @@ mod tests {
         let (_d, mut ctx) = test_ctx(None).await;
         // Note the key comes from the *caller*, not from `ctx.action_config`
         // (which is the `/builtin/...` row's config and is always null).
-        ctx.caller = Some(Caller::from_action(
+        ctx.exec = ExecContext::local().enter(Caller::from_action(
             "/pkg/foo",
             Some(solx_surface::ActionSecrets::new(
                 Some(&json!({ "secrets": { "FOO": "***" } })),
@@ -2106,7 +2097,7 @@ mod tests {
     #[tokio::test]
     async fn console_print_is_refused_without_an_action_caller() {
         let (_d, ctx) = test_ctx(None).await;
-        assert!(ctx.caller.is_none());
+        assert!(ctx.exec.caller().is_none());
         let err = run_internal("console-print", &json!({"message": "hi"}), &ctx)
             .await
             .unwrap_err();
@@ -2116,7 +2107,7 @@ mod tests {
     #[tokio::test]
     async fn console_print_writes_to_the_callers_own_console() {
         let (_d, mut ctx) = test_ctx(None).await;
-        ctx.caller = Some(Caller::from_action("/pkg/foo", None));
+        ctx.exec = ExecContext::local().enter(Caller::from_action("/pkg/foo", None));
 
         let v = run_internal("console-print", &json!({"message": "hello"}), &ctx)
             .await
@@ -2145,7 +2136,7 @@ mod tests {
     #[tokio::test]
     async fn console_print_defaults_level_and_honors_an_explicit_one() {
         let (_d, mut ctx) = test_ctx(None).await;
-        ctx.caller = Some(Caller::from_action("/pkg/foo", None));
+        ctx.exec = ExecContext::local().enter(Caller::from_action("/pkg/foo", None));
 
         run_internal("console-print", &json!({"message": "a"}), &ctx)
             .await
@@ -2200,7 +2191,7 @@ mod tests {
     #[tokio::test]
     async fn console_read_respects_from_seq_cursor() {
         let (_d, mut ctx) = test_ctx(None).await;
-        ctx.caller = Some(Caller::from_action("/pkg/foo", None));
+        ctx.exec = ExecContext::local().enter(Caller::from_action("/pkg/foo", None));
         for i in 0..3 {
             run_internal("console-print", &json!({"message": format!("m{i}")}), &ctx)
                 .await
@@ -2225,13 +2216,13 @@ mod tests {
     #[tokio::test]
     async fn console_read_is_not_restricted_to_the_callers_own_console() {
         let (_d, mut ctx) = test_ctx(None).await;
-        ctx.caller = Some(Caller::from_action("/pkg/child", None));
+        ctx.exec = ExecContext::local().enter(Caller::from_action("/pkg/child", None));
         run_internal("console-print", &json!({"message": "child status"}), &ctx)
             .await
             .unwrap();
 
         // Read it back as an unrelated caller (here: no caller at all).
-        ctx.caller = None;
+        ctx.exec = ExecContext::local();
         let v = run_internal("console-read", &json!({"action_ref": "/pkg/child"}), &ctx)
             .await
             .unwrap();
@@ -2244,11 +2235,11 @@ mod tests {
     #[tokio::test]
     async fn console_tail_returns_immediately_when_entries_exist() {
         let (_d, mut ctx) = test_ctx(None).await;
-        ctx.caller = Some(Caller::from_action("/pkg/foo", None));
+        ctx.exec = ExecContext::local().enter(Caller::from_action("/pkg/foo", None));
         run_internal("console-print", &json!({"message": "hi"}), &ctx)
             .await
             .unwrap();
-        ctx.caller = None;
+        ctx.exec = ExecContext::local();
 
         let v = run_internal(
             "console-tail",
@@ -2266,13 +2257,13 @@ mod tests {
     #[tokio::test]
     async fn console_clear_drops_from_the_front() {
         let (_d, mut ctx) = test_ctx(None).await;
-        ctx.caller = Some(Caller::from_action("/pkg/foo", None));
+        ctx.exec = ExecContext::local().enter(Caller::from_action("/pkg/foo", None));
         for i in 0..3 {
             run_internal("console-print", &json!({"message": format!("m{i}")}), &ctx)
                 .await
                 .unwrap();
         }
-        ctx.caller = None;
+        ctx.exec = ExecContext::local();
 
         let v = run_internal(
             "console-clear",
@@ -2295,15 +2286,15 @@ mod tests {
     #[tokio::test]
     async fn console_list_reflects_written_consoles() {
         let (_d, mut ctx) = test_ctx(None).await;
-        ctx.caller = Some(Caller::from_action("/pkg/a", None));
+        ctx.exec = ExecContext::local().enter(Caller::from_action("/pkg/a", None));
         run_internal("console-print", &json!({"message": "x"}), &ctx)
             .await
             .unwrap();
-        ctx.caller = Some(Caller::from_action("/pkg/b", None));
+        ctx.exec = ExecContext::local().enter(Caller::from_action("/pkg/b", None));
         run_internal("console-print", &json!({"message": "y"}), &ctx)
             .await
             .unwrap();
-        ctx.caller = None;
+        ctx.exec = ExecContext::local();
 
         let v = run_internal("console-list", &json!({"prefix": "/pkg"}), &ctx)
             .await
@@ -2315,7 +2306,7 @@ mod tests {
     #[tokio::test]
     async fn action_cancelled_is_refused_without_an_action_caller() {
         let (_d, ctx) = test_ctx(None).await;
-        assert!(ctx.caller.is_none());
+        assert!(ctx.exec.caller().is_none());
         let err = run_internal("action-cancelled", &json!({}), &ctx)
             .await
             .unwrap_err();
@@ -2327,7 +2318,7 @@ mod tests {
         let (_d, mut ctx) = test_ctx(None).await;
         // A fixed id (not `Caller::from_action`'s random mint) so the test
         // can seed and cancel exactly this invocation's row.
-        ctx.caller = Some(Caller::with_invocation("/pkg/foo", None, "inv-fixed"));
+        ctx.exec = ExecContext::local().enter(Caller::with_invocation("/pkg/foo", None, "inv-fixed"));
 
         // No row exists yet for "inv-fixed" — must fail closed to `false`,
         // not error, mirroring the loopback's `/cancelled` route.
@@ -2442,7 +2433,7 @@ mod tests {
     #[tokio::test]
     async fn oauth_await_releases_the_port_when_the_caller_is_stopped() {
         let (_d, mut ctx) = test_ctx(None).await;
-        ctx.caller = Some(Caller::with_invocation(
+        ctx.exec = ExecContext::local().enter(Caller::with_invocation(
             "/pkg/login",
             None,
             "inv-oauth-cancel",

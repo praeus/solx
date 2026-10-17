@@ -76,7 +76,7 @@ impl InternalActionHandler for ConsolePrint {
         params: &Value,
         ctx: &InternalCallCtx,
     ) -> std::result::Result<Value, String> {
-        let caller = ctx.caller.as_ref().ok_or_else(|| {
+        let caller = ctx.exec.caller().ok_or_else(|| {
             "console-print has no action caller — it can only be called from within \
              an action's own execution"
                 .to_string()
@@ -121,7 +121,7 @@ impl InternalActionHandler for ConsoleCopy {
         params: &Value,
         ctx: &InternalCallCtx,
     ) -> std::result::Result<Value, String> {
-        let caller = ctx.caller.as_ref().ok_or_else(|| {
+        let caller = ctx.exec.caller().ok_or_else(|| {
             "console-copy has no action caller — it can only be called from within \
              an action's own execution"
                 .to_string()
@@ -269,19 +269,13 @@ impl InternalActionHandler for ActionStart {
         let name = require_str(params, "name")?;
         let path = path_or_root(params);
         let action_params = params.get("params").cloned().unwrap_or_else(|| json!({}));
-        // All three travel into the detached run: dropping the caller while
-        // keeping the principal would let an action re-enter as an
-        // apparently external call (see `InternalCallCtx::external_principal`),
-        // and dropping the scope would let a model detach an excluded action.
+        // The whole context travels into the detached run: dropping the
+        // caller while keeping the principal would let an action re-enter as
+        // an apparently external call (see
+        // `ExecContextInfo::external_principal`), and dropping the exclusion
+        // mode would let a model detach an excluded action.
         self.executor
-            .start_invocation(
-                path,
-                name,
-                action_params,
-                ctx.principal.clone(),
-                ctx.scope,
-                ctx.caller.clone(),
-            )
+            .start_invocation(path, name, action_params, ctx.exec.clone())
             .await
             .map_err(|e| e.to_string())
     }
@@ -342,7 +336,7 @@ impl InternalActionHandler for ActionCancelled {
         _params: &Value,
         ctx: &InternalCallCtx,
     ) -> std::result::Result<Value, String> {
-        let caller = ctx.caller.as_ref().ok_or_else(|| {
+        let caller = ctx.exec.caller().ok_or_else(|| {
             "action-cancelled has no action caller — it can only be called from within \
              an action's own execution"
                 .to_string()

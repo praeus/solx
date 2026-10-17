@@ -22,7 +22,7 @@ use serde_json::Value;
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::FileStore;
 use solx_surface::path::split_ref;
-use solx_surface::{ExecScope, Principal};
+use solx_surface::ExecContext;
 use wasmtime::component::Component;
 use wasmtime::{Config, Engine};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
@@ -146,13 +146,10 @@ pub(super) struct HostState {
     /// reach `exec_as` and carry `caller` with them.
     actions: Arc<LocalActionManager>,
     files: Arc<dyn FileStore>,
-    /// The guest currently running, as seen by anything it invokes.
-    caller: Caller,
-    /// Inherited from the call that started this guest; carried on to
-    /// every nested `action-exec`.
-    principal: Option<Principal>,
-    /// Inherited and carried on exactly like `principal`.
-    scope: ExecScope,
+    /// The guest's own frame: its caller is the guest, as seen by anything
+    /// it invokes, and its principal and exclusion mode carry on to every
+    /// nested `action-exec`.
+    ctx: ExecContext,
     wasi: WasiCtx,
     table: ResourceTable,
 }
@@ -161,16 +158,12 @@ impl HostState {
     pub(super) fn new(
         actions: Arc<LocalActionManager>,
         files: Arc<dyn FileStore>,
-        caller: Caller,
-        principal: Option<Principal>,
-        scope: ExecScope,
+        ctx: ExecContext,
     ) -> Self {
         HostState {
             actions,
             files,
-            caller,
-            principal,
-            scope,
+            ctx,
             wasi: WasiCtxBuilder::new().build(),
             table: ResourceTable::new(),
         }
@@ -183,6 +176,18 @@ impl WasiView for HostState {
             ctx: &mut self.wasi,
             table: &mut self.table,
         }
+    }
+}
+
+/// The running guest itself: a guest always runs in a frame entered as it.
+pub(super) fn frame_caller(ctx: &ExecContext) -> &Caller {
+    ctx.caller()
+        .expect("a wasm guest runs in a frame entered as itself")
+}
+
+impl HostState {
+    fn caller(&self) -> &Caller {
+        frame_caller(&self.ctx)
     }
 }
 
@@ -205,8 +210,8 @@ impl sol::actions::logger::Host for HostState {
             .actions
             .console()
             .print(
-                self.caller.action_ref(),
-                self.caller.invocation_id(),
+                self.caller().action_ref(),
+                self.caller().invocation_id(),
                 None,
                 "info",
                 "guest",
@@ -215,7 +220,7 @@ impl sol::actions::logger::Host for HostState {
             )
             .await
         {
-            tracing::warn!("console print failed for {}: {e}", self.caller.action_ref());
+            tracing::warn!("console print failed for {}: {e}", self.caller().action_ref());
         }
         tracing::info!(target: "solx_wasm_guest", "{message}");
     }
@@ -232,14 +237,7 @@ impl sol::actions::action_exec::Host for HostState {
             serde_json::from_str(&payload).map_err(|e| format!("invalid params: {e}"))?;
         let result: solx_surface::entities::ActionExecResult = self
             .actions
-            .exec_as(
-                &path,
-                &name,
-                params,
-                Some(&self.caller),
-                self.principal.as_ref(),
-                self.scope,
-            )
+            .exec_as(&path, &name, params, &self.ctx)
             .await
             .map_err(|e| e.to_string())?;
         Ok(sol::actions::types::ActionResult {

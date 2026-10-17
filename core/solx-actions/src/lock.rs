@@ -217,7 +217,7 @@ mod lifecycle_tests {
     use serde_json::{json, Value};
     use solx_surface::entities::{ActionInput, ActionType};
     use solx_surface::managers::ActionManager;
-    use solx_surface::{ExecScope, Principal};
+    use solx_surface::{ExecContext, Principal};
 
     use crate::seed::{ACTION_PATH, FILE_PATH};
     use crate::test_support::setup_wired;
@@ -410,7 +410,7 @@ mod lifecycle_tests {
         assert_eq!(action.bin_name.as_deref(), Some(BIN));
         assert_eq!(run(&m).await.unwrap(), json!(42));
         assert_eq!(
-            m.exec_as("/p", "s", json!({}), None, None, ExecScope::Tooling)
+            m.exec_as("/p", "s", json!({}), &ExecContext::tooling(None))
                 .await
                 .unwrap()
                 .result,

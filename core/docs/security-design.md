@@ -70,7 +70,8 @@ solx tracks two separate identities. Keep them separate.
   task-local, so a `tokio::spawn` cannot silently drop it. Nested frames
   inherit it. Local entry points have no principal (`None`).
 
-Authorization decisions must use `InternalCallCtx::external_principal()`.
+Authorization decisions must use `InternalCallCtx::external_principal()`
+(`ExecContextInfo::external_principal()`).
 It returns `None` (deny) when there is any action in the chain, when the
 principal is itself an action token, or when there is no principal. Without
 this check, an action could re-enter with an inherited principal and look
@@ -79,6 +80,16 @@ like an external call.
 With the token registry (§3.4), accepted bearers map to all three
 principals: the root token to `Root`, client tokens to `Client`, and
 per-invocation action tokens to `Action`.
+
+**`ExecContext`** (`solx_surface::exec_context`) carries both, plus the
+chain's `ExcludeMode` (§7), so no re-entrant path can drop one of them. It is
+built only where a chain enters (`ExecContext::local`, `for_principal`,
+`tooling`). The principal and exclusion mode pass to every frame unchanged.
+The caller is replaced only by `ExecContext::enter`, at each frame that runs
+as an action (a Script or WASM action). Handlers and detached runs get the
+secret-free `ExecContextInfo`. A detached run turns it back into a full
+context with `ExecContextInfo::resume`, using the caller rebuilt from its
+row.
 
 ### 2.3 What identity is used for today
 
@@ -305,7 +316,7 @@ side effect. The rules:
 
 - `Script` actions run `.solx` source through `ActionCommandRunner`. That
   runner's only side-effecting stage is `exec` of another action, which
-  carries the caller, principal and scope. Scripts have no direct shell,
+  carries the script's `ExecContext`. Scripts have no direct shell,
   file or network access.
 - There is no built-in for running inline script source. The former
   `/builtin/script/exec` was removed: its nested `exec` let an MCP client
@@ -493,8 +504,9 @@ These are bearer-style: holding the id or token is the only check.
   entity kind: `actions`, `documents`, `types`), unioned with the legacy
   `tool_exclude`/`mcp_exclude` rules and the `solx:hidden` tag. Over MCP:
   - The MCP server runs every call through `ActionManager::exec_tooling`,
-    which starts the chain in `ExecScope::Tooling`. The scope is inherited
-    by every nested frame exactly like the principal: a Script's `exec`
+    which starts the chain with `ExecContext::tooling` (exclusion mode
+    `ExcludeMode::Tooling`). The mode is inherited by every nested frame
+    exactly like the principal: a Script's `exec`
     stage, a WASM guest's `action-exec`, and a detached `action-start` run
     (`start_invocation` refuses an excluded target before creating its
     row). A remote `solx-client` carries it as `X-Solx-Scope: tooling`,
@@ -589,10 +601,14 @@ These are accepted for now. Each one is a candidate for future hardening.
   `net::check_outbound_url` before connecting, and uses `redirect_policy`.
 - Any new path to `ActionManager::save` that content can reach goes through
   `guard_executable_action`.
-- Any new re-entrant execution path passes the caller, the principal **and**
-  the `ExecScope`. Dropping the caller while keeping the principal makes an
-  action look like an external call; dropping the scope lets a model reach
-  actions excluded from tooling.
+- Any new re-entrant execution path passes the chain's `ExecContext`
+  whole, and starts a new frame only with `ExecContext::enter`, never by
+  building a fresh context. Dropping the caller while keeping the
+  principal makes an action look like an external call; dropping the
+  exclusion mode lets a model reach actions excluded from tooling. Only
+  `ExcludeMode::Tooling` is enforced along the chain (`User` acts as
+  `None`); `enforce_scope` matches it exhaustively, so enforcing `User`
+  would be a deliberate change.
 - Any built-in that authorizes on identity uses `external_principal()` and
   treats `None` as deny, never as root.
 - Any new host that serves solx-server's router uses

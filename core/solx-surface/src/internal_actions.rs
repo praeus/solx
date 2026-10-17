@@ -27,7 +27,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::auth::{ExecScope, Principal};
+use crate::auth::Principal;
+use crate::exec_context::ExecContextInfo;
 use crate::error::Result;
 use crate::managers::{ActionManager, DocManager, FileStore, TypeManager};
 
@@ -36,8 +37,8 @@ use crate::managers::{ActionManager, DocManager, FileStore, TypeManager};
 /// Identity of the action that initiated an execution.
 ///
 /// Only one caller exists today: an action invoking another action — a WASM
-/// guest calling `action-exec`, a `Script` action's `exec` stage, or a
-/// `script-exec` run. Everything else — the CLI, the MCP server, the HTTP
+/// guest calling `action-exec`, or a `Script` action's `exec` stage.
+/// Everything else — the CLI, the MCP server, the HTTP
 /// route, `solx-client` — enters through `ActionManager::exec`/`exec_for`
 /// and has no action caller, i.e. `None`.
 ///
@@ -55,7 +56,8 @@ use crate::managers::{ActionManager, DocManager, FileStore, TypeManager};
 /// detached `action-start` run — cannot silently drop it. Nested frames
 /// inherit the originating principal for attribution, so an authorization
 /// check must look at the caller *first*: see
-/// [`InternalCallCtx::external_principal`].
+/// [`ExecContextInfo::external_principal`]. The two travel together, with
+/// the exclusion mode, in a [`crate::ExecContext`].
 ///
 /// ## What it carries, and what it must not
 ///
@@ -251,41 +253,18 @@ pub struct InternalCallCtx {
     pub types: Arc<dyn TypeManager>,
     pub actions: Arc<dyn ActionManager>,
     pub files: Arc<dyn FileStore>,
-    /// The invoking action's non-secret identity only — see [`CallerInfo`].
-    /// A pluggable handler can never reach a secret key through this field,
-    /// even by accident: [`Caller`] (which can) never appears here.
-    pub caller: Option<CallerInfo>,
-    /// Who authenticated the call this chain started from, when it came in
-    /// through an authenticated route; `None` for local entry points (CLI,
-    /// stdio MCP, Tauri). Inherited by nested frames, so on its own it does
-    /// **not** mean "an external party called this handler directly" — use
-    /// [`Self::external_principal`] for any authorization decision.
-    pub principal: Option<Principal>,
-    /// The exclusions this chain is held to, inherited like `principal`. A
-    /// handler that starts another run (`action-start`) must pass it on.
-    pub scope: ExecScope,
+    /// The caller (non-secret identity only — see [`CallerInfo`]), principal
+    /// and exclusion mode of this frame. A pluggable handler can never reach
+    /// a secret key through it, even by accident: [`Caller`] (which can)
+    /// never appears here. A handler that starts another run
+    /// (`action-start`) must pass it on whole.
+    pub exec: ExecContextInfo,
 }
 
 impl InternalCallCtx {
-    /// The principal to authorize against, failing closed: `None` when an
-    /// action is in the call chain (whatever principal it inherited), when
-    /// the principal is itself an action token, or when there is no
-    /// principal at all. A handler that gates on this must treat `None` as
-    /// *deny*, never as root.
+    /// See [`ExecContextInfo::external_principal`]; treat `None` as *deny*.
     pub fn external_principal(&self) -> Option<&Principal> {
-        external_principal(self.caller.is_some(), self.principal.as_ref())
-    }
-}
-
-/// The decision behind [`InternalCallCtx::external_principal`], split out so
-/// it can be tested without constructing four manager trait objects.
-fn external_principal(has_caller: bool, principal: Option<&Principal>) -> Option<&Principal> {
-    if has_caller {
-        return None;
-    }
-    match principal {
-        Some(Principal::Action { .. }) | None => None,
-        Some(p) => Some(p),
+        self.exec.external_principal()
     }
 }
 
@@ -309,12 +288,12 @@ pub trait InternalActionHandler: Send + Sync {
 /// (long-lived-host requirement, cooperative-then-forced cancellation,
 /// long-poll cadence).
 ///
-/// `start_invocation` takes the starting call's `principal` and `caller` so
-/// the detached run keeps both across its `tokio::spawn`. Dropping the
-/// caller while keeping the principal would let an action launched by root
-/// re-enter as an apparently external root call — see
-/// [`InternalCallCtx::external_principal`]. It takes the `scope` for the same
-/// reason: dropping it would let a model detach an excluded action.
+/// `start_invocation` takes the starting call's whole [`ExecContextInfo`] so
+/// the detached run keeps it across its `tokio::spawn`. Dropping the caller
+/// while keeping the principal would let an action launched by root re-enter
+/// as an apparently external root call (see
+/// [`ExecContextInfo::external_principal`]); dropping the exclusion mode
+/// would let a model detach an excluded action.
 #[async_trait]
 pub trait ActionExecutor: Send + Sync {
     async fn start_invocation(
@@ -322,9 +301,7 @@ pub trait ActionExecutor: Send + Sync {
         path: &str,
         name: &str,
         params: Value,
-        principal: Option<Principal>,
-        scope: ExecScope,
-        caller: Option<CallerInfo>,
+        exec: ExecContextInfo,
     ) -> Result<Value>;
     async fn stop_invocation(
         &self,
@@ -381,41 +358,5 @@ impl InternalActionRegistry {
     pub fn merge(&mut self, other: InternalActionRegistry) {
         self.handlers.extend(other.handlers);
         self.seeds.extend(other.seeds);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn client() -> Principal {
-        Principal::Client {
-            id: "c1".into(),
-            label: None,
-        }
-    }
-
-    fn action() -> Principal {
-        Principal::Action {
-            action_ref: "/pkg/a".into(),
-            invocation_id: "i1".into(),
-        }
-    }
-
-    #[test]
-    fn external_principal_allows_root_and_client_with_no_caller() {
-        assert_eq!(external_principal(false, Some(&Principal::Root)), Some(&Principal::Root));
-        assert_eq!(external_principal(false, Some(&client())), Some(&client()));
-    }
-
-    #[test]
-    fn external_principal_fails_closed() {
-        // No principal at all: a local entry point, never treated as root.
-        assert_eq!(external_principal(false, None), None);
-        // An action token is not an external party.
-        assert_eq!(external_principal(false, Some(&action())), None);
-        // An action in the chain wins over whatever principal it inherited.
-        assert_eq!(external_principal(true, Some(&Principal::Root)), None);
-        assert_eq!(external_principal(true, Some(&client())), None);
     }
 }

@@ -8,7 +8,7 @@ use serde_json::Value;
 use solx_surface::entities::{Action, ActionExecResult, ActionInput, ActionType};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::ActionManager;
-use solx_surface::{ActionSecrets, ExecScope, Principal};
+use solx_surface::{ActionSecrets, ExecContext, Principal};
 use solx_surface::path::{full_ref, normalize_path, validate_name};
 use solx_surface::query::{
     ActionSearchQuery, ExcludeMode, ListOptions, ListSchema, ListSql, Page, PathFacet, SortOrder,
@@ -461,8 +461,7 @@ impl ActionManager for LocalActionManager {
     /// `TokenAuthority::authenticate`, so both caller and principal are
     /// `None`; see [`LocalActionManager::exec_as`].
     async fn exec(&self, path: &str, name: &str, params: Value) -> Result<ActionExecResult> {
-        self.exec_as(path, name, params, None, None, ExecScope::Unrestricted)
-            .await
+        self.exec_as(path, name, params, &ExecContext::local()).await
     }
 
     /// Entry point for authenticated routes — the HTTP REST exec and the
@@ -474,15 +473,8 @@ impl ActionManager for LocalActionManager {
         name: &str,
         params: Value,
     ) -> Result<ActionExecResult> {
-        self.exec_as(
-            path,
-            name,
-            params,
-            None,
-            Some(principal),
-            ExecScope::Unrestricted,
-        )
-        .await
+        let ctx = ExecContext::for_principal(principal.clone());
+        self.exec_as(path, name, params, &ctx).await
     }
 
     /// Entry point for the MCP server, stdio or `/mcp`: the whole chain is
@@ -494,8 +486,8 @@ impl ActionManager for LocalActionManager {
         name: &str,
         params: Value,
     ) -> Result<ActionExecResult> {
-        self.exec_as(path, name, params, None, principal, ExecScope::Tooling)
-            .await
+        let ctx = ExecContext::tooling(principal.cloned());
+        self.exec_as(path, name, params, &ctx).await
     }
 }
 

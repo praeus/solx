@@ -51,8 +51,8 @@ async fn spawn_server() -> (tempfile::TempDir, Arc<solx_manager::App>, String, S
     (dir, app, format!("http://{addr}"), token)
 }
 
-fn root_probe(scope: &str) -> Value {
-    json!({"principal": "root", "caller": null, "external": "root", "scope": scope})
+fn root_probe(exclude_mode: &str) -> Value {
+    json!({"principal": "root", "caller": null, "external": "root", "excludeMode": exclude_mode})
 }
 
 #[tokio::test]
@@ -67,7 +67,7 @@ async fn rest_exec_runs_as_the_authenticated_principal() {
         .unwrap();
     assert!(res.status().is_success(), "{}", res.status());
     let body: Value = res.json().await.unwrap();
-    assert_eq!(body["result"], root_probe("unrestricted"));
+    assert_eq!(body["result"], root_probe("none"));
 }
 
 /// `X-Solx-Scope: tooling` is how an MCP server proxying to this host keeps

@@ -1,6 +1,6 @@
 //! A test-only internal handler that reports what an `InternalCallCtx`
 //! carries — the principal, the caller, the fail-closed
-//! `external_principal()` verdict, and the exclusion scope — so tests can check that each entry point
+//! `external_principal()` verdict, and the exclusion mode — so tests can check that each entry point
 //! (REST, `/mcp`, nested frames, detached `action-start` runs) delivers them.
 //!
 //! Compiled only under `cfg(test)` or the `test-probe` feature, which
@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use solx_surface::internal_actions::{
     InternalActionHandler, InternalActionRegistry, InternalCallCtx,
 };
-use solx_surface::{ExecScope, Principal};
+use solx_surface::Principal;
 
 pub const FN_NAME: &str = "test-principal-probe";
 
@@ -38,13 +38,10 @@ impl InternalActionHandler for Probe {
         ctx: &InternalCallCtx,
     ) -> std::result::Result<Value, String> {
         Ok(json!({
-            "principal": ctx.principal.as_ref().map(describe),
-            "caller": ctx.caller.as_ref().map(|c| c.action_ref().to_string()),
+            "principal": ctx.exec.principal().map(describe),
+            "caller": ctx.exec.caller().map(|c| c.action_ref().to_string()),
             "external": ctx.external_principal().map(describe),
-            "scope": match ctx.scope {
-                ExecScope::Unrestricted => "unrestricted",
-                ExecScope::Tooling => "tooling",
-            },
+            "excludeMode": ctx.exec.exclude_mode(),
         }))
     }
 }
@@ -61,7 +58,7 @@ mod tests {
     use serial_test::serial;
     use solx_surface::entities::{ActionInput, ActionType};
     use solx_surface::managers::ActionManager;
-    use solx_surface::{ExecScope, Principal};
+    use solx_surface::{ExecContext, Principal};
 
     use super::FN_NAME;
     use crate::caller::Caller;
@@ -121,13 +118,13 @@ mod tests {
             .unwrap();
         assert_eq!(
             authed.result,
-            json!({"principal": "root", "caller": null, "external": "root", "scope": "unrestricted"})
+            json!({"principal": "root", "caller": null, "external": "root", "excludeMode": "none"})
         );
 
         let local = m.exec("/t", "probe", json!({})).await.unwrap();
         assert_eq!(
             local.result,
-            json!({"principal": null, "caller": null, "external": null, "scope": "unrestricted"})
+            json!({"principal": null, "caller": null, "external": null, "excludeMode": "none"})
         );
     }
 
@@ -145,7 +142,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             ran.result["result"],
-            json!({"principal": "root", "caller": "/t/outer", "external": null, "scope": "unrestricted"})
+            json!({"principal": "root", "caller": "/t/outer", "external": null, "excludeMode": "none"})
         );
     }
 
@@ -174,15 +171,13 @@ mod tests {
                 "/t",
                 "probe",
                 json!({}),
-                Some(Principal::Root),
-                ExecScope::Unrestricted,
-                None,
+                ExecContext::for_principal(Principal::Root).info(),
             )
             .await
             .unwrap();
         assert_eq!(
             poll_result(direct).await,
-            json!({"principal": "root", "caller": null, "external": "root", "scope": "unrestricted"})
+            json!({"principal": "root", "caller": null, "external": "root", "excludeMode": "none"})
         );
 
         let from_action = m
@@ -190,15 +185,15 @@ mod tests {
                 "/t",
                 "probe",
                 json!({}),
-                Some(Principal::Root),
-                ExecScope::Unrestricted,
-                Some(Caller::from_action("/t/outer", None).info()),
+                ExecContext::for_principal(Principal::Root)
+                    .enter(Caller::from_action("/t/outer", None))
+                    .info(),
             )
             .await
             .unwrap();
         assert_eq!(
             poll_result(from_action).await,
-            json!({"principal": "root", "caller": "/t/outer", "external": null, "scope": "unrestricted"})
+            json!({"principal": "root", "caller": "/t/outer", "external": null, "excludeMode": "none"})
         );
 
         // End to end through the `action-start` builtin, from a script.
@@ -214,17 +209,17 @@ mod tests {
             .unwrap();
         assert_eq!(
             poll_result(ran.result["result"].clone()).await,
-            json!({"principal": "root", "caller": "/t/starter", "external": null, "scope": "unrestricted"})
+            json!({"principal": "root", "caller": "/t/starter", "external": null, "excludeMode": "none"})
         );
 
-        // The tooling scope crosses the same `tokio::spawn`.
+        // The tooling mode crosses the same `tokio::spawn`.
         let ran = m
             .exec_tooling(None, "/t", "starter", json!({}))
             .await
             .unwrap();
         assert_eq!(
             poll_result(ran.result["result"].clone()).await,
-            json!({"principal": null, "caller": "/t/starter", "external": null, "scope": "tooling"})
+            json!({"principal": null, "caller": "/t/starter", "external": null, "excludeMode": "tooling"})
         );
 
         set_long_lived_host(false);
@@ -243,7 +238,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             ran.result["result"],
-            json!({"principal": "root", "caller": "/t/outer", "external": null, "scope": "tooling"})
+            json!({"principal": "root", "caller": "/t/outer", "external": null, "excludeMode": "tooling"})
         );
     }
 
@@ -273,7 +268,7 @@ mod tests {
 
         set_long_lived_host(true);
         let detached = m
-            .start_invocation("/t", "hidden", json!({}), None, ExecScope::Tooling, None)
+            .start_invocation("/t", "hidden", json!({}), ExecContext::tooling(None).info())
             .await
             .unwrap_err();
         assert!(

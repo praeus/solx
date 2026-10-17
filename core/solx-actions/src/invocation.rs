@@ -10,7 +10,7 @@ use solx_surface::error::{Result, SolxError};
 use solx_surface::internal_actions::CallerInfo;
 use solx_surface::managers::ActionManager;
 use solx_surface::path::{full_ref, split_ref};
-use solx_surface::{ExcludeMode, ExecScope, Principal};
+use solx_surface::{ExcludeMode, ExecContextInfo};
 use uuid::Uuid;
 
 use crate::caller::Caller;
@@ -50,19 +50,18 @@ impl LocalActionManager {
     /// process (which exits the instant `exec` returns) a "successfully
     /// started" invocation would be killed before it could ever be polled.
     ///
-    /// `principal`, `scope` and `caller` are those of the `action-start`
-    /// call, moved into the spawned task so the detached run is attributed —
-    /// and authorized — exactly as a synchronous nested `exec` would be. The
-    /// full [`Caller`] (secrets included) is rebuilt here from the calling
-    /// action's row, since a plugin handler only ever sees [`CallerInfo`].
+    /// `exec` is the `action-start` call's context, moved into the spawned
+    /// task so the detached run is attributed — and authorized, and held to
+    /// the same exclusions — exactly as a synchronous nested `exec` would
+    /// be. The full [`Caller`] (secrets included) is rebuilt here from the
+    /// calling action's row, since a plugin handler only ever sees
+    /// [`CallerInfo`].
     pub async fn start_invocation(
         &self,
         path: &str,
         name: &str,
         params: Value,
-        principal: Option<Principal>,
-        scope: ExecScope,
-        caller: Option<CallerInfo>,
+        exec: ExecContextInfo,
     ) -> Result<Value> {
         if !is_long_lived_host() {
             return Err(SolxError::Exec(
@@ -85,7 +84,7 @@ impl LocalActionManager {
         }
         // The spawned run is refused anyway, but only after its row exists,
         // and a `failed` row would tell the caller the action is there.
-        if scope == ExecScope::Tooling {
+        if exec.exclude_mode() == ExcludeMode::Tooling {
             self.config
                 .exclusion_policy()
                 .guard_action(ExcludeMode::Tooling, &action, false)?;
@@ -99,10 +98,11 @@ impl LocalActionManager {
             .create(&invocation_id, &action_ref, console_seq_start)
             .await?;
 
-        let caller = match caller {
-            Some(info) => Some(self.rebuild_caller(&info).await),
+        let caller = match exec.caller() {
+            Some(info) => Some(self.rebuild_caller(info).await),
             None => None,
         };
+        let ctx = exec.resume(caller);
 
         let manager = self.self_arc()?;
         let path = path.to_string();
@@ -110,15 +110,7 @@ impl LocalActionManager {
         let task_id = invocation_id.clone();
         let handle = tokio::spawn(async move {
             let outcome = manager
-                .exec_as_with(
-                    &path,
-                    &name,
-                    params,
-                    caller.as_ref(),
-                    principal.as_ref(),
-                    scope,
-                    Some(&task_id),
-                )
+                .exec_as_with(&path, &name, params, &ctx, Some(&task_id))
                 .await;
             let (status, result, error) = match outcome {
                 Ok(r) if r.success => (invocations::status::OK, Some(r.result), None),
@@ -260,8 +252,7 @@ impl LocalActionManager {
 
     /// The full frame of the action that called `action-start`, keeping its
     /// own `invocation_id` exactly as a synchronous nested `exec` would. If
-    /// its row can't be read (deleted, or a synthetic identity like
-    /// `script-exec`'s), the frame has no secrets but is still a caller — so
+    /// its row can't be read (it was deleted), the frame has no secrets but is still a caller — so
     /// the detached run is never mistaken for an external call.
     async fn rebuild_caller(&self, info: &CallerInfo) -> Caller {
         let secrets = match split_ref(info.action_ref()) {
@@ -283,6 +274,7 @@ mod tests {
     use solx_config::ConfigService;
     use solx_surface::entities::{ActionInput, ActionType};
     use solx_surface::managers::ActionManager;
+    use solx_surface::ExecContext;
 
     // ── async actions: start/stop/poll ───────────────────────────────────────
     //
@@ -337,7 +329,7 @@ mod tests {
         save_command(&m, &cfg, "quick", quick_ok()).await;
 
         let err = m
-            .start_invocation("/t", "quick", serde_json::json!({}), None, ExecScope::Unrestricted, None)
+            .start_invocation("/t", "quick", serde_json::json!({}), ExecContext::local().info())
             .await
             .unwrap_err();
         assert!(
@@ -354,7 +346,7 @@ mod tests {
         save_command(&m, &cfg, "quick", quick_ok()).await;
 
         let started = m
-            .start_invocation("/t", "quick", serde_json::json!({}), None, ExecScope::Unrestricted, None)
+            .start_invocation("/t", "quick", serde_json::json!({}), ExecContext::local().info())
             .await
             .unwrap();
         let id = started["invocation_id"].as_str().unwrap().to_string();
@@ -397,7 +389,7 @@ mod tests {
         save_command(&m, &cfg, "hangs", hangs_forever()).await;
 
         let started = m
-            .start_invocation("/t", "hangs", serde_json::json!({}), None, ExecScope::Unrestricted, None)
+            .start_invocation("/t", "hangs", serde_json::json!({}), ExecContext::local().info())
             .await
             .unwrap();
         let id = started["invocation_id"].as_str().unwrap().to_string();
@@ -429,7 +421,7 @@ mod tests {
         save_command(&m, &cfg, "hangs", hangs_forever()).await;
 
         let started = m
-            .start_invocation("/t", "hangs", serde_json::json!({}), None, ExecScope::Unrestricted, None)
+            .start_invocation("/t", "hangs", serde_json::json!({}), ExecContext::local().info())
             .await
             .unwrap();
         let id = started["invocation_id"].as_str().unwrap().to_string();

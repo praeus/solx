@@ -9,13 +9,15 @@
 pub mod auth;
 pub mod entities;
 pub mod error;
+pub mod exec_context;
 pub mod internal_actions;
 pub mod managers;
 pub mod path;
 pub mod query;
 pub mod wire;
 
-pub use auth::{ActionCredential, ExecScope, Principal, TokenAuthority};
+pub use auth::{ActionCredential, Principal, TokenAuthority};
+pub use exec_context::{ExecContext, ExecContextInfo};
 pub use error::{Result, SolxError};
 
 pub use entities::{

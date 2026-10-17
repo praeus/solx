@@ -18,18 +18,17 @@ use serde_json::Value;
 use solx_scripts::CommandRunner;
 use solx_surface::error::{Result, SolxError};
 use solx_surface::path::split_ref;
-use solx_surface::{ExecScope, Principal};
+use solx_surface::ExecContext;
 
 use crate::caller::Caller;
 use crate::LocalActionManager;
 
 pub struct ActionCommandRunner {
     pub actions: Arc<LocalActionManager>,
-    pub caller: Caller,
-    /// Inherited from the call that started this script; carried on to
-    /// every nested `exec` stage.
-    pub principal: Option<Principal>,
-    pub scope: ExecScope,
+    /// This script's frame (from `ExecContext::enter`): it is the caller of
+    /// every nested `exec` stage, which also inherits the principal and
+    /// exclusion mode.
+    pub ctx: ExecContext,
 }
 
 #[async_trait]
@@ -64,13 +63,20 @@ impl CommandRunner for ActionCommandRunner {
 }
 
 impl ActionCommandRunner {
+    /// The script action itself.
+    fn caller(&self) -> &Caller {
+        self.ctx
+            .caller()
+            .expect("a script runs in a frame entered as itself")
+    }
+
     async fn log(&self, level: &str, message: String) {
         let _ = self
             .actions
             .console()
             .print(
-                self.caller.action_ref(),
-                self.caller.invocation_id(),
+                self.caller().action_ref(),
+                self.caller().invocation_id(),
                 None,
                 level,
                 "script",
@@ -90,14 +96,7 @@ impl ActionCommandRunner {
         let (path, name) = split_ref(&reference)?;
         let result = self
             .actions
-            .exec_as(
-                &path,
-                &name,
-                params,
-                Some(&self.caller),
-                self.principal.as_ref(),
-                self.scope,
-            )
+            .exec_as(&path, &name, params, &self.ctx)
             .await?;
         serde_json::to_value(&result)
             .map_err(|e| SolxError::Invalid(format!("serialize exec result: {e}")))
