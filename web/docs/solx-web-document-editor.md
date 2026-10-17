@@ -213,12 +213,19 @@ Templates still live in the type's schema under `x-sol-template` (or
 component that:
 
 1. Resolves the template from `type.schema["x-sol-template"]` (or
-   `x-sol-preview`), falling back to a built-in dump that renders the
+   `x-sol-preview`). Without one, React renders a built-in view of the
    title, summary, and contents as a `<dl>`.
-2. Runs `ejs.render(template, { document, contents })` — templates
-   can do `<%= contents.title %>` or `<%= document.path %>` etc.
-3. Renders via `dangerouslySetInnerHTML` (the trust boundary is the
-   type schema, which the user wrote themselves).
+2. Compiles the template with EJS, which builds the render function
+   without running any of the template's code, and posts its source into
+   an `<iframe sandbox="allow-scripts">` (an opaque origin, with a
+   `default-src 'none'` CSP). Templates can do `<%= contents.title %>` or
+   `<%= document.path %>` etc.
+3. Renders inside that sandbox. Templates are untrusted: a type can be
+   saved by an MCP client, a WASM guest or a package, not only the user,
+   and EJS is arbitrary JavaScript. In the sandbox it has no access to the
+   app, its token or Tauri IPC, and no network. `data-relpath` images are
+   fetched by the app and handed in, only for files the document
+   references.
 
 The "Contents JSON" tab shows the post-coercion `contents` map (after
 schema-driven field merging) for debugging what will actually be sent

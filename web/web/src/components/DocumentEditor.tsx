@@ -31,7 +31,7 @@
  *
  * Preview: the right column renders the document via
  * `<DocumentPreview>`, which runs the type's `x-sol-template` (or
- * `x-sol-preview`) through EJS on the frontend. Falls back to a
+ * `x-sol-preview`) through EJS in a sandboxed iframe. Falls back to a
  * built-in dump when no template is set.
  */
 
