@@ -85,17 +85,39 @@ revokes exactly those, unless another installed package also declares the
 same key or prefix. A collision between packages is a logged warning, not a
 silent overwrite.
 
-**Secrets are scoped to the calling action.** `get-secret`/`set-secret`
-resolve only against the *calling* action's own `action_config.secrets` map.
-The caller is threaded host-side and never serialized, so a client cannot
-spoof it.
+**Installed actions are locked.** Every action a package install leaves
+under `/packages/<name>/` is locked, unless the manifest lists it under
+`unlocked_actions`. A locked action can be run by anyone who can run actions,
+but it can be changed, deleted, locked or unlocked only by an operator: the
+`solx` CLI (`solx action lock|unlock`), a package install, the root token over
+REST, or the desktop app's Settings window. An MCP client is not an operator,
+even when it connects with the root token, and neither is a WASM guest, a
+script, or the desktop app's main window, which hosts widgets.
 
-**Secrets are masked on read.** `ActionManager::get` and `list` redact
-`action_config.secrets` and `action_config.auth`, so keys never cross the
-HTTP boundary or reach an MCP client. Execution reads through an unmasked
-path and still sees real values. `save` runs the inverse merge, restoring
-anything echoed back as `"***"` from the stored row — so a fetch → edit →
-save round trip cannot silently destroy a key.
+Locking a Script or WASM action pins its artifact: the file it runs and the
+SHA-256 of its bytes. Those bytes are checked before every run, so replacing
+the file can stop a locked action from running but never makes it run
+different code — which matters because the code runs with that action's
+scoped secrets. Content can't write or delete a pinned file through the file
+built-ins, REST `/files` (anything but the root token), or the main window.
+
+**Secrets are scoped to the calling action.** `get-secret`/`set-secret`
+resolve only against the *calling* action: a name it lists in its own
+`action_config.secrets`, with its own key. The caller is threaded host-side
+and never serialized, so a client cannot spoof it.
+
+**Action config never holds a secret.** An action's AES key is kept in its
+own column of the actions table, never in `action_config`, so no read
+(`get`/`list`/`search`, HTTP, MCP) can return it. `action_config.secrets`
+lists only the secret names, each as `"***"`; a key supplied there on save
+is moved to the column. Inline credentials in `action_config.auth` are
+refused — they come from a `<field>_secret` pointer or a keyring reference.
+
+**Only root can create or change an action with secrets.** That is the CLI,
+a package install, the desktop app, or HTTP with the root token. A client
+token, an MCP tool call, a WASM guest or a script cannot, so none of them can
+set a key, extend a key to another secret name, or swap the code that runs
+with it.
 
 **WASM guests are sandboxed by construction.** The `custom-action` world
 imports only action dispatch, artifact reads, and logging.
@@ -140,8 +162,11 @@ codes are short-lived.
 `solx-config.json` (along with `tool_exclude` and the `solx:hidden` tag)
 removes actions, documents and types from what a model can reach over MCP.
 Excluded actions are left out of discovery, and they're refused even when
-called by name. Every `/builtin/*` call made over MCP is forced into the
-tooling scope, so a model can't opt out with its own `excludeMode`.
+called by name. The scope covers the whole call chain, not just the tool the
+model named: an excluded action is refused even when a script, a WASM guest
+or `action-start` calls it on the model's behalf, and every built-in in the
+chain is forced into the tooling scope, so a model can't opt out with its
+own `excludeMode`.
 
 ### What is not enforced
 
@@ -180,6 +205,9 @@ is implemented, the full list of known gaps, and the intended direction.
 - **Keep the allowlists narrow.** Every entry in `command_actions` is a shell
   command something can trigger. Register the specific commands you need, not
   wrappers that take arbitrary arguments.
+- **Re-lock after changing a locked action's artifact by hand.** A locked
+  action whose file changed refuses to run until `solx action lock <ref>`
+  (or a reinstall) pins the new bytes.
 - **Read a package's manifest before installing it.** The `command_actions`
   and `allowed_base_urls` blocks in `solx-package.json` are a complete list
   of the shell access and outbound hosts it's asking for.

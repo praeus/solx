@@ -64,10 +64,6 @@ pub const WEB_PATH: &str = "/builtin/web";
 /// `solx-packages/solx-ollama/docs/streaming-design.md`.
 pub const WEB_STREAM_PATH: &str = "/builtin/web/stream";
 
-/// Subdivision of the builtin namespace for running a raw solx script
-/// string immediately, without first saving it as a `Script`-typed action.
-pub const SCRIPT_PATH: &str = "/builtin/script";
-
 /// Namespace for the hand-written JSON-schema types backing built-in
 /// actions' `param_type_ref` (see `solx-types/src/seed.rs`). Shared by every
 /// `/builtin/*` subpath — `param_type_ref` doesn't need to mirror the
@@ -145,8 +141,6 @@ pub fn builtin_actions() -> Vec<SeedAction> {
         // browser; host-side streaming HTTP lives under WEB_STREAM_PATH below.
         a_at(WEB_PATH, "http-request", "http-request", "Issue an HTTP request with optional method, headers, body, and timeout.", Some("HttpRequestParams")),
         a_at(WEB_PATH, "open-url", "open-url", "Open a URL in the system browser via the platform-native handler (xdg-open / open / ShellExecuteW).", Some("OpenUrlParams")),
-        // Scripting — parse and run a raw solx script string immediately.
-        a_at(SCRIPT_PATH, "exec", "script-exec", "Parse and immediately run a solx script from a string, returning its result. Supports the same 'exec <path/name> [--json '<params>']' and 'json <value>' stages as a Script-typed action.", Some("ScriptExecParams")),
         // Action consoles (`/builtin/console/*`) and asynchronous actions
         // (`/builtin/action/{start,stop,poll,cancelled}`) are seeded by
         // `solx-console` itself — see `solx_console::actions::seed_actions`,
@@ -195,8 +189,25 @@ pub async fn seed_builtins(conn: &Connection, extra: &[SeedAction]) -> Result<()
         .await
         .map_err(map_db)?;
     }
+    for (path, name, fn_name) in RETIRED_BUILTINS {
+        conn.execute(
+            "DELETE FROM actions              WHERE path = ?1 AND name = ?2 AND action_type = 'internal' AND fn_name = ?3",
+            libsql::params![*path, *name, *fn_name],
+        )
+        .await
+        .map_err(map_db)?;
+    }
     Ok(())
 }
+
+/// Built-ins that have been removed, as `(path, name, fn_name)`. Seeding is
+/// `INSERT OR IGNORE`, so without this an existing database would keep
+/// listing them (calling one fails, as its `fn_name` no longer dispatches).
+///
+/// `/builtin/script/exec` (`script-exec`) ran inline script source. It was
+/// removed because it let an MCP client reach excluded actions through its
+/// nested `exec` stage; a saved Script action covers its use.
+const RETIRED_BUILTINS: &[(&str, &str, &str)] = &[("/builtin/script", "exec", "script-exec")];
 
 #[cfg(test)]
 mod tests {

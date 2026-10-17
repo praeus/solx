@@ -18,7 +18,7 @@
 //! tasks) takes it via constructor injection instead — see
 //! [`ActionExecutor`].
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::auth::Principal;
+use crate::auth::{ExecScope, Principal};
 use crate::error::Result;
 use crate::managers::{ActionManager, DocManager, FileStore, TypeManager};
 
@@ -59,9 +59,9 @@ use crate::managers::{ActionManager, DocManager, FileStore, TypeManager};
 ///
 /// ## What it carries, and what it must not
 ///
-/// Only the calling action's `action_config.secrets` map, behind a private
-/// field. The caller's `cwd`, `auth`, and `headers` are never in scope, so
-/// there is no way for a downstream handler to reach them even by accident.
+/// Only the calling action's [`ActionSecrets`], behind a private field. The
+/// caller's `cwd`, `auth`, and `headers` are never in scope, so there is no
+/// way for a downstream handler to reach them even by accident.
 ///
 /// **Invariant:** a `Caller` is read-only input to secret-key resolution.
 /// No internal action may return it, or any key inside it, in its result —
@@ -77,29 +77,17 @@ pub struct Caller {
     /// same action (same console) stay separable even though they share a
     /// console.
     invocation_id: String,
-    /// `action_config.secrets` of the calling action: secret name -> base64
-    /// AES key. Typed as a string map rather than a `Value` so it is a
-    /// type-level fact that nothing else can ride along.
-    secrets: BTreeMap<String, String>,
+    secrets: ActionSecrets,
 }
 
 impl Caller {
-    /// Build a caller frame from an action row. `action_config` is the raw
-    /// (unmasked) config — `exec_as` reads rows through `get_unmasked`.
-    pub fn from_action(action_ref: impl Into<String>, action_config: Option<&Value>) -> Self {
-        let secrets = action_config
-            .and_then(|c| c.get("secrets"))
-            .and_then(Value::as_object)
-            .map(|m| {
-                m.iter()
-                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                    .collect()
-            })
-            .unwrap_or_default();
+    /// Build a caller frame for an action. `secrets` is `None` for a frame
+    /// that should resolve no secrets at all.
+    pub fn from_action(action_ref: impl Into<String>, secrets: Option<ActionSecrets>) -> Self {
         Caller {
             action_ref: action_ref.into(),
             invocation_id: Uuid::new_v4().to_string(),
-            secrets,
+            secrets: secrets.unwrap_or_default(),
         }
     }
 
@@ -110,10 +98,10 @@ impl Caller {
     /// address.
     pub fn with_invocation(
         action_ref: impl Into<String>,
-        action_config: Option<&Value>,
+        secrets: Option<ActionSecrets>,
         invocation_id: impl Into<String>,
     ) -> Self {
-        let mut caller = Self::from_action(action_ref, action_config);
+        let mut caller = Self::from_action(action_ref, secrets);
         caller.invocation_id = invocation_id.into();
         caller
     }
@@ -129,9 +117,14 @@ impl Caller {
         &self.invocation_id
     }
 
-    /// The AES key this action has configured for `name`, if any.
+    /// The AES key this action may use for `name`, if any.
     pub fn secret_key(&self, name: &str) -> Option<&str> {
-        self.secrets.get(name).map(String::as_str)
+        self.secrets.key_for(name)
+    }
+
+    /// The secrets this caller may resolve.
+    pub fn secrets(&self) -> &ActionSecrets {
+        &self.secrets
     }
 
     /// Strips the secrets map, keeping only what a pluggable (non-hard-coded)
@@ -141,6 +134,52 @@ impl Caller {
             action_ref: self.action_ref.clone(),
             invocation_id: self.invocation_id.clone(),
         }
+    }
+}
+
+/// The scoped-secret access of one action: the secret names it declares in
+/// `action_config.secrets` and the AES key stored for it in the actions
+/// table's `secret_key` column — never in the config itself, where every
+/// value is the literal `"***"`.
+///
+/// The names are an allowlist, not decoration. The secret store is keyed by
+/// name alone, so without it any action holding a key could reach another
+/// package's secrets by name — and a decrypt failure clears the entry.
+#[derive(Clone, Default)]
+pub struct ActionSecrets {
+    key: Option<String>,
+    names: BTreeSet<String>,
+}
+
+impl ActionSecrets {
+    /// `action_config` supplies the names; `key` comes from the row's
+    /// `secret_key` column.
+    pub fn new(action_config: Option<&Value>, key: Option<String>) -> Self {
+        let names = action_config
+            .and_then(|c| c.get("secrets"))
+            .and_then(Value::as_object)
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        ActionSecrets {
+            key: key.filter(|k| !k.is_empty()),
+            names,
+        }
+    }
+
+    /// The key for secret `name`, if the action declares that name and has
+    /// a key at all.
+    pub fn key_for(&self, name: &str) -> Option<&str> {
+        self.key.as_deref().filter(|_| self.names.contains(name))
+    }
+}
+
+/// Never prints the key.
+impl fmt::Debug for ActionSecrets {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ActionSecrets")
+            .field("has_key", &self.key.is_some())
+            .field("names", &self.names)
+            .finish()
     }
 }
 
@@ -222,6 +261,9 @@ pub struct InternalCallCtx {
     /// **not** mean "an external party called this handler directly" — use
     /// [`Self::external_principal`] for any authorization decision.
     pub principal: Option<Principal>,
+    /// The exclusions this chain is held to, inherited like `principal`. A
+    /// handler that starts another run (`action-start`) must pass it on.
+    pub scope: ExecScope,
 }
 
 impl InternalCallCtx {
@@ -271,7 +313,8 @@ pub trait InternalActionHandler: Send + Sync {
 /// the detached run keeps both across its `tokio::spawn`. Dropping the
 /// caller while keeping the principal would let an action launched by root
 /// re-enter as an apparently external root call — see
-/// [`InternalCallCtx::external_principal`].
+/// [`InternalCallCtx::external_principal`]. It takes the `scope` for the same
+/// reason: dropping it would let a model detach an excluded action.
 #[async_trait]
 pub trait ActionExecutor: Send + Sync {
     async fn start_invocation(
@@ -280,6 +323,7 @@ pub trait ActionExecutor: Send + Sync {
         name: &str,
         params: Value,
         principal: Option<Principal>,
+        scope: ExecScope,
         caller: Option<CallerInfo>,
     ) -> Result<Value>;
     async fn stop_invocation(

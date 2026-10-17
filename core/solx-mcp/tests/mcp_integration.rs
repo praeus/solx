@@ -292,7 +292,7 @@ async fn non_http_transport_runs_with_no_principal() -> anyhow::Result<()> {
         .await?;
     assert_eq!(
         called.structured_content,
-        Some(serde_json::json!({"principal": null, "caller": null, "external": null}))
+        Some(serde_json::json!({"principal": null, "caller": null, "external": null, "scope": "tooling"}))
     );
 
     client.cancel().await?;

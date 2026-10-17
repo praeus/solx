@@ -80,12 +80,12 @@ here, so the boundaries are explicit:
   allowlist entries it needs; install grants exactly those and records them,
   uninstall revokes exactly those (unless another installed package also
   declares them).
-- **Secrets are scoped and masked.** `get-secret`/`set-secret` resolve only
-  against the *calling* action's own `action_config.secrets`. Reads through
-  `ActionManager::get`/`list` redact `action_config.secrets` and `auth`, so
-  keys never cross the HTTP boundary or reach an MCP client — and writes run
-  the inverse merge, so a fetch → edit → save round trip can't silently
-  destroy a key.
+- **Secrets are scoped and kept out of config.** `get-secret`/`set-secret`
+  resolve only against the *calling* action's own `action_config.secrets`
+  names and key. The key lives in its own column, never in `action_config`
+  (whose `secrets` values are all `"***"`), and inline `auth` credentials are
+  refused, so nothing that reads an action can return a secret. Only root
+  can create or change an action that has secrets.
 - **WASM guests are sandboxed by construction.** The `custom-action` world
   imports only action dispatch, artifact reads, and logging.
   No direct database, filesystem, or system access.

@@ -205,6 +205,17 @@ pub struct Action {
     /// only to avoid a DB migration.
     #[serde(default)]
     pub trusted: bool,
+    /// A locked action, and the artifact it was locked against, change only
+    /// through an operator path (the `solx` CLI, a package install, the root
+    /// token over REST, the desktop app's Settings window). Content (an MCP
+    /// client, a WASM guest, a script, a widget) can run it but not change,
+    /// delete, lock or unlock it.
+    #[serde(default)]
+    pub locked: bool,
+    /// The artifact a locked Script/WASM action was locked against, checked
+    /// before every run. Set by the host; never taken from input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_pin: Option<ArtifactPin>,
     #[serde(default = "default_now")]
     pub created_at: DateTime<Utc>,
     #[serde(default = "default_now")]
@@ -243,6 +254,21 @@ pub struct ActionInput {
     /// unchanged" on update / defaults to `false` on create.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trusted: Option<bool>,
+    /// See [`Action::locked`]. `None` means "leave unchanged" on update /
+    /// `false` on create. Honored only on operator paths; content that sets
+    /// it at all is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locked: Option<bool>,
+}
+
+/// Where a locked action's artifact lives in the file store, and the SHA-256
+/// of the bytes it was locked against.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactPin {
+    pub rel_path: String,
+    /// Lowercase hex.
+    pub sha256: String,
 }
 
 /// Result of executing an action.

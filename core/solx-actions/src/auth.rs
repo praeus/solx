@@ -10,9 +10,22 @@
 //!   the `code` → `access_token` exchange (see `dispatch_webhook`).
 //!
 //! Access tokens are cached in-memory per action name and refreshed
-//! within 60 seconds of expiry. Long-lived secrets (`client_secret`,
-//! `refresh_token`, `private_key`) can be sourced from the OS credential
-//! manager by giving a keyring reference in `action_config.auth`:
+//! within 60 seconds of expiry.
+//!
+//! Credentials ([`CREDENTIAL_FIELDS`]) are never inline in the config —
+//! `crate::secret_config` refuses them on save. Each comes from either a
+//! pointer into the scoped secret store (`client_secret_secret`, etc — see
+//! `secrets.rs`), decrypted with the action's own key and allowed only for
+//! a name listed in its `action_config.secrets`:
+//!
+//! ```json
+//! { "action_config": {
+//!     "secrets": { "GOOGLE_OAUTH_CLIENT_SECRET": "***" },
+//!     "auth": { "type": "oauth_refresh", "client_secret_secret": "GOOGLE_OAUTH_CLIENT_SECRET", ... }
+//! } }
+//! ```
+//!
+//! or a reference to an entry in the OS credential manager:
 //!
 //! ```json
 //! { "type": "oauth_service_account",
@@ -23,23 +36,10 @@
 //!
 //! When the provider returns a new `refresh_token` during an
 //! `oauth_refresh` exchange, the resolver persists it back to wherever
-//! it was originally sourced from (inline field, keyring reference, or
-//! scoped secret store) so rotation is not lost. Set
+//! it was originally sourced from (scoped secret store or keyring
+//! reference) so rotation is not lost. Set
 //! `action_config.auth.persist_rotated_refresh` to `false` to disable
 //! this and let callers handle rotation themselves (default: `true`).
-//!
-//! Long-lived secrets (`client_secret`, `refresh_token`, `private_key`)
-//! additionally accept either a keyring reference (object) or a pointer
-//! into the scoped secret store (`client_secret_secret`, etc — see
-//! `secrets.rs`). The secret's decryption key must be declared in this
-//! action's own `action_config.secrets` map:
-//!
-//! ```json
-//! { "action_config": {
-//!     "secrets": { "GOOGLE_OAUTH_CLIENT_SECRET": "<32-byte-b64-key>" },
-//!     "auth": { "type": "oauth_refresh", "client_secret_secret": "GOOGLE_OAUTH_CLIENT_SECRET", ... }
-//! } }
-//! ```
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -50,8 +50,18 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use solx_surface::entities::ActionInput;
-use solx_surface::managers::ActionManager;
+use solx_surface::ActionSecrets;
+
+/// The `auth` fields that hold credentials. Each is resolved through
+/// [`secret_field`] and has a `<field>_secret` pointer form; an inline
+/// string at any of them is refused on save (see `crate::secret_config`).
+pub(crate) const CREDENTIAL_FIELDS: &[&str] = &[
+    "token",
+    "client_id",
+    "client_secret",
+    "refresh_token",
+    "private_key",
+];
 
 // ── Cache ────────────────────────────────────────────────────────────────────
 
@@ -118,10 +128,7 @@ fn http_client() -> &'static reqwest::Client {
 // ── Public entry point ───────────────────────────────────────────────────────
 
 /// Outcome of `oauth_refresh`: the new access token plus any rotated
-/// refresh token the provider returned. The dispatcher (which has
-/// access to `&dyn DbManager`) is responsible for actually persisting
-/// the rotated refresh token; the resolver gathers the data and
-/// returns it.
+/// refresh token the provider returned.
 #[derive(Debug, Default)]
 struct RefreshOutcome {
     access_token: String,
@@ -143,18 +150,18 @@ struct RefreshOutcome {
 ///   dispatcher handles itself).
 ///
 /// On `oauth_refresh` success the function **also** persists any
-/// rotated `refresh_token` returned by the provider back to the
-/// action's `action_config.auth.refresh_token` (or its keyring
-/// account), so the next call sees the new token. Persistence is
-/// best-effort: any db error is logged at `warn` and does **not**
-/// fail the auth resolution — the rotated token is also returned via
-/// the `RotatedRefreshToken` field on [`RefreshOutcome`] for callers
-/// that want to do their own persistence.
+/// rotated `refresh_token` returned by the provider back to its scoped
+/// secret (or its keyring account), so the next call sees the new token.
+/// Persistence is best-effort: any error is logged at `warn` and does
+/// **not** fail the auth resolution.
+///
+/// `secrets` are the executing action's own, for `<field>_secret`
+/// pointers.
 pub async fn resolve_auth(
-    actions: &dyn ActionManager,
     path: &str,
     name: &str,
     action_config: &Value,
+    secrets: &ActionSecrets,
 ) -> Result<Option<String>, String> {
     let key = cache_key(path, name);
     let Some(auth) = action_config.get("auth") else {
@@ -173,18 +180,18 @@ pub async fn resolve_auth(
     match auth_type {
         "bearer" => {
             // Resolve through the standard secret pipeline so the
-            // bearer token can come from inline / keyring / scoped
+            // bearer token can come from a keyring reference or the scoped
             // secret store, matching the OAuth types. The token-ttl
             // `ttl_secs` field is inline-only — the per-action TTL
             // doesn't have a keyring/secret shape.
             let token =
-                secret_field(action_config, auth, "token", Some("token_secret"), "bearer").await?;
+                secret_field(secrets, auth, "token", Some("token_secret"), "bearer").await?;
             let ttl = auth.get("ttl_secs").and_then(Value::as_u64).unwrap_or(3600);
             cache_put(&key, token.clone(), ttl);
             Ok(Some(format!("Bearer {token}")))
         }
         "oauth_refresh" => {
-            let outcome = exchange_refresh_token(actions, path, name, action_config, auth).await?;
+            let outcome = exchange_refresh_token(name, secrets, auth).await?;
             // Touch the rotated_refresh_token field so the compiler
             // doesn't flag it as unused — the persistence side-effect
             // inside `exchange_refresh_token` already wrote the new
@@ -197,7 +204,7 @@ pub async fn resolve_auth(
             Ok(Some(format!("Bearer {}", outcome.access_token)))
         }
         "oauth_service_account" => {
-            let token = exchange_service_account_token(action_config, auth).await?;
+            let token = exchange_service_account_token(secrets, auth).await?;
             let ttl = auth.get("ttl_secs").and_then(Value::as_u64).unwrap_or(3600);
             cache_put(&key, token.clone(), ttl);
             Ok(Some(format!("Bearer {token}")))
@@ -226,8 +233,8 @@ pub async fn resolve_auth(
 /// out of `&Value` makes serde's lifetime checker unhappy — pulling them
 /// into owned `String`s is simpler and the values are tiny.
 ///
-/// `client_id`, `client_secret`, and `refresh_token` can each be inline,
-/// a keyring reference, or a pointer into the scoped secret store
+/// `client_id`, `client_secret`, and `refresh_token` can each be a keyring
+/// reference or a pointer into the scoped secret store
 /// (`client_id_secret`, `client_secret_secret`, `refresh_token_secret` —
 /// see [`secret_field`]).  `token_uri` and `scope` remain in
 /// `action_config.auth` since they are not secrets.
@@ -240,10 +247,10 @@ struct RefreshRequest {
 }
 
 impl RefreshRequest {
-    async fn from_value(action_config: &Value, auth: &Value) -> Result<Self, String> {
+    async fn from_value(secrets: &ActionSecrets, auth: &Value) -> Result<Self, String> {
         Ok(Self {
             client_id: secret_field(
-                action_config,
+                secrets,
                 auth,
                 "client_id",
                 Some("client_id_secret"),
@@ -251,7 +258,7 @@ impl RefreshRequest {
             )
             .await?,
             client_secret: secret_field(
-                action_config,
+                secrets,
                 auth,
                 "client_secret",
                 Some("client_secret_secret"),
@@ -259,7 +266,7 @@ impl RefreshRequest {
             )
             .await?,
             refresh_token: secret_field(
-                action_config,
+                secrets,
                 auth,
                 "refresh_token",
                 Some("refresh_token_secret"),
@@ -271,27 +278,36 @@ impl RefreshRequest {
     }
 }
 
-/// Resolve one OAuth secret field with the three-source precedence:
+/// Resolve one credential field, in order:
 ///
-/// 1. Inline `auth.<field>` value (string **or** keyring-ref object).
+/// 1. `auth.<field>` as a keyring-ref object.
 /// 2. `auth.<field>_secret` — name of a secret in the scoped secret
-///    store; the decryption key must be declared in this action's own
-///    `action_config.secrets` map.
-/// 3. `Err` — none of the above were present.
+///    store, decrypted with the action's key; the name must be listed in
+///    the action's `action_config.secrets`.
+/// 3. `Err` — neither was present.
+///
+/// An inline string at `auth.<field>` is an error rather than a value:
+/// save refuses them, so one here predates that check and is not used.
 ///
 /// `secret_field_name` selects which `<field>_secret` field to look at;
 /// pass `None` to opt out of the secret-store indirection entirely.
 pub(crate) async fn secret_field(
-    action_config: &Value,
+    secrets: &ActionSecrets,
     auth: &Value,
     field: &str,
     secret_field_name: Option<&str>,
     auth_type_label: &str,
 ) -> Result<String, String> {
-    // 1. Inline (string or keyring ref).
+    // 1. Keyring reference.
     if let Some(v) = auth.get(field) {
         match v {
-            Value::String(s) if !s.is_empty() => return Ok(s.clone()),
+            Value::String(s) if !s.is_empty() => {
+                return Err(format!(
+                    "auth.type='{auth_type_label}': field '{field}' is an inline credential, \
+                     which is not used; re-save the action with a keyring reference or a \
+                     '{field}_secret' pointer"
+                ));
+            }
             Value::Object(_) => {
                 return crate::secrets::resolve_in_field(
                     &format!("auth.type='{auth_type_label}'"),
@@ -314,16 +330,13 @@ pub(crate) async fn secret_field(
     // 2. Scoped secret-store indirection.
     if let Some(name) = secret_field_name.and_then(|f| auth.get(f).and_then(Value::as_str)) {
         if !name.is_empty() {
-            let key = action_config
-                .get("secrets")
-                .and_then(|s| s.get(name))
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    format!(
-                        "auth.type='{auth_type_label}': field '{field}' points to secret \
-                         '{name}' but action_config.secrets has no key configured for it"
-                    )
-                })?;
+            let key = secrets.key_for(name).ok_or_else(|| {
+                format!(
+                    "auth.type='{auth_type_label}': field '{field}' points to secret \
+                     '{name}' but the action has no key for it (the name must be listed \
+                     in action_config.secrets)"
+                )
+            })?;
             let value = crate::secrets::get_secret(name, key).await.map_err(|e| {
                 format!("auth.type='{auth_type_label}': failed to read secret '{name}': {e}")
             })?;
@@ -338,7 +351,7 @@ pub(crate) async fn secret_field(
     };
     Err(format!(
         "auth.type='{auth_type_label}' requires field '{field}' \
-         (inline string, keyring reference{comma}{secret_hint})",
+         (keyring reference{comma}{secret_hint})",
         comma = if secret_hint.is_empty() { "" } else { ", " }
     ))
 }
@@ -346,11 +359,11 @@ pub(crate) async fn secret_field(
 /// Like [`secret_field`], but returns `Ok(None)` instead of `Err` when
 /// *nothing at all* is configured for `field` — some OAuth flows
 /// legitimately have no value here (e.g. a public/PKCE client has no
-/// `client_secret`). If something *is* configured (inline, keyring
-/// reference, or a `_secret` pointer) but fails to resolve, that's still a
-/// hard error — a configured-but-broken secret should never fail silently.
+/// `client_secret`). If something *is* configured (keyring reference or a
+/// `_secret` pointer) but fails to resolve, that's still a hard error — a
+/// configured-but-broken secret should never fail silently.
 pub(crate) async fn optional_secret_field(
-    action_config: &Value,
+    secrets: &ActionSecrets,
     auth: &Value,
     field: &str,
     secret_field_name: Option<&str>,
@@ -364,15 +377,9 @@ pub(crate) async fn optional_secret_field(
     if !inline_present && !pointer_present {
         return Ok(None);
     }
-    secret_field(
-        action_config,
-        auth,
-        field,
-        secret_field_name,
-        auth_type_label,
-    )
-    .await
-    .map(Some)
+    secret_field(secrets, auth, field, secret_field_name, auth_type_label)
+        .await
+        .map(Some)
 }
 
 /// Variant of [`secret_field`] for non-secret fields. Inline string only.
@@ -407,30 +414,24 @@ struct RefreshResponse {
 /// expectations.
 #[derive(Debug, Clone)]
 enum RefreshStorage {
-    /// The action has `"refresh_token": "..."` inline — patch
-    /// `action_config.auth.refresh_token` in-place.
-    Inline,
     /// The action has `"refresh_token": { "keyring_service": …, "keyring_account": … }`
     /// — write the new value through the keyring.
     Keyring { service: String, account: String },
     /// The action has `"refresh_token_secret": "<name>"` — write the new
-    /// value through the scoped secret store, using the key already
-    /// configured for that name in `action_config.secrets`.
+    /// value through the scoped secret store, using the action's key.
     Secret { name: String, key: String },
 }
 
 impl RefreshStorage {
-    fn from_auth(action_config: &Value, auth: &Value) -> Self {
+    /// `None` when there is nowhere to persist to — which can't happen for
+    /// a refresh token that just resolved, since it came from one of these.
+    fn from_auth(secrets: &ActionSecrets, auth: &Value) -> Option<Self> {
         if let Some(name) = auth.get("refresh_token_secret").and_then(Value::as_str) {
-            if let Some(key) = action_config
-                .get("secrets")
-                .and_then(|s| s.get(name))
-                .and_then(Value::as_str)
-            {
-                return RefreshStorage::Secret {
+            if let Some(key) = secrets.key_for(name) {
+                return Some(RefreshStorage::Secret {
                     name: name.to_string(),
                     key: key.to_string(),
-                };
+                });
             }
         }
         if let Some(obj) = auth.get("refresh_token").and_then(Value::as_object) {
@@ -438,24 +439,22 @@ impl RefreshStorage {
                 obj.get("keyring_service").and_then(Value::as_str),
                 obj.get("keyring_account").and_then(Value::as_str),
             ) {
-                return RefreshStorage::Keyring {
+                return Some(RefreshStorage::Keyring {
                     service: service.to_string(),
                     account: account.to_string(),
-                };
+                });
             }
         }
-        RefreshStorage::Inline
+        None
     }
 }
 
 async fn exchange_refresh_token(
-    actions: &dyn ActionManager,
-    path: &str,
     name: &str,
-    action_config: &Value,
+    secrets: &ActionSecrets,
     auth: &Value,
 ) -> Result<RefreshOutcome, String> {
-    let req = RefreshRequest::from_value(action_config, auth).await?;
+    let req = RefreshRequest::from_value(secrets, auth).await?;
 
     let body = json!({
         "grant_type": "refresh_token",
@@ -495,15 +494,14 @@ async fn exchange_refresh_token(
         .and_then(Value::as_bool)
         .unwrap_or(true);
 
-    if let (Some(ref new_rt), true) = (rotated.as_ref(), persistence_enabled) {
-        persist_rotated_refresh_token(actions, path, name, action_config, auth, new_rt).await;
-    } else if let Some(ref new_rt) = rotated {
+    if let (Some(new_rt), true) = (rotated.as_ref(), persistence_enabled) {
+        persist_rotated_refresh_token(name, secrets, auth, new_rt).await;
+    } else if rotated.is_some() {
         tracing::info!(
             "received rotated refresh_token for action '{name}' but \
              persistence is disabled (auth.persist_rotated_refresh=false); \
              new token is NOT persisted"
         );
-        let _ = new_rt;
     }
 
     Ok(RefreshOutcome {
@@ -518,54 +516,19 @@ async fn exchange_refresh_token(
 /// has already been issued, so the most we can do is tell the user
 /// "the next refresh may fail; rotate manually".
 async fn persist_rotated_refresh_token(
-    actions: &dyn ActionManager,
-    path: &str,
     name: &str,
-    action_config: &Value,
+    secrets: &ActionSecrets,
     auth: &Value,
     new_refresh_token: &str,
 ) {
-    let storage = RefreshStorage::from_auth(action_config, auth);
-    match storage {
-        RefreshStorage::Inline => {
-            // Patch the action's action_config.auth.refresh_token in place.
-            // We merge with the existing field set so other auth.* fields
-            // (client_id, scope, etc.) survive.
-            //
-            // Build on the `action_config` we were handed — which `exec_as`
-            // read unmasked — rather than re-reading through
-            // `ActionManager::get`, whose result is redacted. `save` would
-            // restore the sentinels either way (see `crate::mask`), but a
-            // security-sensitive write shouldn't depend on that.
-            let mut new_cfg = action_config.clone();
-            if !new_cfg.is_object() {
-                tracing::warn!(
-                    "action '{name}' action_config is not an object; \
-                     cannot persist rotated refresh_token"
-                );
-                return;
-            }
-            if new_cfg.get_mut("auth").is_none() {
-                new_cfg
-                    .as_object_mut()
-                    .unwrap()
-                    .insert("auth".into(), serde_json::json!({}));
-            }
-            if let Some(auth_obj) = new_cfg.get_mut("auth").and_then(|v| v.as_object_mut()) {
-                auth_obj.insert(
-                    "refresh_token".into(),
-                    serde_json::Value::String(new_refresh_token.to_string()),
-                );
-            }
-            let input = ActionInput {
-                action_config: Some(new_cfg),
-                ..Default::default()
-            };
-            if let Err(e) = actions.save(path, name, input).await {
-                tracing::warn!("failed to persist rotated refresh_token for action '{name}': {e}");
-            }
+    match RefreshStorage::from_auth(secrets, auth) {
+        None => {
+            tracing::warn!(
+                "action '{name}' has nowhere to persist a rotated refresh_token; \
+                 the next refresh may fail"
+            );
         }
-        RefreshStorage::Keyring { service, account } => {
+        Some(RefreshStorage::Keyring { service, account }) => {
             let entry = match keyring::Entry::new(&service, &account) {
                 Ok(e) => e,
                 Err(e) => {
@@ -583,10 +546,10 @@ async fn persist_rotated_refresh_token(
                 );
             }
         }
-        RefreshStorage::Secret {
+        Some(RefreshStorage::Secret {
             name: secret_name,
             key,
-        } => {
+        }) => {
             if let Err(e) = crate::secrets::set_secret(&secret_name, new_refresh_token, &key).await
             {
                 tracing::warn!(
@@ -603,9 +566,8 @@ async fn persist_rotated_refresh_token(
 /// Owned form of the inputs for an RFC 7521 §5.1 service-account JWT-bearer
 /// grant. See [`RefreshRequest`] for why we avoid `Deserialize` here.
 ///
-/// `private_key` is sourced through [`secret_field`] (inline string,
-/// keyring reference, or scoped secret-store pointer). For RSA PEMs the
-/// keyring or secret-store shape is strongly preferred over inline.
+/// `private_key` is sourced through [`secret_field`] (keyring reference or
+/// scoped secret-store pointer).
 #[derive(Debug)]
 struct ServiceAccountRequest {
     client_email: String,
@@ -614,11 +576,11 @@ struct ServiceAccountRequest {
 }
 
 impl ServiceAccountRequest {
-    async fn from_value(action_config: &Value, auth: &Value) -> Result<Self, String> {
+    async fn from_value(secrets: &ActionSecrets, auth: &Value) -> Result<Self, String> {
         Ok(Self {
             client_email: require_inline_string(auth, "client_email", "oauth_service_account")?,
             private_key: secret_field(
-                action_config,
+                secrets,
                 auth,
                 "private_key",
                 Some("private_key_secret"),
@@ -631,10 +593,10 @@ impl ServiceAccountRequest {
 }
 
 async fn exchange_service_account_token(
-    action_config: &Value,
+    secrets: &ActionSecrets,
     auth: &Value,
 ) -> Result<String, String> {
-    let req = ServiceAccountRequest::from_value(action_config, auth).await?;
+    let req = ServiceAccountRequest::from_value(secrets, auth).await?;
 
     let now = chrono::Utc::now().timestamp();
     let exp = now + 3600; // 1h
@@ -703,116 +665,84 @@ fn urlencoding(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use solx_surface::entities::{Action, ActionExecResult};
-    use solx_surface::query::{ActionSearchQuery, ListOptions, Page};
+    use serial_test::serial;
 
     fn clear() {
         cache().lock().unwrap().clear();
     }
 
-    /// Stub ActionManager. None of the bearer/auth-block tests reach the
-    /// `actions` parameter — they only exercise the inline/keyring/cache
-    /// paths. If a test ever does reach it, the panic tells us the test
-    /// needs a real mock.
-    struct StubActionManager;
-
-    #[async_trait]
-    impl ActionManager for StubActionManager {
-        async fn save(
-            &self,
-            _path: &str,
-            _name: &str,
-            _input: ActionInput,
-        ) -> solx_surface::error::Result<Action> {
-            panic!("stub ActionManager::save should not be called by these tests")
-        }
-        async fn get(&self, _path: &str, _name: &str) -> solx_surface::error::Result<Action> {
-            panic!("stub ActionManager::get should not be called by these tests")
-        }
-        async fn delete(&self, _path: &str, _name: &str) -> solx_surface::error::Result<()> {
-            panic!("stub ActionManager::delete should not be called by these tests")
-        }
-        async fn list(&self, _opts: ListOptions) -> solx_surface::error::Result<Page<Action>> {
-            panic!("stub ActionManager::list should not be called by these tests")
-        }
-        async fn paths(
-            &self,
-            _opts: ListOptions,
-        ) -> solx_surface::error::Result<Page<solx_surface::query::PathFacet>> {
-            panic!("stub ActionManager::paths should not be called by these tests")
-        }
-        async fn search(
-            &self,
-            _query: ActionSearchQuery,
-        ) -> solx_surface::error::Result<Page<Action>> {
-            panic!("stub ActionManager::search should not be called by these tests")
-        }
-        async fn exec(
-            &self,
-            _path: &str,
-            _name: &str,
-            _params: Value,
-        ) -> solx_surface::error::Result<ActionExecResult> {
-            panic!("stub ActionManager::exec should not be called by these tests")
-        }
-        async fn exec_for(
-            &self,
-            _principal: &solx_surface::Principal,
-            _path: &str,
-            _name: &str,
-            _params: Value,
-        ) -> solx_surface::error::Result<ActionExecResult> {
-            panic!("stub ActionManager::exec_for should not be called by these tests")
-        }
+    fn no_secrets() -> ActionSecrets {
+        ActionSecrets::default()
     }
 
-    fn stub_actions() -> StubActionManager {
-        StubActionManager
+    /// A keyring reference that [`install_echo_loader`] resolves to `value`.
+    fn kr(value: &str) -> Value {
+        json!({ "keyring_service": "test", "keyring_account": value })
     }
 
-    #[serial_test::serial]
+    /// Resolves every keyring reference to its account name, so a test can
+    /// say which credential it means without a real credential manager.
+    /// Cleared when the returned guard drops, even on a failed assertion.
+    fn install_echo_loader() -> impl Drop {
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                crate::secrets::set_secret_loader_for_tests(None);
+            }
+        }
+        crate::secrets::set_secret_loader_for_tests(Some(|r| Ok(r.keyring_account.clone())));
+        Guard
+    }
+
+    async fn resolve(path: &str, name: &str, cfg: &Value) -> Result<Option<String>, String> {
+        resolve_auth(path, name, cfg, &no_secrets()).await
+    }
+
+    #[serial(auth_cache, secrets_loader)]
     #[tokio::test]
     async fn no_auth_block_returns_none() {
         clear();
-        let cfg = json!({});
-        let out = resolve_auth(&stub_actions(), "/test", "a", &cfg)
-            .await
-            .unwrap();
-        assert!(out.is_none());
+        assert!(resolve("/test", "a", &json!({})).await.unwrap().is_none());
     }
 
-    #[serial_test::serial]
+    #[serial(auth_cache, secrets_loader)]
     #[tokio::test]
-    async fn bearer_returns_static_token() {
+    async fn bearer_resolves_keyring_token() {
         clear();
-        let cfg = json!({ "auth": { "type": "bearer", "token": "abc123" } });
-        let out = resolve_auth(&stub_actions(), "/test", "a", &cfg)
-            .await
-            .unwrap()
-            .unwrap();
+        let _g = install_echo_loader();
+        let cfg = json!({ "auth": { "type": "bearer", "token": kr("abc123") } });
+        let out = resolve("/test", "a", &cfg).await.unwrap().unwrap();
         assert_eq!(out, "Bearer abc123");
     }
 
-    #[serial_test::serial]
+    #[serial(auth_cache, secrets_loader)]
     #[tokio::test]
     async fn bearer_missing_token_errors() {
         clear();
         let cfg = json!({ "auth": { "type": "bearer" } });
-        let err = resolve_auth(&stub_actions(), "/test", "bearer_missing_action", &cfg)
+        let err = resolve("/test", "bearer_missing_action", &cfg)
             .await
             .unwrap_err();
         assert!(err.contains("requires field 'token'"), "{err}");
     }
 
-    #[serial_test::serial]
+    /// Save refuses inline credentials; one that predates that check is an
+    /// error at call time, never sent.
+    #[serial(auth_cache, secrets_loader)]
+    #[tokio::test]
+    async fn inline_bearer_token_is_not_used() {
+        clear();
+        let cfg = json!({ "auth": { "type": "bearer", "token": "inline-value" } });
+        let err = resolve("/test", "inline_action", &cfg).await.unwrap_err();
+        assert!(err.contains("inline credential"), "{err}");
+    }
+
+    #[serial(auth_cache, secrets_loader)]
     #[tokio::test]
     async fn unknown_auth_type_errors_helpfully() {
         clear();
         let cfg = json!({ "auth": { "type": "magic_link" } });
-        let err = resolve_auth(&stub_actions(), "/test", "a", &cfg)
-            .await
-            .unwrap_err();
+        let err = resolve("/test", "a", &cfg).await.unwrap_err();
         assert!(
             err.contains("unsupported action_config.auth.type 'magic_link'"),
             "{err}"
@@ -823,58 +753,47 @@ mod tests {
         );
     }
 
-    #[serial_test::serial]
+    #[serial(auth_cache, secrets_loader)]
     #[tokio::test]
     async fn auth_block_missing_type_errors() {
         clear();
-        let cfg = json!({ "auth": { "token": "x" } });
-        let err = resolve_auth(&stub_actions(), "/test", "a", &cfg)
-            .await
-            .unwrap_err();
+        let cfg = json!({ "auth": { "token": kr("x") } });
+        let err = resolve("/test", "a", &cfg).await.unwrap_err();
         assert!(err.contains("missing required field 'type'"), "{err}");
     }
 
-    #[serial_test::serial]
+    #[serial(auth_cache, secrets_loader)]
     #[tokio::test]
     async fn cache_hit_avoids_second_call() {
         clear();
-        let cfg = json!({ "auth": { "type": "bearer", "token": "abc123", "ttl_secs": 60 } });
-        let _ = resolve_auth(&stub_actions(), "/test", "a", &cfg)
-            .await
-            .unwrap();
+        let _g = install_echo_loader();
+        let cfg = json!({ "auth": { "type": "bearer", "token": kr("abc123"), "ttl_secs": 60 } });
+        resolve("/test", "a", &cfg).await.unwrap();
         // Second call should hit the cache and still return the same token
         // even if we mutate the config to make the bearer path fail.
         let mutated = json!({ "auth": { "type": "bearer" /* no token */ } });
-        let out = resolve_auth(&stub_actions(), "/test", "a", &mutated)
-            .await
-            .unwrap()
-            .unwrap();
+        let out = resolve("/test", "a", &mutated).await.unwrap().unwrap();
         assert_eq!(out, "Bearer abc123");
     }
 
-    #[serial_test::serial]
+    #[serial(auth_cache, secrets_loader)]
     #[tokio::test]
     async fn cache_keyed_per_action() {
         clear();
-        let cfg_a = json!({ "auth": { "type": "bearer", "token": "for-a", "ttl_secs": 60 } });
-        let cfg_b = json!({ "auth": { "type": "bearer", "token": "for-b", "ttl_secs": 60 } });
+        let _g = install_echo_loader();
+        let cfg_a = json!({ "auth": { "type": "bearer", "token": kr("for-a"), "ttl_secs": 60 } });
+        let cfg_b = json!({ "auth": { "type": "bearer", "token": kr("for-b"), "ttl_secs": 60 } });
         assert_eq!(
-            resolve_auth(&stub_actions(), "/test", "a", &cfg_a)
-                .await
-                .unwrap()
-                .unwrap(),
+            resolve("/test", "a", &cfg_a).await.unwrap().unwrap(),
             "Bearer for-a"
         );
         assert_eq!(
-            resolve_auth(&stub_actions(), "/test", "b", &cfg_b)
-                .await
-                .unwrap()
-                .unwrap(),
+            resolve("/test", "b", &cfg_b).await.unwrap().unwrap(),
             "Bearer for-b"
         );
     }
 
-    #[serial_test::serial]
+    #[serial(auth_cache, secrets_loader)]
     #[tokio::test]
     async fn cache_does_not_collide_across_paths_with_same_name() {
         // solx identity is (path, name), not name alone — two actions with
@@ -882,19 +801,20 @@ mod tests {
         // "staging" copy of the same integration, both named "webhook")
         // must not share a cached bearer token.
         clear();
+        let _g = install_echo_loader();
         let cfg_prod =
-            json!({ "auth": { "type": "bearer", "token": "prod-token", "ttl_secs": 60 } });
+            json!({ "auth": { "type": "bearer", "token": kr("prod-token"), "ttl_secs": 60 } });
         let cfg_staging =
-            json!({ "auth": { "type": "bearer", "token": "staging-token", "ttl_secs": 60 } });
+            json!({ "auth": { "type": "bearer", "token": kr("staging-token"), "ttl_secs": 60 } });
         assert_eq!(
-            resolve_auth(&stub_actions(), "/prod", "webhook", &cfg_prod)
+            resolve("/prod", "webhook", &cfg_prod)
                 .await
                 .unwrap()
                 .unwrap(),
             "Bearer prod-token"
         );
         assert_eq!(
-            resolve_auth(&stub_actions(), "/staging", "webhook", &cfg_staging)
+            resolve("/staging", "webhook", &cfg_staging)
                 .await
                 .unwrap()
                 .unwrap(),
@@ -903,7 +823,7 @@ mod tests {
         // Re-resolving prod (config unchanged) must still hit its own cache
         // entry, not staging's.
         assert_eq!(
-            resolve_auth(&stub_actions(), "/prod", "webhook", &cfg_prod)
+            resolve("/prod", "webhook", &cfg_prod)
                 .await
                 .unwrap()
                 .unwrap(),
@@ -911,45 +831,38 @@ mod tests {
         );
     }
 
-    #[serial_test::serial]
+    #[serial(auth_cache, secrets_loader)]
     #[tokio::test]
     async fn clear_auth_cache_forces_refresh() {
         clear();
-        let cfg = json!({ "auth": { "type": "bearer", "token": "first" } });
+        let _g = install_echo_loader();
+        let cfg = json!({ "auth": { "type": "bearer", "token": kr("first") } });
         assert_eq!(
-            resolve_auth(&stub_actions(), "/test", "a", &cfg)
-                .await
-                .unwrap()
-                .unwrap(),
+            resolve("/test", "a", &cfg).await.unwrap().unwrap(),
             "Bearer first"
         );
 
         // Mutate config (e.g. user rotated the bearer); clear cache; verify
         // the new token is returned.
-        let cfg2 = json!({ "auth": { "type": "bearer", "token": "second" } });
+        let cfg2 = json!({ "auth": { "type": "bearer", "token": kr("second") } });
         clear_auth_cache("/test", "a");
         assert_eq!(
-            resolve_auth(&stub_actions(), "/test", "a", &cfg2)
-                .await
-                .unwrap()
-                .unwrap(),
+            resolve("/test", "a", &cfg2).await.unwrap().unwrap(),
             "Bearer second"
         );
     }
 
-    #[serial_test::serial]
     #[test]
     fn urlencoding_leaves_safe_chars_alone() {
         assert_eq!(urlencoding("abc.123-XYZ_ok~bar"), "abc.123-XYZ_ok~bar");
     }
 
-    #[serial_test::serial]
     #[test]
     fn urlencoding_escapes_unsafe_chars() {
         assert_eq!(urlencoding("a+b=c&d e"), "a%2Bb%3Dc%26d%20e");
     }
 
-    #[serial_test::serial]
+    #[serial(auth_cache, secrets_loader)]
     #[tokio::test]
     async fn oauth_authorization_code_returns_none_no_bearer() {
         clear();
@@ -960,20 +873,18 @@ mod tests {
         let cfg = json!({
             "auth": {
                 "type": "oauth_authorization_code",
-                "client_id": "cid",
-                "client_secret": "csec"
+                "client_id_secret": "CID",
+                "client_secret_secret": "CSEC"
             }
         });
-        let out = resolve_auth(&stub_actions(), "/test", "a", &cfg)
-            .await
-            .unwrap();
+        let out = resolve("/test", "a", &cfg).await.unwrap();
         assert!(
             out.is_none(),
             "oauth_authorization_code must not inject a Bearer header; got {out:?}"
         );
     }
 
-    #[serial_test::serial]
+    #[serial(auth_cache, secrets_loader)]
     #[tokio::test]
     async fn oauth_authorization_code_does_not_cache() {
         clear();
@@ -984,79 +895,55 @@ mod tests {
         let cfg = json!({
             "auth": {
                 "type": "oauth_authorization_code",
-                "client_id": "cid"
+                "client_id_secret": "CID"
             }
         });
-        let _ = resolve_auth(&stub_actions(), "/test", "a", &cfg)
-            .await
-            .unwrap();
-        // Cache should remain empty.
+        resolve("/test", "a", &cfg).await.unwrap();
         assert!(
             cache_get(&cache_key("/test", "a")).is_none(),
             "oauth_authorization_code must not write to the auth cache"
         );
     }
 
-    // ── keyring / resolution-shape tests ────────────────────────────────
+    // ── scoped secret-store pointers ─────────────────────────────────────
 
-    #[serial_test::serial]
+    #[serial(auth_cache, secrets_backend)]
     #[tokio::test]
-    async fn keyring_shape_resolves_via_test_loader() {
-        // Make sure the test seam is installed *before* the call so the
-        // call never reaches the real keyring crate (which would fail
-        // inside the CI sandbox without an OS credential manager).
-        // Always clear at the end via a guard so a panic in the test
-        // doesn't leave the loader set for subsequent tests.
-        struct Guard;
-        impl Drop for Guard {
-            fn drop(&mut self) {
-                crate::secrets::set_secret_loader_for_tests(None);
-            }
-        }
-        let _g = Guard;
-        crate::secrets::set_secret_loader_for_tests(Some(|_| Ok("from-keyring".into())));
-        let cfg = json!({
-            "auth": {
-                "type": "bearer",
-                "token": { "keyring_service": "sol", "keyring_account": "bearer-x" }
-            }
-        });
-        let out = resolve_auth(&stub_actions(), "/test", "keyring_action", &cfg)
+    async fn bearer_resolves_secret_pointer_with_the_actions_key() {
+        clear();
+        crate::secrets::set_secret_backend_for_tests(Some(
+            crate::test_support::fake_secret_backend(),
+        ));
+        let key = crate::test_support::TEST_KEY;
+        crate::secrets::set_secret("BEARER", "from-store", key)
             .await
-            .unwrap()
             .unwrap();
-        assert_eq!(out, "Bearer from-keyring");
+        let cfg = json!({
+            "secrets": { "BEARER": "***" },
+            "auth": { "type": "bearer", "token_secret": "BEARER" }
+        });
+        let secrets = ActionSecrets::new(Some(&cfg), Some(key.to_string()));
+        let out = resolve_auth("/test", "pointer", &cfg, &secrets).await;
+        crate::secrets::set_secret_backend_for_tests(None);
+        assert_eq!(out.unwrap().unwrap(), "Bearer from-store");
     }
 
-    #[serial_test::serial]
+    /// The key alone isn't enough: the name has to be in the action's
+    /// `secrets` allowlist.
+    #[serial(auth_cache, secrets_backend)]
     #[tokio::test]
-    async fn inline_string_wins_over_test_loader_for_bearer() {
-        // Inline string is the highest-precedence source — the keyring
-        // loader must not run when the inline path can satisfy the
-        // request. Verify by installing a loader that would panic if
-        // invoked. Use a unique action name so we don't hit the in-memory
-        // auth cache from a previous test. The Drop guard clears the
-        // loader even on assertion failure.
+    async fn secret_pointer_outside_the_allowlist_is_refused() {
         clear();
-        struct Guard;
-        impl Drop for Guard {
-            fn drop(&mut self) {
-                crate::secrets::set_secret_loader_for_tests(None);
-            }
-        }
-        let _g = Guard;
-        crate::secrets::set_secret_loader_for_tests(Some(|_| panic!("loader should not run")));
         let cfg = json!({
-            "auth": {
-                "type": "bearer",
-                "token": "inline-value"
-            }
+            "secrets": { "OTHER": "***" },
+            "auth": { "type": "bearer", "token_secret": "BEARER" }
         });
-        let out = resolve_auth(&stub_actions(), "/test", "inline_wins_action", &cfg)
+        let secrets =
+            ActionSecrets::new(Some(&cfg), Some(crate::test_support::TEST_KEY.to_string()));
+        let err = resolve_auth("/test", "outside", &cfg, &secrets)
             .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(out, "Bearer inline-value");
+            .unwrap_err();
+        assert!(err.contains("has no key for it"), "{err}");
     }
 
     // ── optional_secret_field (oauth_authorization_code client_secret) ─────
@@ -1065,12 +952,10 @@ mod tests {
     async fn optional_secret_field_returns_none_when_nothing_configured() {
         // A public/PKCE OAuth client legitimately has no client_secret —
         // this must not be an error.
-        let cfg = json!({});
-        let auth = json!({});
         assert_eq!(
             optional_secret_field(
-                &cfg,
-                &auth,
+                &no_secrets(),
+                &json!({}),
                 "client_secret",
                 Some("client_secret_secret"),
                 "oauth_authorization_code"
@@ -1081,13 +966,14 @@ mod tests {
         );
     }
 
+    #[serial(secrets_loader)]
     #[tokio::test]
-    async fn optional_secret_field_resolves_inline_when_present() {
-        let cfg = json!({});
-        let auth = json!({ "client_secret": "shh" });
+    async fn optional_secret_field_resolves_keyring_when_present() {
+        let _g = install_echo_loader();
+        let auth = json!({ "client_secret": kr("shh") });
         assert_eq!(
             optional_secret_field(
-                &cfg,
+                &no_secrets(),
                 &auth,
                 "client_secret",
                 Some("client_secret_secret"),
@@ -1101,13 +987,12 @@ mod tests {
 
     #[tokio::test]
     async fn optional_secret_field_errors_when_pointer_configured_but_key_missing() {
-        // Points at a secret-store name, but action_config.secrets has no
-        // key configured for it — a real misconfiguration that must error
-        // loudly rather than silently degrading to Ok(None).
-        let cfg = json!({});
+        // Points at a secret-store name, but the action has no key for it —
+        // a real misconfiguration that must error loudly rather than
+        // silently degrading to Ok(None).
         let auth = json!({ "client_secret_secret": "MY_SECRET" });
         let err = optional_secret_field(
-            &cfg,
+            &no_secrets(),
             &auth,
             "client_secret",
             Some("client_secret_secret"),
@@ -1119,42 +1004,29 @@ mod tests {
     }
 
     #[test]
-    fn refresh_storage_detects_inline_or_keyring() {
-        let empty_cfg = json!({});
-        let inline = json!({"refresh_token": "abc"});
-        assert!(matches!(
-            RefreshStorage::from_auth(&empty_cfg, &inline),
-            RefreshStorage::Inline
-        ));
+    fn refresh_storage_detects_keyring() {
         let keyring = json!({"refresh_token": {"keyring_service": "sol", "keyring_account": "x"}});
         assert!(matches!(
-            RefreshStorage::from_auth(&empty_cfg, &keyring),
-            RefreshStorage::Keyring { .. }
+            RefreshStorage::from_auth(&no_secrets(), &keyring),
+            Some(RefreshStorage::Keyring { .. })
         ));
     }
 
     #[test]
     fn refresh_storage_detects_secret_pointer_when_key_configured() {
-        let cfg = json!({"secrets": {"GOOGLE_OAUTH_REFRESH_TOKEN": "the-key"}});
+        let cfg = json!({"secrets": {"GOOGLE_OAUTH_REFRESH_TOKEN": "***"}});
+        let secrets = ActionSecrets::new(Some(&cfg), Some("the-key".into()));
         let auth = json!({"refresh_token_secret": "GOOGLE_OAUTH_REFRESH_TOKEN"});
         assert!(matches!(
-            RefreshStorage::from_auth(&cfg, &auth),
-            RefreshStorage::Secret { .. }
+            RefreshStorage::from_auth(&secrets, &auth),
+            Some(RefreshStorage::Secret { .. })
         ));
     }
 
     #[test]
-    fn refresh_storage_falls_back_to_inline_when_secret_pointer_has_no_key() {
-        // Points at a secret store name, but action_config.secrets has no
-        // key configured for it — falls back to Inline rather than
-        // silently trying to use the secret store without a key.
-        let cfg = json!({});
-        let auth =
-            json!({"refresh_token_secret": "GOOGLE_OAUTH_REFRESH_TOKEN", "refresh_token": "abc"});
-        assert!(matches!(
-            RefreshStorage::from_auth(&cfg, &auth),
-            RefreshStorage::Inline
-        ));
+    fn refresh_storage_is_none_when_secret_pointer_has_no_key() {
+        let auth = json!({"refresh_token_secret": "GOOGLE_OAUTH_REFRESH_TOKEN"});
+        assert!(RefreshStorage::from_auth(&no_secrets(), &auth).is_none());
     }
 
     #[test]

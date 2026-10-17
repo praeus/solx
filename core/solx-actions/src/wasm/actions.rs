@@ -16,7 +16,7 @@ use serde_json::Value;
 use solx_surface::entities::ActionExecResult;
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::FileStore;
-use solx_surface::Principal;
+use solx_surface::{ExecScope, Principal};
 use wasmtime::component::{HasSelf, Linker};
 use wasmtime::Store;
 
@@ -48,6 +48,7 @@ pub async fn exec(
     params: &Value,
     caller: Caller,
     principal: Option<Principal>,
+    scope: ExecScope,
     timeout_secs: Option<u64>,
 ) -> Result<ActionExecResult> {
     let params_json = serde_json::to_string(params).map_err(|e| SolxError::Exec(e.to_string()))?;
@@ -63,6 +64,7 @@ pub async fn exec(
         params_json,
         caller,
         principal,
+        scope,
     );
 
     // `spawn_blocking` used to absorb panics into a `JoinError`; without it
@@ -100,6 +102,7 @@ pub async fn exec(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_guest(
     actions: Arc<LocalActionManager>,
     files: Arc<dyn FileStore>,
@@ -108,12 +111,13 @@ async fn run_guest(
     params_json: String,
     caller: Caller,
     principal: Option<Principal>,
+    scope: ExecScope,
 ) -> Result<ActionExecResult> {
     let eng = engine();
     let component = compile_component(wasm_bytes).await?;
 
     let action_ref = caller.action_ref().to_string();
-    let state = HostState::new(actions, files, caller, principal);
+    let state = HostState::new(actions, files, caller, principal, scope);
     let mut store = Store::new(eng, state);
 
     // Yield rather than trap when the epoch advances: a busy guest hands

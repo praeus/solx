@@ -127,11 +127,11 @@ async fn types_docs_actions_files_round_trip_over_http() {
     assert!(docs.get("/research/ai", "note").await.is_err());
 
     // Actions (Command — exercises exec() end to end, server-side).
-    // The config carries a secret key, so this also covers redaction across
-    // the wire: masking happens in the server's LocalActionManager, so the
-    // key must never appear in an HTTP response, while exec — which runs
-    // server-side against the unmasked row — still works.
-    let real_key = "c3VwZXItc2VjcmV0LWtleS1oZXJlLXBhZGRpbmc=";
+    // The config carries a secret key, so this also covers keeping it off
+    // the wire: save moves it out of the config into its own column, so the
+    // key must never appear in an HTTP response, while exec — which looks
+    // the key up server-side — still works.
+    let real_key = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
     actions
         .save(
             "/tools",
@@ -150,6 +150,10 @@ async fn types_docs_actions_files_round_trip_over_http() {
     assert_eq!(result.result, json!(42));
 
     let fetched = actions.get("/tools", "echo").await.unwrap();
+    assert!(
+        !serde_json::to_string(&fetched).unwrap().contains(real_key),
+        "secret key crossed the wire"
+    );
     let cfg = fetched.action_config.as_ref().unwrap();
     assert_eq!(
         cfg["secrets"]["API_TOKEN"],
@@ -162,7 +166,7 @@ async fn types_docs_actions_files_round_trip_over_http() {
         "non-secret config should stay readable"
     );
 
-    // Round-tripping the redacted config back must not destroy the key.
+    // Round-tripping the fetched config back must not destroy the key.
     let mut edited = cfg.clone();
     edited["cwd"] = json!("..");
     actions
@@ -182,7 +186,7 @@ async fn types_docs_actions_files_round_trip_over_http() {
             .await
             .unwrap()
             .success,
-        "action should still execute after a redacted round trip"
+        "action should still execute after a round trip"
     );
 
     let action_page = actions
@@ -196,7 +200,7 @@ async fn types_docs_actions_files_round_trip_over_http() {
     assert_eq!(
         action_page.items[0].action_config.as_ref().unwrap()["secrets"]["API_TOKEN"],
         json!("***"),
-        "list must redact too"
+        "list must not carry the key either"
     );
     actions.delete("/tools", "echo").await.unwrap();
 

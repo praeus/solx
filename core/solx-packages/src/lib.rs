@@ -51,6 +51,23 @@
 //! `"cwd": "bin"` instead of hard-coding where the package is checked out.
 //! An absolute `cwd` is kept as is.
 //!
+//! ## Installed actions are locked
+//!
+//! Every action an install leaves under `/packages/<name>/` is locked (see
+//! `solx_actions::guard_locked_action`): content — an MCP client, a WASM
+//! guest, a widget — can run it but not change or delete it, and a locked
+//! Script/WASM action runs only the artifact it was locked against. The
+//! manifest may leave some unlocked with `"unlocked_actions": ["<name>",
+//! ...]`, each relative to `/packages/<name>/`. The locked refs are recorded
+//! on [`InstalledPackage::locked_actions`].
+//!
+//! A reinstall first unlocks the package's own actions: its `install.solx`
+//! may rebuild an artifact through an action that writes it back over
+//! HTTP with its own token (as `solx-quickjs`'s builds do), which a pin
+//! would refuse. Everything is locked again once the script has run, or,
+//! if it fails, what the previous install had locked. An action with scoped
+//! secrets is locked even when `unlocked_actions` lists it.
+//!
 //! ## Installing from a zip
 //!
 //! [`install_package_zip`] takes a zip of a package (the manifest at its root,
@@ -72,11 +89,134 @@ pub mod catalog;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use solx_config::{CommandDef, ConfigService, InstalledPackage};
 use solx_scripts::{execute_script, CommandRunner};
+use solx_surface::entities::ActionInput;
 use solx_surface::error::{Result, SolxError};
+use solx_surface::managers::ActionManager;
+use solx_surface::query::ListOptions;
+
+/// What an install needs from the action store: the refs of the actions
+/// under a package's path, and setting their lock. Implemented for a host's
+/// `Arc<dyn ActionManager>` (an operator path, which is what may lock and
+/// unlock).
+#[async_trait]
+pub trait PackageActions: Send + Sync {
+    /// `(path, name)` of every action whose path starts with `base` — a
+    /// string prefix, like `ListOptions::path_prefix`; the install keeps
+    /// only those at `base` or below it.
+    async fn actions_under(&self, base: &str) -> Result<Vec<(String, String)>>;
+    async fn set_locked(&self, path: &str, name: &str, locked: bool) -> Result<()>;
+    /// Whether the action has scoped secrets. Such an action is locked even
+    /// when the manifest lists it under `unlocked_actions`: unpinned, its
+    /// artifact could be replaced by content and run with its key.
+    async fn has_secrets(&self, path: &str, name: &str) -> Result<bool>;
+}
+
+#[async_trait]
+impl PackageActions for Arc<dyn ActionManager> {
+    async fn actions_under(&self, base: &str) -> Result<Vec<(String, String)>> {
+        const PAGE: usize = 500;
+        let mut out = Vec::new();
+        loop {
+            let page = self
+                .list(ListOptions {
+                    path_prefix: Some(base.to_string()),
+                    limit: Some(PAGE),
+                    offset: Some(out.len()),
+                    ..Default::default()
+                })
+                .await?;
+            let n = page.items.len();
+            out.extend(page.items.into_iter().map(|a| (a.path, a.name)));
+            if n < PAGE {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    async fn set_locked(&self, path: &str, name: &str, locked: bool) -> Result<()> {
+        self.save(
+            path,
+            name,
+            ActionInput {
+                locked: Some(locked),
+                ..Default::default()
+            },
+        )
+        .await
+        .map(|_| ())
+    }
+
+    async fn has_secrets(&self, path: &str, name: &str) -> Result<bool> {
+        let action = self.get(path, name).await?;
+        Ok(action
+            .action_config
+            .as_ref()
+            .is_some_and(|c| c.get("secrets").is_some()))
+    }
+}
+
+/// `install.solx` failed after the install unlocked the package's actions.
+/// Lock again whatever the previous install had locked, so a failed
+/// reinstall doesn't leave them open to content. Best effort: a lock that
+/// fails (its artifact is gone, say) is added to the returned error.
+async fn relock_after_failure(
+    actions: &dyn PackageActions,
+    config: &ConfigService,
+    name: &str,
+    err: SolxError,
+) -> SolxError {
+    let previous = config
+        .list_packages()
+        .into_iter()
+        .find(|p| p.name == name)
+        .map(|p| p.locked_actions)
+        .unwrap_or_default();
+    // Only what still exists: `set_locked` saves, and a save creates.
+    let present = match own_actions(actions, &package_actions_base(name)).await {
+        Ok(present) => present,
+        Err(e) => return SolxError::Other(format!("{err}; also failed to re-lock: {e}")),
+    };
+    let mut failed = Vec::new();
+    for full in previous {
+        let Ok((path, action)) = solx_surface::path::split_ref(&full) else {
+            continue;
+        };
+        if !present.iter().any(|(p, n)| *p == path && *n == action) {
+            continue;
+        }
+        if let Err(e) = actions.set_locked(&path, &action, true).await {
+            failed.push(format!("{full}: {e}"));
+        }
+    }
+    if failed.is_empty() {
+        err
+    } else {
+        SolxError::Other(format!(
+            "{err}; also failed to re-lock: {}",
+            failed.join("; ")
+        ))
+    }
+}
+
+/// Where a package's actions live.
+fn package_actions_base(name: &str) -> String {
+    format!("/packages/{name}")
+}
+
+/// The actions at `base` or below it. `actions_under` matches a string
+/// prefix, which would also take `/packages/ab` for `/packages/a`.
+async fn own_actions(actions: &dyn PackageActions, base: &str) -> Result<Vec<(String, String)>> {
+    let mut out = actions.actions_under(base).await?;
+    out.retain(|(path, _)| path == base || path.starts_with(&format!("{base}/")));
+    Ok(out)
+}
 
 /// [`install_package`]'s result: the recorded package plus any
 /// allowlist-collision warnings. Warnings never block the install —
@@ -139,9 +279,10 @@ fn manifest_path(dir: &Path) -> (std::path::PathBuf, &'static str, bool) {
 }
 
 /// Install the package at `dir`: grant its declared allowlist entries, run
-/// `install.solx`, then register it.
+/// `install.solx`, lock its actions, then register it.
 pub async fn install_package(
     runner: &dyn CommandRunner,
+    actions: &dyn PackageActions,
     config: &ConfigService,
     dir: &Path,
 ) -> Result<InstallOutcome> {
@@ -163,6 +304,11 @@ pub async fn install_package(
         .unwrap_or("0.0.0")
         .to_string();
     let grants = parse_grants(&meta, meta_file)?;
+    let unlocked: Vec<String> = match meta.get("unlocked_actions") {
+        Some(v) if !v.is_null() => serde_json::from_value(v.clone())
+            .map_err(|e| SolxError::Invalid(format!("{meta_file} 'unlocked_actions': {e}")))?,
+        _ => Vec::new(),
+    };
     let pkg_dir = package_dir(dir);
 
     let mut warnings = Vec::new();
@@ -223,7 +369,37 @@ pub async fn install_package(
     let script = std::fs::read_to_string(&install_path)
         .map_err(|e| SolxError::Io(format!("read {}: {e}", install_path.display())))?;
 
-    run_in_dir(runner, dir, &script).await?;
+    // Unlock what a previous install locked, so this one can replace it —
+    // see the module doc.
+    let base = package_actions_base(&name);
+    for (path, action) in own_actions(actions, &base).await? {
+        actions.set_locked(&path, &action, false).await?;
+    }
+
+    if let Err(e) = run_in_dir(runner, dir, &script).await {
+        return Err(relock_after_failure(actions, config, &name, e).await);
+    }
+
+    let mut locked_actions = Vec::new();
+    for (path, action) in own_actions(actions, &base).await? {
+        let full = format!("{path}/{action}");
+        let relative = full.strip_prefix(&format!("{base}/")).unwrap_or(&full);
+        if unlocked.iter().any(|u| u.trim_matches('/') == relative) {
+            if !actions.has_secrets(&path, &action).await? {
+                continue;
+            }
+            let msg = format!(
+                "{full} is listed in unlocked_actions but has scoped secrets; locked anyway"
+            );
+            tracing::warn!("{msg}");
+            warnings.push(msg);
+        }
+        actions
+            .set_locked(&path, &action, true)
+            .await
+            .map_err(|e| SolxError::Other(format!("locking {full}: {e}")))?;
+        locked_actions.push(full);
+    }
 
     let pkg = InstalledPackage {
         name,
@@ -232,6 +408,7 @@ pub async fn install_package(
         installed_at: chrono::Utc::now().to_rfc3339(),
         granted_commands: grants.commands.into_keys().collect(),
         granted_base_urls: grants.base_urls,
+        locked_actions,
     };
     config.register_package(pkg.clone())?;
     Ok(InstallOutcome {
@@ -304,17 +481,19 @@ pub async fn uninstall_package(
 /// Install a package from the zip file at `zip`. See the module doc.
 pub async fn install_package_zip(
     runner: &dyn CommandRunner,
+    actions: &dyn PackageActions,
     config: &ConfigService,
     zip: &Path,
 ) -> Result<InstallOutcome> {
     let bytes =
         std::fs::read(zip).map_err(|e| SolxError::Io(format!("read {}: {e}", zip.display())))?;
-    install_package_zip_bytes(runner, config, bytes).await
+    install_package_zip_bytes(runner, actions, config, bytes).await
 }
 
 /// Install a package from the bytes of a zip. See the module doc.
 pub async fn install_package_zip_bytes(
     runner: &dyn CommandRunner,
+    actions: &dyn PackageActions,
     config: &ConfigService,
     bytes: Vec<u8>,
 ) -> Result<InstallOutcome> {
@@ -325,13 +504,14 @@ pub async fn install_package_zip_bytes(
     // Unpack beside the destination so the final move is a rename.
     let stamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
     let staging = packages.join(format!(".staging-{stamp}"));
-    let result = install_from_staging(runner, config, &packages, &staging, bytes, stamp).await;
+    let result = install_from_staging(runner, actions, config, &packages, &staging, bytes, stamp).await;
     let _ = std::fs::remove_dir_all(&staging);
     result
 }
 
 async fn install_from_staging(
     runner: &dyn CommandRunner,
+    actions: &dyn PackageActions,
     config: &ConfigService,
     packages: &Path,
     staging: &Path,
@@ -381,7 +561,7 @@ async fn install_from_staging(
             target.display()
         )));
     }
-    match install_package(runner, config, &target).await {
+    match install_package(runner, actions, config, &target).await {
         Ok(outcome) => {
             if had_old {
                 let _ = std::fs::remove_dir_all(&backup);

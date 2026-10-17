@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use serde_json::Value;
-use solx_surface::auth::NO_PRINCIPAL_HEADER;
+use solx_surface::auth::{EXEC_SCOPE_HEADER, NO_PRINCIPAL_HEADER};
 use solx_surface::entities::{Action, ActionExecResult, ActionInput};
 use solx_surface::error::Result;
 use solx_surface::managers::ActionManager;
@@ -103,5 +103,29 @@ impl ActionManager for RemoteActionManager {
     ) -> Result<ActionExecResult> {
         let url = entity_url(&self.base_url, "actions", path, name)?;
         post_json(&self.http, &self.token, url, &params).await
+    }
+
+    /// The same request with [`EXEC_SCOPE_HEADER`], so a local MCP server
+    /// proxying here keeps the whole chain in the tooling scope on the
+    /// server. A `None` principal also sends [`NO_PRINCIPAL_HEADER`], as
+    /// `exec` does.
+    async fn exec_tooling(
+        &self,
+        principal: Option<&Principal>,
+        path: &str,
+        name: &str,
+        params: Value,
+    ) -> Result<ActionExecResult> {
+        let url = entity_url(&self.base_url, "actions", path, name)?;
+        let mut req = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .header(EXEC_SCOPE_HEADER, "tooling");
+        if principal.is_none() {
+            req = req.header(NO_PRINCIPAL_HEADER, "none");
+        }
+        let resp = req.json(&params).send().await.map_err(transport_err)?;
+        read_response(resp).await
     }
 }

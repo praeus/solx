@@ -23,7 +23,7 @@ use solx_config::ConfigService;
 use solx_scripts::CommandRunner;
 use solx_surface::error::{Result, SolxError};
 
-use crate::{install_package_zip_bytes, InstallOutcome, MANIFEST};
+use crate::{install_package_zip_bytes, InstallOutcome, PackageActions, MANIFEST};
 
 /// One package the catalog offers.
 #[derive(Debug, Clone, Serialize)]
@@ -605,12 +605,14 @@ pub async fn fetch(asset: &Asset) -> Result<Vec<u8>> {
 /// warnings include those of the requirements' installs.
 pub async fn install_from_catalog(
     runner: &dyn CommandRunner,
+    actions: &dyn PackageActions,
     config: &ConfigService,
     release: &Release,
     name: &str,
 ) -> Result<InstallOutcome> {
     let mut warnings = Vec::new();
-    let outcome = install_with_requires(runner, config, release, name, &mut warnings, 0).await?;
+    let outcome =
+        install_with_requires(runner, actions, config, release, name, &mut warnings, 0).await?;
     Ok(InstallOutcome {
         package: outcome.package,
         warnings,
@@ -619,6 +621,7 @@ pub async fn install_from_catalog(
 
 async fn install_with_requires(
     runner: &dyn CommandRunner,
+    actions: &dyn PackageActions,
     config: &ConfigService,
     release: &Release,
     name: &str,
@@ -634,6 +637,7 @@ async fn install_with_requires(
         if !config.list_packages().iter().any(|p| p.name == *req) {
             let out = Box::pin(install_with_requires(
                 runner,
+                actions,
                 config,
                 release,
                 req,
@@ -658,7 +662,7 @@ async fn install_with_requires(
         })
     })?;
     let bytes = fetch(asset).await?;
-    let outcome = install_package_zip_bytes(runner, config, bytes).await?;
+    let outcome = install_package_zip_bytes(runner, actions, config, bytes).await?;
     if outcome.package.name != name {
         warnings.push(format!(
             "{} installed as '{}', not '{name}'",

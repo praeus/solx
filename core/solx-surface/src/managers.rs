@@ -80,6 +80,17 @@ pub trait ActionManager: Send + Sync {
         name: &str,
         params: Value,
     ) -> Result<ActionExecResult>;
+    /// Execute in [`crate::auth::ExecScope::Tooling`], on behalf of
+    /// `principal` when the route authenticated one: the MCP server's entry
+    /// point. The scope is inherited by every nested frame. Required for the
+    /// same reason as `exec_for`: a default could only drop the scope.
+    async fn exec_tooling(
+        &self,
+        principal: Option<&Principal>,
+        path: &str,
+        name: &str,
+        params: Value,
+    ) -> Result<ActionExecResult>;
 }
 
 /// Optional aggregate facade composing the four managers. A future

@@ -161,6 +161,10 @@ pub(super) async fn type_paths(
 // holding the server token already makes a caller a CLI-equivalent admin, so
 // there is nothing left for a guard on that route to protect. See
 // SECURITY.md — "Treat a solx instance as running with your own privileges."
+//
+// The one exception is an action with scoped secrets: HTTP applies
+// `guard_keyed_action` to anyone but the root token, and this built-in
+// applies it always — see `crate::secret_config::guard_keyed_action`.
 
 pub(super) async fn action_save(
     params: &Value,
@@ -170,15 +174,27 @@ pub(super) async fn action_save(
     let input: ActionInput = parse_input(params)?;
     let path = path_or_root(params);
 
-    // Apply the guard using the *existing* row's action_type (so a merge
-    // upsert that omits `action_type` can't silently rewrite what an
-    // established Command action shells out to) and the *incoming* one.
+    // Apply the guards using the *existing* row (so a merge upsert that
+    // omits `action_type` can't silently rewrite what an established
+    // Command action shells out to) and the *incoming* one.
     let existing = match actions.get(path, name).await {
-        Ok(a) => a.action_type,
+        Ok(a) => Some(a),
         Err(SolxError::NotFound(_)) => None,
         Err(e) => return Err(e.to_string()),
     };
-    guard_executable_action(existing, input.action_type, path, name, "create or modify")?;
+    guard_executable_action(
+        existing.as_ref().and_then(|a| a.action_type),
+        input.action_type,
+        path,
+        name,
+        "create or modify",
+    )?;
+    crate::secret_config::guard_keyed_action(
+        existing.as_ref(),
+        &input,
+        &format!("{path}/{name}"),
+    )?;
+    crate::lock::guard_locked_action(existing.as_ref(), Some(&input), &format!("{path}/{name}"))?;
 
     let a = actions
         .save(path, name, input)
@@ -211,11 +227,18 @@ pub(super) async fn action_delete(
     // modify an executable action, they shouldn't be able to remove one
     // either.
     let existing = match actions.get(path, name).await {
-        Ok(a) => a.action_type,
+        Ok(a) => Some(a),
         Err(SolxError::NotFound(_)) => None,
         Err(e) => return Err(e.to_string()),
     };
-    guard_executable_action(existing, None, path, name, "delete")?;
+    guard_executable_action(
+        existing.as_ref().and_then(|a| a.action_type),
+        None,
+        path,
+        name,
+        "delete",
+    )?;
+    crate::lock::guard_locked_action(existing.as_ref(), None, &format!("{path}/{name}"))?;
     actions
         .delete(path, name)
         .await

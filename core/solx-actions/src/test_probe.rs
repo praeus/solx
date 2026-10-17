@@ -1,6 +1,6 @@
 //! A test-only internal handler that reports what an `InternalCallCtx`
-//! carries — the principal, the caller, and the fail-closed
-//! `external_principal()` verdict — so tests can check that each entry point
+//! carries — the principal, the caller, the fail-closed
+//! `external_principal()` verdict, and the exclusion scope — so tests can check that each entry point
 //! (REST, `/mcp`, nested frames, detached `action-start` runs) delivers them.
 //!
 //! Compiled only under `cfg(test)` or the `test-probe` feature, which
@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use solx_surface::internal_actions::{
     InternalActionHandler, InternalActionRegistry, InternalCallCtx,
 };
-use solx_surface::Principal;
+use solx_surface::{ExecScope, Principal};
 
 pub const FN_NAME: &str = "test-principal-probe";
 
@@ -41,6 +41,10 @@ impl InternalActionHandler for Probe {
             "principal": ctx.principal.as_ref().map(describe),
             "caller": ctx.caller.as_ref().map(|c| c.action_ref().to_string()),
             "external": ctx.external_principal().map(describe),
+            "scope": match ctx.scope {
+                ExecScope::Unrestricted => "unrestricted",
+                ExecScope::Tooling => "tooling",
+            },
         }))
     }
 }
@@ -57,7 +61,7 @@ mod tests {
     use serial_test::serial;
     use solx_surface::entities::{ActionInput, ActionType};
     use solx_surface::managers::ActionManager;
-    use solx_surface::Principal;
+    use solx_surface::{ExecScope, Principal};
 
     use super::FN_NAME;
     use crate::caller::Caller;
@@ -66,12 +70,17 @@ mod tests {
     use crate::LocalActionManager;
 
     async fn save_probe(m: &LocalActionManager) {
+        save_probe_as(m, "probe", vec![]).await;
+    }
+
+    async fn save_probe_as(m: &LocalActionManager, name: &str, capabilities: Vec<String>) {
         m.save(
             "/t",
-            "probe",
+            name,
             ActionInput {
                 action_type: Some(ActionType::Internal),
                 fn_name: Some(FN_NAME.into()),
+                capabilities,
                 ..Default::default()
             },
         )
@@ -112,13 +121,13 @@ mod tests {
             .unwrap();
         assert_eq!(
             authed.result,
-            json!({"principal": "root", "caller": null, "external": "root"})
+            json!({"principal": "root", "caller": null, "external": "root", "scope": "unrestricted"})
         );
 
         let local = m.exec("/t", "probe", json!({})).await.unwrap();
         assert_eq!(
             local.result,
-            json!({"principal": null, "caller": null, "external": null})
+            json!({"principal": null, "caller": null, "external": null, "scope": "unrestricted"})
         );
     }
 
@@ -136,7 +145,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             ran.result["result"],
-            json!({"principal": "root", "caller": "/t/outer", "external": null})
+            json!({"principal": "root", "caller": "/t/outer", "external": null, "scope": "unrestricted"})
         );
     }
 
@@ -161,12 +170,19 @@ mod tests {
         };
 
         let direct = m
-            .start_invocation("/t", "probe", json!({}), Some(Principal::Root), None)
+            .start_invocation(
+                "/t",
+                "probe",
+                json!({}),
+                Some(Principal::Root),
+                ExecScope::Unrestricted,
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(
             poll_result(direct).await,
-            json!({"principal": "root", "caller": null, "external": "root"})
+            json!({"principal": "root", "caller": null, "external": "root", "scope": "unrestricted"})
         );
 
         let from_action = m
@@ -175,13 +191,14 @@ mod tests {
                 "probe",
                 json!({}),
                 Some(Principal::Root),
+                ExecScope::Unrestricted,
                 Some(Caller::from_action("/t/outer", None).info()),
             )
             .await
             .unwrap();
         assert_eq!(
             poll_result(from_action).await,
-            json!({"principal": "root", "caller": "/t/outer", "external": null})
+            json!({"principal": "root", "caller": "/t/outer", "external": null, "scope": "unrestricted"})
         );
 
         // End to end through the `action-start` builtin, from a script.
@@ -197,9 +214,76 @@ mod tests {
             .unwrap();
         assert_eq!(
             poll_result(ran.result["result"].clone()).await,
-            json!({"principal": "root", "caller": "/t/starter", "external": null})
+            json!({"principal": "root", "caller": "/t/starter", "external": null, "scope": "unrestricted"})
+        );
+
+        // The tooling scope crosses the same `tokio::spawn`.
+        let ran = m
+            .exec_tooling(None, "/t", "starter", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(
+            poll_result(ran.result["result"].clone()).await,
+            json!({"principal": null, "caller": "/t/starter", "external": null, "scope": "tooling"})
         );
 
         set_long_lived_host(false);
+    }
+
+    /// `exec_tooling` holds the whole chain, not just its first frame.
+    #[tokio::test]
+    async fn the_tooling_scope_reaches_nested_frames() {
+        let (_d, _cfg, m) = setup_wired().await;
+        save_probe(&m).await;
+        save_script(&m, "outer", "exec /t/probe").await;
+
+        let ran = m
+            .exec_tooling(Some(&Principal::Root), "/t", "outer", json!({}))
+            .await
+            .unwrap();
+        assert_eq!(
+            ran.result["result"],
+            json!({"principal": "root", "caller": "/t/outer", "external": null, "scope": "tooling"})
+        );
+    }
+
+    /// A model allowed to call a script can't use it to reach an action
+    /// excluded from tooling, and the refusal reads like a missing action.
+    #[tokio::test]
+    #[serial]
+    async fn excluded_actions_are_refused_at_every_hop_in_the_tooling_scope() {
+        let (_d, _cfg, m) = setup_wired().await;
+        save_probe_as(&m, "hidden", vec![solx_config::CAP_HIDDEN.into()]).await;
+        save_script(&m, "outer", "exec /t/hidden").await;
+
+        let direct = m
+            .exec_tooling(None, "/t", "hidden", json!({}))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(direct, solx_surface::SolxError::NotFound(_)),
+            "{direct:?}"
+        );
+
+        let nested = m
+            .exec_tooling(None, "/t", "outer", json!({}))
+            .await
+            .unwrap_err();
+        assert!(nested.to_string().contains("/t/hidden"), "{nested}");
+
+        set_long_lived_host(true);
+        let detached = m
+            .start_invocation("/t", "hidden", json!({}), None, ExecScope::Tooling, None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(detached, solx_surface::SolxError::NotFound(_)),
+            "{detached:?}"
+        );
+        set_long_lived_host(false);
+
+        // Outside the tooling scope the same chain runs.
+        let ran = m.exec("/t", "outer", json!({})).await.unwrap();
+        assert_eq!(ran.result["result"]["caller"], json!("/t/outer"));
     }
 }

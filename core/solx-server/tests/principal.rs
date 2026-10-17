@@ -51,8 +51,8 @@ async fn spawn_server() -> (tempfile::TempDir, Arc<solx_manager::App>, String, S
     (dir, app, format!("http://{addr}"), token)
 }
 
-fn root_probe() -> Value {
-    json!({"principal": "root", "caller": null, "external": "root"})
+fn root_probe(scope: &str) -> Value {
+    json!({"principal": "root", "caller": null, "external": "root", "scope": scope})
 }
 
 #[tokio::test]
@@ -67,7 +67,25 @@ async fn rest_exec_runs_as_the_authenticated_principal() {
         .unwrap();
     assert!(res.status().is_success(), "{}", res.status());
     let body: Value = res.json().await.unwrap();
-    assert_eq!(body["result"], root_probe());
+    assert_eq!(body["result"], root_probe("unrestricted"));
+}
+
+/// `X-Solx-Scope: tooling` is how an MCP server proxying to this host keeps
+/// its calls in the tooling scope; it restricts, so it needs no privilege.
+#[tokio::test]
+async fn rest_exec_honors_the_tooling_scope_header() {
+    let (_dir, _app, base, token) = spawn_server().await;
+
+    let res = reqwest::Client::new()
+        .post(format!("{base}/actions/t/probe"))
+        .bearer_auth(&token)
+        .header(solx_surface::auth::EXEC_SCOPE_HEADER, "tooling")
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "{}", res.status());
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["result"], root_probe("tooling"));
 }
 
 /// Confirms the rmcp streamable HTTP transport hands the request's
@@ -86,7 +104,7 @@ async fn mcp_tool_call_runs_as_the_authenticated_principal() -> anyhow::Result<(
     let called = client
         .call_tool(CallToolRequestParams::new("act__t__probe"))
         .await?;
-    assert_eq!(called.structured_content, Some(root_probe()));
+    assert_eq!(called.structured_content, Some(root_probe("tooling")));
 
     client.cancel().await?;
     Ok(())

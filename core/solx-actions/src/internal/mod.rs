@@ -40,7 +40,7 @@ use serde_json::Value;
 use solx_surface::entities::{ActionType, Document, DocumentInput};
 use solx_surface::internal_actions::{InternalActionRegistry, InternalCallCtx};
 use solx_surface::managers::{ActionManager, DocManager, FileStore, TypeManager};
-use solx_surface::Principal;
+use solx_surface::{ExecScope, Principal};
 
 use crate::caller::Caller;
 use crate::LocalActionManager;
@@ -49,7 +49,6 @@ pub mod doc_fields;
 pub mod entity;
 pub mod env;
 pub mod exclude;
-pub mod exec;
 pub mod file;
 pub mod http;
 pub mod http_stream;
@@ -105,6 +104,9 @@ pub struct InternalCtx {
     /// `solx_surface::InternalCallCtx::principal`. Inherited by nested
     /// frames, so authorization must check `caller` first.
     pub principal: Option<Principal>,
+    /// The exclusions this chain is held to — see
+    /// `solx_surface::InternalCallCtx::scope`.
+    pub scope: ExecScope,
 }
 
 impl InternalCtx {
@@ -119,6 +121,7 @@ impl InternalCtx {
             files: self.files.clone(),
             caller: self.caller.as_ref().map(Caller::info),
             principal: self.principal.clone(),
+            scope: self.scope,
         }
     }
 }
@@ -164,13 +167,13 @@ pub async fn run_internal(
         "search-actions" => entity::search_actions(params, &ctx.actions, &ctx.config).await,
 
         // ── file store ───────────────────────────────────────────────────
-        "file-put" => file::file_put(params, &ctx.files).await,
+        "file-put" => file::file_put(params, &ctx.files, &ctx.local).await,
         "file-get" => file::file_get(params, &ctx.files).await,
-        "file-delete" => file::file_delete(params, &ctx.files).await,
+        "file-delete" => file::file_delete(params, &ctx.files, &ctx.local).await,
         "file-list" => file::file_list(params, &ctx.files).await,
-        "file-copy" => file::file_copy(params, &ctx.files).await,
-        "dir-copy" => file::dir_copy(params, &ctx.files).await,
-        "dir-delete" => file::dir_delete(params, &ctx.files).await,
+        "file-copy" => file::file_copy(params, &ctx.files, &ctx.local).await,
+        "dir-copy" => file::dir_copy(params, &ctx.files, &ctx.local).await,
+        "dir-delete" => file::dir_delete(params, &ctx.files, &ctx.local).await,
 
         // ── document field ops (flat and path-style) ─────────────────────
         "get-field" => doc_fields::get_field(params, &ctx.docs).await,
@@ -192,11 +195,6 @@ pub async fn run_internal(
 
         // ── system integration ────────────────────────────────────────────
         "open-url" => open_url::open_url(params, &ctx.config).await,
-
-        // ── scripting ────────────────────────────────────────────────────
-        "script-exec" => {
-            exec::exec(params, &ctx.local, ctx.caller.as_ref(), ctx.principal.as_ref()).await
-        }
 
         // ── secrets (per-caller scoped) ──────────────────────────────────
         "get-secret" => secrets::get_secret(params, ctx.caller.as_ref()).await,
@@ -368,7 +366,7 @@ pub(super) async fn load_document(
 #[cfg(test)]
 mod tests {
     // The whole test module lives here — not in each submodule — because
-    // every test needs `test_ctx` and several need `fake_secrets` /
+    // every test needs `test_ctx` and several need
     // `install_test_callback`, and scattering them would force the
     // helpers to be `pub(super)` (or duplicated). Keeping one test
     // module here keeps the harness small and the assertions colocated
@@ -379,8 +377,6 @@ mod tests {
 
     use base64::Engine as _;
     use serde_json::json;
-    use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
     use tokio::sync::oneshot;
 
@@ -390,32 +386,6 @@ mod tests {
     /// anything else.
     fn key_b64() -> String {
         base64::engine::general_purpose::STANDARD.encode([7u8; 32])
-    }
-
-    /// In-memory stand-in for the OS credential manager. `fn` pointers
-    /// can't capture state, so the map lives in a static.
-    static FAKE_SECRETS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
-
-    fn fake_secrets() -> &'static Mutex<HashMap<String, String>> {
-        FAKE_SECRETS.get_or_init(|| Mutex::new(HashMap::new()))
-    }
-
-    fn fake_secret_backend() -> crate::secrets::SecretBackendOverride {
-        fake_secrets().lock().unwrap().clear();
-        crate::secrets::SecretBackendOverride {
-            get: |name| Ok(fake_secrets().lock().unwrap().get(name).cloned()),
-            set: |name, blob| {
-                fake_secrets()
-                    .lock()
-                    .unwrap()
-                    .insert(name.to_string(), blob.to_string());
-                Ok(())
-            },
-            delete: |name| {
-                fake_secrets().lock().unwrap().remove(name);
-                Ok(())
-            },
-        }
     }
 
     /// Drive a manual callback for `state_value` without spinning up a
@@ -480,6 +450,7 @@ mod tests {
                 action_config,
                 caller: None,
                 principal: None,
+                scope: ExecScope::Unrestricted,
             },
         )
     }
@@ -1173,10 +1144,13 @@ mod tests {
         // (which is the `/builtin/...` row's config and is always null).
         ctx.caller = Some(Caller::from_action(
             "/pkg/foo",
-            Some(&json!({ "secrets": { "FOO": key_b64() } })),
+            Some(solx_surface::ActionSecrets::new(
+                Some(&json!({ "secrets": { "FOO": "***" } })),
+                Some(key_b64()),
+            )),
         ));
 
-        crate::secrets::set_secret_backend_for_tests(Some(fake_secret_backend()));
+        crate::secrets::set_secret_backend_for_tests(Some(crate::test_support::fake_secret_backend()));
         run_internal(
             "set-secret",
             &json!({"name": "FOO", "value": "s3cret"}),
@@ -1193,7 +1167,7 @@ mod tests {
         let err = run_internal("get-secret", &json!({"name": "BAR"}), &ctx)
             .await
             .unwrap_err();
-        assert!(err.contains("no key configured"), "{err}");
+        assert!(err.contains("has no key for secret 'BAR'"), "{err}");
         assert!(err.contains("action://pkg/foo"), "{err}");
         crate::secrets::set_secret_backend_for_tests(None);
     }

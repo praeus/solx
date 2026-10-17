@@ -33,7 +33,7 @@ use serde_json::{json, Value};
 use solx_config::ConfigService;
 use solx_surface::auth::TokenAuthority;
 use solx_surface::error::{Result, SolxError};
-use solx_surface::managers::ActionManager;
+use solx_surface::ActionSecrets;
 use tokio::io::AsyncWriteExt;
 
 use solx_console::loopback as console_loopback;
@@ -287,7 +287,6 @@ fn command_result(fn_name: &str, output: std::process::Output) -> Result<Value> 
 #[allow(clippy::too_many_arguments)]
 pub async fn run_webhook(
     cfg: &ConfigService,
-    actions: &dyn ActionManager,
     console: Arc<ConsoleStore>,
     action_ref: &str,
     invocation_id: &str,
@@ -295,6 +294,7 @@ pub async fn run_webhook(
     name: &str,
     url: &str,
     action_config: &Option<Value>,
+    secrets: &ActionSecrets,
     params: &Value,
 ) -> Result<Value> {
     // `action_config.path_params` names params that should be substituted
@@ -326,7 +326,7 @@ pub async fn run_webhook(
 
     let redirects = crate::net::redirect_policy(cfg);
     let result =
-        run_webhook_inner(actions, path, name, url, action_config, params, redirects).await;
+        run_webhook_inner(path, name, url, action_config, secrets, params, redirects).await;
 
     let elapsed_ms = started.elapsed().as_millis();
     match &result {
@@ -429,11 +429,11 @@ async fn log_webhook(
 }
 
 async fn run_webhook_inner(
-    actions: &dyn ActionManager,
     path: &str,
     name: &str,
     url: &str,
     action_config: &Option<Value>,
+    secrets: &ActionSecrets,
     params: &Value,
     redirects: reqwest::redirect::Policy,
 ) -> Result<Value> {
@@ -458,7 +458,7 @@ async fn run_webhook_inner(
     if let Some(cfg) = action_config {
         if let Some(auth) = cfg.get("auth") {
             if auth.get("type").and_then(Value::as_str) == Some("oauth_authorization_code") {
-                return dispatch_oauth_token_exchange(&client, url, cfg, auth, params).await;
+                return dispatch_oauth_token_exchange(&client, url, secrets, auth, params).await;
             }
         }
     }
@@ -489,7 +489,7 @@ async fn run_webhook_inner(
 
     if let Some(cfg) = action_config {
         // Resolve auth via the full pipeline (bearer/oauth_refresh/oauth_service_account).
-        if let Some(auth_header) = crate::auth::resolve_auth(actions, path, name, cfg)
+        if let Some(auth_header) = crate::auth::resolve_auth(path, name, cfg, secrets)
             .await
             .map_err(|e| SolxError::Exec(e))?
         {
@@ -579,16 +579,16 @@ fn build_multipart_related_body(params: &Value) -> Result<MultipartRelatedBody> 
 /// Returns the parsed JSON response (which includes `access_token`,
 /// `refresh_token`, `expires_in`, etc.).
 ///
-/// `client_id` is resolved through the same inline/keyring/scoped-secret
-/// pipeline as the other auth types (it's always required per RFC 6749).
+/// `client_id` is resolved through the same keyring/scoped-secret pipeline
+/// as the other auth types (it's always required per RFC 6749).
 /// `client_secret` uses the "optional" variant — a public/PKCE client
-/// legitimately has none — but if one *is* configured (inline, keyring, or
-/// a `client_secret_secret` pointer) and fails to resolve, that's a hard
+/// legitimately has none — but if one *is* configured (keyring or a
+/// `client_secret_secret` pointer) and fails to resolve, that's a hard
 /// error rather than a silent empty-string fallback.
 async fn dispatch_oauth_token_exchange(
     client: &reqwest::Client,
     url: &str,
-    action_config: &Value,
+    secrets: &ActionSecrets,
     auth: &Value,
     params: &Value,
 ) -> Result<Value> {
@@ -596,7 +596,7 @@ async fn dispatch_oauth_token_exchange(
         SolxError::Exec("oauth_authorization_code requires 'code' in params".into())
     })?;
     let client_id = crate::auth::secret_field(
-        action_config,
+        secrets,
         auth,
         "client_id",
         Some("client_id_secret"),
@@ -605,7 +605,7 @@ async fn dispatch_oauth_token_exchange(
     .await
     .map_err(SolxError::Exec)?;
     let client_secret = crate::auth::optional_secret_field(
-        action_config,
+        secrets,
         auth,
         "client_secret",
         Some("client_secret_secret"),
@@ -766,20 +766,34 @@ mod tests {
         (base, handle)
     }
 
+    /// Resolves every keyring reference to its account name until dropped,
+    /// so `client_id` needs no real credential manager.
+    fn echo_keyring_loader() -> impl Drop {
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                crate::secrets::set_secret_loader_for_tests(None);
+            }
+        }
+        crate::secrets::set_secret_loader_for_tests(Some(|r| Ok(r.keyring_account.clone())));
+        Guard
+    }
+
     /// A per-call `redirect_uri` (the loopback's actual bound address) must
     /// win over a static `auth.redirect_uri` — regression test for the bug
     /// where the token exchange always used the (usually absent) static
     /// config value and Google's endpoint rejected the request with
     /// "Missing parameter: redirect_uri".
+    #[serial_test::serial(secrets_loader)]
     #[tokio::test]
     async fn oauth_authorization_code_prefers_params_redirect_uri_over_auth() {
         let (url, handle) =
             start_token_endpoint(r#"{"access_token":"at","expires_in":3600}"#.into()).await;
         let client = reqwest::Client::new();
-        let action_config = json!({});
+        let _g = echo_keyring_loader();
         let auth = json!({
             "type": "oauth_authorization_code",
-            "client_id": "cid",
+            "client_id": { "keyring_service": "test", "keyring_account": "cid" },
             "redirect_uri": "http://static-fallback/callback"
         });
         let params = json!({
@@ -788,7 +802,8 @@ mod tests {
         });
 
         let result =
-            dispatch_oauth_token_exchange(&client, &url, &action_config, &auth, &params).await;
+            dispatch_oauth_token_exchange(&client, &url, &ActionSecrets::default(), &auth, &params)
+                .await;
         assert!(result.is_ok(), "{:?}", result.err());
 
         let body = handle.await.unwrap();
@@ -805,21 +820,23 @@ mod tests {
     /// When the caller doesn't supply `redirect_uri` in params, the static
     /// `auth.redirect_uri` (for integrations that always use one fixed
     /// callback) is still honored.
+    #[serial_test::serial(secrets_loader)]
     #[tokio::test]
     async fn oauth_authorization_code_falls_back_to_auth_redirect_uri() {
         let (url, handle) =
             start_token_endpoint(r#"{"access_token":"at","expires_in":3600}"#.into()).await;
         let client = reqwest::Client::new();
-        let action_config = json!({});
+        let _g = echo_keyring_loader();
         let auth = json!({
             "type": "oauth_authorization_code",
-            "client_id": "cid",
+            "client_id": { "keyring_service": "test", "keyring_account": "cid" },
             "redirect_uri": "http://static-fallback/callback"
         });
         let params = json!({ "code": "the-code" });
 
         let result =
-            dispatch_oauth_token_exchange(&client, &url, &action_config, &auth, &params).await;
+            dispatch_oauth_token_exchange(&client, &url, &ActionSecrets::default(), &auth, &params)
+                .await;
         assert!(result.is_ok(), "{:?}", result.err());
 
         let body = handle.await.unwrap();
@@ -830,65 +847,6 @@ mod tests {
     }
 
     // ── run_webhook_inner: method selection ─────────────────────────────────
-
-    /// Stub ActionManager for `run_webhook_inner` tests below. `action_config`
-    /// carries no `auth` block in these tests, so `crate::auth::resolve_auth`
-    /// returns early without ever touching this -- any call reaching it
-    /// indicates the test needs a real mock instead.
-    struct StubActionManager;
-
-    #[async_trait::async_trait]
-    impl ActionManager for StubActionManager {
-        async fn save(
-            &self,
-            _path: &str,
-            _name: &str,
-            _input: solx_surface::entities::ActionInput,
-        ) -> Result<solx_surface::entities::Action> {
-            panic!("stub ActionManager::save should not be called by these tests")
-        }
-        async fn get(&self, _path: &str, _name: &str) -> Result<solx_surface::entities::Action> {
-            panic!("stub ActionManager::get should not be called by these tests")
-        }
-        async fn delete(&self, _path: &str, _name: &str) -> Result<()> {
-            panic!("stub ActionManager::delete should not be called by these tests")
-        }
-        async fn list(
-            &self,
-            _opts: solx_surface::query::ListOptions,
-        ) -> Result<solx_surface::query::Page<solx_surface::entities::Action>> {
-            panic!("stub ActionManager::list should not be called by these tests")
-        }
-        async fn paths(
-            &self,
-            _opts: solx_surface::query::ListOptions,
-        ) -> Result<solx_surface::query::Page<solx_surface::query::PathFacet>> {
-            panic!("stub ActionManager::paths should not be called by these tests")
-        }
-        async fn search(
-            &self,
-            _query: solx_surface::query::ActionSearchQuery,
-        ) -> Result<solx_surface::query::Page<solx_surface::entities::Action>> {
-            panic!("stub ActionManager::search should not be called by these tests")
-        }
-        async fn exec(
-            &self,
-            _path: &str,
-            _name: &str,
-            _params: Value,
-        ) -> Result<solx_surface::entities::ActionExecResult> {
-            panic!("stub ActionManager::exec should not be called by these tests")
-        }
-        async fn exec_for(
-            &self,
-            _principal: &solx_surface::Principal,
-            _path: &str,
-            _name: &str,
-            _params: Value,
-        ) -> Result<solx_surface::entities::ActionExecResult> {
-            panic!("stub ActionManager::exec_for should not be called by these tests")
-        }
-    }
 
     /// Binds a one-shot HTTP server that captures the request line (method +
     /// path, including any query string) and whatever body bytes follow the
@@ -925,11 +883,11 @@ mod tests {
         let params = json!({ "q": "trashed=false", "pageSize": 5 });
 
         let result = run_webhook_inner(
-            &StubActionManager,
             "/p",
             "n",
             &url,
             &action_config,
+            &ActionSecrets::default(),
             &params,
             reqwest::redirect::Policy::default(),
         )
@@ -960,11 +918,11 @@ mod tests {
         let params = json!({ "name": "a-file" });
 
         let result = run_webhook_inner(
-            &StubActionManager,
             "/p",
             "n",
             &url,
             &None,
+            &ActionSecrets::default(),
             &params,
             reqwest::redirect::Policy::default(),
         )
@@ -1016,11 +974,11 @@ mod tests {
 
         let started = std::time::Instant::now();
         let result = run_webhook_inner(
-            &StubActionManager,
             "/p",
             "n",
             &url,
             &action_config,
+            &ActionSecrets::default(),
             &json!({}),
             reqwest::redirect::Policy::default(),
         )

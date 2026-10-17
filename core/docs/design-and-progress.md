@@ -373,12 +373,12 @@ OAuth actions end-to-end against a real compiled binary.
 4. ~~HTTP client/server transport~~ — done (`solx-server` + `solx-client`,
    axum/reqwest); `solx-manager` picks local vs remote impls from
    `server_url`/`SOLX_SERVER_URL` per process.
-5. ~~Secrets masking in `action_config`~~ — done (`solx-actions/src/mask.rs`).
-   `mask_action_config` redacts `secrets` and non-metadata `auth` fields on
-   every read (`get`/`list`); `unmask_merge` restores real values when a
-   caller echoes back the `"***"` sentinel on write, so a `get`-edit-`post`
-   round trip can't clobber credentials it was never shown. Execution always
-   reads through `get_unmasked`, so dispatch still sees real values.
+5. ~~Secrets out of `action_config`~~ — done
+   (`solx-actions/src/secret_config.rs`). An action's key lives in the
+   `secret_key` column, never in `action_config`, whose `secrets` values are
+   all `"***"`; inline `auth` credentials are refused on save. Reads need no
+   masking, and only root can create or change an action with secrets. This
+   replaced the earlier read-time masking (`mask.rs`).
 6. MCP Resources/Prompts (e.g. `solx://doc/{path}/{name}` URI templates) for
    GUI/context-attachment MCP clients — `solx-mcp` is tools-only today.
 7. ~~Real config-level allowlists for `Command`/`Webhook` actions~~ — done.

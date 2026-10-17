@@ -214,8 +214,11 @@ into `(path, name)` and fetching it — which `GET /types/{ref}` already is.
 processing of the request payload". The body is optional: a parameterless
 action can be invoked with an empty `POST` and no `Content-Type`.
 
-Secrets in an action's `actionConfig` are masked as `"***"` in every
-response. Saving a masked config back does not destroy the stored secret.
+An action's `actionConfig` holds no secrets. Its key, if supplied under
+`actionConfig.secrets` on save, is stored separately; every value under
+`secrets` reads back as `"***"`, and saving `"***"` back keeps the key.
+Inline credentials under `actionConfig.auth` are refused (400). Creating or
+changing an action that has `secrets` needs the root token (401 otherwise).
 
 An action whose `resultTypeRef` is `/builtin/types/WidgetDescriptor` renders
 a UI. Its result is `{ "tag_name": …, "bin_name": …, "fields": … }` (this

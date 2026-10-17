@@ -269,15 +269,17 @@ impl InternalActionHandler for ActionStart {
         let name = require_str(params, "name")?;
         let path = path_or_root(params);
         let action_params = params.get("params").cloned().unwrap_or_else(|| json!({}));
-        // Both travel into the detached run: dropping the caller while
+        // All three travel into the detached run: dropping the caller while
         // keeping the principal would let an action re-enter as an
-        // apparently external call (see `InternalCallCtx::external_principal`).
+        // apparently external call (see `InternalCallCtx::external_principal`),
+        // and dropping the scope would let a model detach an excluded action.
         self.executor
             .start_invocation(
                 path,
                 name,
                 action_params,
                 ctx.principal.clone(),
+                ctx.scope,
                 ctx.caller.clone(),
             )
             .await

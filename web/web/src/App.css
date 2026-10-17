@@ -981,6 +981,15 @@
   font-size: 13px;
 }
 
+.dialog__notice {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: var(--accent-soft);
+  color: var(--text);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
 .dialog__footer {
   display: flex;
   justify-content: flex-end;
@@ -1218,6 +1227,11 @@
 .doc-card__type-badge[data-kind="trusted"] {
   background: var(--warning-soft);
   color: var(--warning);
+}
+
+.doc-card__type-badge[data-kind="locked"] {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .entity-editor-section-sep {

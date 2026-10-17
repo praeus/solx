@@ -11,6 +11,23 @@ use solx_packages::catalog::{
 };
 use solx_scripts::CommandRunner;
 
+/// No actions to lock: these tests are about what an install does around
+/// its script, and the fake runner saves nothing.
+struct NoActions;
+
+#[async_trait]
+impl solx_packages::PackageActions for NoActions {
+    async fn actions_under(&self, _base: &str) -> solx_surface::error::Result<Vec<(String, String)>> {
+        Ok(Vec::new())
+    }
+    async fn set_locked(&self, _p: &str, _n: &str, _l: bool) -> solx_surface::error::Result<()> {
+        Ok(())
+    }
+    async fn has_secrets(&self, _p: &str, _n: &str) -> solx_surface::error::Result<bool> {
+        Ok(false)
+    }
+}
+
 struct NoopRunner;
 
 #[async_trait]
@@ -62,7 +79,7 @@ async fn installs_requirements_first_from_a_folder_source() {
     assert_eq!(state(&view, "solx-reddit"), EntryState::Available);
     assert_eq!(state(&view, "solx-git"), EntryState::NotReleased);
 
-    let out = install_from_catalog(&NoopRunner, &cfg, &release, "solx-reddit")
+    let out = install_from_catalog(&NoopRunner, &NoActions, &cfg, &release, "solx-reddit")
         .await
         .unwrap();
     assert_eq!(out.package.name, "solx-reddit");
@@ -73,11 +90,11 @@ async fn installs_requirements_first_from_a_folder_source() {
     let view = catalog_view(&cfg, &source, &release);
     assert_eq!(state(&view, "solx-reddit"), EntryState::Installed);
 
-    let err = install_from_catalog(&NoopRunner, &cfg, &release, "not-in-catalog")
+    let err = install_from_catalog(&NoopRunner, &NoActions, &cfg, &release, "not-in-catalog")
         .await
         .unwrap_err();
     assert!(err.to_string().contains("not in the package catalog"));
-    let err = install_from_catalog(&NoopRunner, &cfg, &release, "solx-git")
+    let err = install_from_catalog(&NoopRunner, &NoActions, &cfg, &release, "solx-git")
         .await
         .unwrap_err();
     assert!(err.to_string().contains("solx-git"));
@@ -92,7 +109,7 @@ async fn a_newer_release_is_an_update() {
     write_zip(zips.path(), "a.zip", "solx-names", "0.1.0");
     let source = PackageSource::Dir(zips.path().to_path_buf());
     let release = resolve(&source).await.unwrap();
-    install_from_catalog(&NoopRunner, &cfg, &release, "solx-names")
+    install_from_catalog(&NoopRunner, &NoActions, &cfg, &release, "solx-names")
         .await
         .unwrap();
 

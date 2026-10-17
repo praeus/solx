@@ -84,6 +84,8 @@ fn build<R: Runtime>(state: SolxState) -> TauriPlugin<R> {
             commands::config_update,
             commands::config_install_package,
             commands::config_uninstall_package,
+            commands::config_actions_save,
+            commands::config_actions_delete,
             commands::packages_catalog,
             commands::packages_install,
             commands::packages_uninstall,

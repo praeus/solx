@@ -56,6 +56,11 @@ pub struct InstalledPackage {
     /// so `uninstall_package` would silently revoke nothing.
     #[serde(default, alias = "granted_webhook_prefixes")]
     pub granted_base_urls: Vec<String>,
+    /// Refs of the actions the install locked (every action under
+    /// `/packages/<name>/` but the manifest's `unlocked_actions`).
+    /// Informational; empty for a record from before locking existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locked_actions: Vec<String>,
 }
 
 /// Typed snapshot of the config. All fields are optional so a partial or

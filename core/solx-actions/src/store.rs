@@ -1,14 +1,14 @@
 //! [`ActionManager`] CRUD, listing and full-text search over the actions
-//! database. Everything returned from here has `action_config` redacted —
-//! see [`crate::mask`].
+//! database. `action_config` is stored free of secret material, so it is
+//! returned as is — see [`crate::secret_config`].
 
 use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::Value;
-use solx_surface::entities::{Action, ActionExecResult, ActionInput};
+use solx_surface::entities::{Action, ActionExecResult, ActionInput, ActionType};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::ActionManager;
-use solx_surface::Principal;
+use solx_surface::{ActionSecrets, ExecScope, Principal};
 use solx_surface::path::{full_ref, normalize_path, validate_name};
 use solx_surface::query::{
     ActionSearchQuery, ExcludeMode, ListOptions, ListSchema, ListSql, Page, PathFacet, SortOrder,
@@ -16,8 +16,8 @@ use solx_surface::query::{
 use uuid::Uuid;
 
 use crate::db::map_db;
-use crate::row::{action_type_to_str, get_row, row_to_action, SELECT};
-use crate::{mask, LocalActionManager};
+use crate::row::{action_type_to_str, get_row, get_secret_key, row_to_action, SELECT};
+use crate::{lock, secret_config, LocalActionManager};
 
 const DEFAULT_LIMIT: usize = 50;
 
@@ -25,9 +25,8 @@ const DEFAULT_LIMIT: usize = 50;
 /// are JSON arrays, so filtering them is a substring match over that text —
 /// enough to find "every action tagged mcp" without a join table.
 ///
-/// `action_config` is deliberately absent: it can hold secrets (see
-/// [`crate::mask`]), and a LIKE filter over it would leak their contents by
-/// letting a caller probe for substrings.
+/// `action_config` is deliberately absent: it is free-form JSON, not a
+/// column anyone should be filtering on.
 const LIST_SCHEMA: ListSchema<'static> = ListSchema {
     filterable: &[
         "name",
@@ -97,20 +96,61 @@ fn fts_match_query(q: &str) -> String {
 }
 
 impl LocalActionManager {
-    /// Read a row **without** redacting `action_config`.
+    /// Read a row along with its [`ActionSecrets`] — the key from the
+    /// `secret_key` column, which nothing else reads.
     ///
-    /// Execution needs the real thing — `run_command` reads `cwd`,
-    /// `run_webhook` reads `auth`/`headers`, and `crate::auth` resolves
-    /// credentials out of it. The [`ActionManager::get`] trait method wraps
-    /// this and masks; nothing that leaves the process should use this one.
-    pub(crate) async fn get_unmasked(&self, path: &str, name: &str) -> Result<Action> {
+    /// For execution only: the result must never leave the process.
+    pub(crate) async fn get_with_secrets(
+        &self,
+        path: &str,
+        name: &str,
+    ) -> Result<(Action, ActionSecrets)> {
         let path = normalize_path(path)?;
         validate_name(name)?;
         let fr = full_ref(&path, name)?;
         let conn = self.db.connect().await?;
-        get_row(&conn, &path, name.trim())
+        let action = get_row(&conn, &path, name.trim())
             .await?
-            .ok_or_else(|| SolxError::NotFound(format!("action {fr}")))
+            .ok_or_else(|| SolxError::NotFound(format!("action {fr}")))?;
+        let key = get_secret_key(&conn, &path, name.trim()).await?;
+        let secrets = ActionSecrets::new(action.action_config.as_ref(), key);
+        Ok((action, secrets))
+    }
+
+    /// Refuse when any of `targets` (store-relative paths about to be
+    /// written or deleted) is a locked action's pinned artifact. Every
+    /// surface that writes or deletes files on content's behalf calls this:
+    /// the file built-ins, REST `/files` for anything but the root token,
+    /// and the desktop app's main window. See `crate::lock`.
+    pub async fn guard_pinned_files<'a>(
+        &self,
+        targets: impl IntoIterator<Item = &'a str>,
+    ) -> Result<()> {
+        let pinned = self.pinned_paths().await?;
+        match lock::pinned_target(&pinned, targets) {
+            Some(path) => Err(SolxError::Invalid(format!(
+                "'{path}' is the artifact of a locked action; only an operator can replace \
+                 or remove it (reinstall its package, or unlock the action with `solx action unlock`)"
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// The store path of every locked action's pinned artifact.
+    async fn pinned_paths(&self) -> Result<Vec<String>> {
+        let conn = self.db.connect().await?;
+        let mut rows = conn
+            .query(
+                "SELECT pin_path FROM actions WHERE locked=1 AND pin_path<>''",
+                (),
+            )
+            .await
+            .map_err(map_db)?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await.map_err(map_db)? {
+            out.push(row.get::<String>(0).map_err(map_db)?);
+        }
+        Ok(out)
     }
 }
 
@@ -157,19 +197,23 @@ impl ActionManager for LocalActionManager {
         let action_type = input
             .action_type
             .or_else(|| existing.as_ref().and_then(|a| a.action_type));
-        // `get`/`list` redact secret material, so an incoming config may be
-        // one the caller was never actually shown. Restore anything echoed
-        // back as the mask sentinel from the stored row rather than writing
-        // "***" over a real key — see `crate::mask`.
-        let action_config = match input.action_config {
-            Some(incoming) => Some(
-                mask::unmask_merge(
-                    incoming,
-                    existing.as_ref().and_then(|a| a.action_config.as_ref()),
-                )
-                .map_err(SolxError::Invalid)?,
+        // A key supplied under `secrets` moves to its own column, and inline
+        // credentials are refused, so the stored config holds no secret
+        // material — see `crate::secret_config`.
+        let existing_key = match existing {
+            Some(_) => get_secret_key(&conn, &path, &name).await?,
+            None => None,
+        };
+        let (action_config, secret_key) = match input.action_config {
+            Some(mut incoming) => {
+                let key = secret_config::normalize(&mut incoming, existing_key.as_deref())
+                    .map_err(SolxError::Invalid)?;
+                (Some(incoming), key)
+            }
+            None => (
+                existing.as_ref().and_then(|a| a.action_config.clone()),
+                existing_key,
             ),
-            None => existing.as_ref().and_then(|a| a.action_config.clone()),
         };
         let capabilities = merge_vec!(capabilities);
         let phrases = merge_vec!(phrases);
@@ -182,6 +226,25 @@ impl ActionManager for LocalActionManager {
         let now_s = now.to_rfc3339();
         let id = existing.as_ref().map(|a| a.id).unwrap_or_else(Uuid::new_v4);
         let created_at = existing.as_ref().map(|a| a.created_at).unwrap_or(now);
+        // This method is the operator path: whoever reaches it may lock and
+        // unlock, and content is stopped earlier, by `guard_locked_action`.
+        // Every save of a locked Script/WASM action pins (or re-pins) its
+        // artifact; see `crate::lock`.
+        let locked = input
+            .locked
+            .unwrap_or_else(|| existing.as_ref().is_some_and(|a| a.locked));
+        let pin = match (locked, action_type) {
+            (true, Some(ActionType::Script | ActionType::Wasm)) => Some(
+                lock::pin_artifact(
+                    &self.files,
+                    &id.to_string(),
+                    bin_name.as_deref(),
+                    &full_ref(&path, &name)?,
+                )
+                .await?,
+            ),
+            _ => None,
+        };
 
         let params = libsql::params![
             id.to_string(),
@@ -202,42 +265,42 @@ impl ActionManager for LocalActionManager {
             trusted,
             created_at.to_rfc3339(),
             now_s.clone(),
+            secret_key.unwrap_or_default(),
+            locked,
+            pin.as_ref().map(|p| p.rel_path.clone()).unwrap_or_default(),
+            pin.map(|p| p.sha256).unwrap_or_default(),
         ];
 
         if existing.is_some() {
             conn.execute(
-                "UPDATE actions SET caption=?4,description=?5,capabilities=?6,phrases=?7,category=?8,param_type_ref=?9,result_type_ref=?10,action_type=?11,fn_name=?12,bin_name=?13,action_config=?14,files=?15,trusted=?16,updated_at=?18 WHERE path=?2 AND name=?3",
+                "UPDATE actions SET caption=?4,description=?5,capabilities=?6,phrases=?7,category=?8,param_type_ref=?9,result_type_ref=?10,action_type=?11,fn_name=?12,bin_name=?13,action_config=?14,files=?15,trusted=?16,updated_at=?18,secret_key=?19,locked=?20,pin_path=?21,pin_sha256=?22 WHERE path=?2 AND name=?3",
                 params,
             )
             .await
             .map_err(map_db)?;
         } else {
             conn.execute(
-                "INSERT INTO actions (id,path,name,caption,description,capabilities,phrases,category,param_type_ref,result_type_ref,action_type,fn_name,bin_name,action_config,files,trusted,created_at,updated_at) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+                "INSERT INTO actions (id,path,name,caption,description,capabilities,phrases,category,param_type_ref,result_type_ref,action_type,fn_name,bin_name,action_config,files,trusted,created_at,updated_at,secret_key,locked,pin_path,pin_sha256) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
                 params,
             )
             .await
             .map_err(map_db)?;
         }
 
-        let mut saved = get_row(&conn, &path, &name)
+        get_row(&conn, &path, &name)
             .await?
-            .ok_or_else(|| SolxError::Other("action vanished after write".into()))?;
-        // `get`/`list`/`search` all redact action_config.secrets/auth before
-        // returning (see `crate::mask`) -- `save`'s own response must too, or
-        // an upsert (which necessarily carries the real key/credential in
-        // its *request*, same as any of those reads' prior write did) echoes
-        // that same material straight back out in the response instead of
-        // just confirming the write succeeded.
-        mask::mask_action_config_opt(&mut saved.action_config);
-        Ok(saved)
+            .ok_or_else(|| SolxError::Other("action vanished after write".into()))
     }
 
     async fn get(&self, path: &str, name: &str) -> Result<Action> {
-        let mut action = self.get_unmasked(path, name).await?;
-        mask::mask_action_config_opt(&mut action.action_config);
-        Ok(action)
+        let path = normalize_path(path)?;
+        validate_name(name)?;
+        let fr = full_ref(&path, name)?;
+        let conn = self.db.connect().await?;
+        get_row(&conn, &path, name.trim())
+            .await?
+            .ok_or_else(|| SolxError::NotFound(format!("action {fr}")))
     }
 
     async fn delete(&self, path: &str, name: &str) -> Result<()> {
@@ -283,9 +346,7 @@ impl ActionManager for LocalActionManager {
         let mut rows = conn.query(&sql, binds).await.map_err(map_db)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(map_db)? {
-            let mut action = row_to_action(&row)?;
-            mask::mask_action_config_opt(&mut action.action_config);
-            items.push(action);
+            items.push(row_to_action(&row)?);
         }
         Ok(Page::new(items, total, limit, offset))
     }
@@ -350,7 +411,7 @@ impl ActionManager for LocalActionManager {
         let select = "SELECT a.id,a.path,a.name,a.caption,a.description,a.capabilities,\
                        a.phrases,a.category,a.param_type_ref,a.result_type_ref,a.action_type,\
                        a.fn_name,a.bin_name,a.action_config,a.files,a.trusted,a.created_at,\
-                       a.updated_at FROM actions a";
+                       a.updated_at,a.locked,a.pin_path,a.pin_sha256 FROM actions a";
 
         // `actions_fts` also has a `path` column, so a plain join would make
         // `q.where_clause`'s unqualified `path`/`created_at`/etc. ambiguous.
@@ -390,9 +451,7 @@ impl ActionManager for LocalActionManager {
         let mut rows = conn.query(&sql, binds).await.map_err(map_db)?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await.map_err(map_db)? {
-            let mut action = row_to_action(&row)?;
-            mask::mask_action_config_opt(&mut action.action_config);
-            items.push(action);
+            items.push(row_to_action(&row)?);
         }
         Ok(Page::new(items, total, limit, offset))
     }
@@ -402,7 +461,8 @@ impl ActionManager for LocalActionManager {
     /// `TokenAuthority::authenticate`, so both caller and principal are
     /// `None`; see [`LocalActionManager::exec_as`].
     async fn exec(&self, path: &str, name: &str, params: Value) -> Result<ActionExecResult> {
-        self.exec_as(path, name, params, None, None).await
+        self.exec_as(path, name, params, None, None, ExecScope::Unrestricted)
+            .await
     }
 
     /// Entry point for authenticated routes — the HTTP REST exec and the
@@ -414,7 +474,28 @@ impl ActionManager for LocalActionManager {
         name: &str,
         params: Value,
     ) -> Result<ActionExecResult> {
-        self.exec_as(path, name, params, None, Some(principal)).await
+        self.exec_as(
+            path,
+            name,
+            params,
+            None,
+            Some(principal),
+            ExecScope::Unrestricted,
+        )
+        .await
+    }
+
+    /// Entry point for the MCP server, stdio or `/mcp`: the whole chain is
+    /// held to the tooling exclusions.
+    async fn exec_tooling(
+        &self,
+        principal: Option<&Principal>,
+        path: &str,
+        name: &str,
+        params: Value,
+    ) -> Result<ActionExecResult> {
+        self.exec_as(path, name, params, None, principal, ExecScope::Tooling)
+            .await
     }
 }
 
@@ -424,7 +505,6 @@ mod tests {
     use crate::db::{map_db, Db};
     use crate::schema::DDL;
     use crate::test_support::*;
-    use solx_surface::entities::ActionType;
 
     /// Seed a handful of actions with distinguishable fields for list tests.
     async fn seed_list_fixtures(m: &LocalActionManager) {
@@ -642,6 +722,56 @@ mod tests {
         assert_eq!(page.items[0].name, "old-timer");
     }
 
+    /// A row saved before the `secret_key` column holds its key (and maybe
+    /// an inline credential) in `action_config`. Read-time masking is gone,
+    /// so opening the database must move both out before anything reads it.
+    #[tokio::test]
+    async fn opening_moves_a_legacy_key_out_of_the_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let actions_db_path = dir.path().join("actions.db");
+        {
+            let db = Db::open(&actions_db_path).await.unwrap();
+            let conn = db.connect().await.unwrap();
+            conn.execute_batch(DDL).await.map_err(map_db).unwrap();
+            let now = Utc::now().to_rfc3339();
+            let cfg = serde_json::json!({
+                "secrets": { "API_TOKEN": TEST_KEY },
+                "auth": { "type": "bearer", "token": "inline-token" }
+            });
+            conn.execute(
+                "INSERT INTO actions (id,path,name,caption,description,capabilities,phrases,category,param_type_ref,result_type_ref,action_type,fn_name,bin_name,action_config,files,trusted,created_at,updated_at) \
+                 VALUES (?1,'/tools','legacy','','','[]','[]','','','','webhook','https://example.com','',?2,'[]',0,?3,?3)",
+                libsql::params![Uuid::new_v4().to_string(), cfg.to_string(), now],
+            )
+            .await
+            .map_err(map_db)
+            .unwrap();
+        }
+
+        let (_cfg, m) = open_manager(dir.path(), &actions_db_path).await;
+        let got = serde_json::to_string(&m.get("/tools", "legacy").await.unwrap()).unwrap();
+        assert!(!got.contains(TEST_KEY), "key leaked: {got}");
+        assert!(!got.contains("inline-token"), "credential leaked: {got}");
+        let (action, secrets) = m.get_with_secrets("/tools", "legacy").await.unwrap();
+        assert_eq!(secrets.key_for("API_TOKEN"), Some(TEST_KEY));
+        assert_eq!(
+            action.action_config.unwrap()["secrets"]["API_TOKEN"],
+            serde_json::json!("***")
+        );
+
+        // A package reinstall saves "***", which needs the moved key.
+        m.save(
+            "/tools",
+            "legacy",
+            ActionInput {
+                action_config: Some(cfg_with_secret("***")),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn list_ignores_unknown_filter_field() {
         let (_d, _c, m) = setup().await;
@@ -667,7 +797,7 @@ mod tests {
             ActionInput {
                 action_type: Some(ActionType::Command),
                 fn_name: Some("echo".into()),
-                action_config: Some(cfg_with_secret("c3VwZXItc2VjcmV0LWtleS1oZXJlLXBhZGRpbmc=")),
+                action_config: Some(cfg_with_secret(TEST_KEY)),
                 ..Default::default()
             },
         )
@@ -721,29 +851,19 @@ mod tests {
         assert_eq!(desc, vec!["/tools/beta-tool", "/tools/alpha-tool"]);
     }
 
+    /// The key moves to its own column on save: every read shows `"***"`,
+    /// and only `get_with_secrets` (execution) can reach the key.
     #[tokio::test]
-    async fn get_and_list_redact_secrets_but_exec_reads_them_raw() {
+    async fn the_key_is_stored_apart_from_the_config() {
         let (_d, _c, m) = setup().await;
         let input = ActionInput {
             action_type: Some(ActionType::Command),
             fn_name: Some("echo".into()),
-            action_config: Some(cfg_with_secret("c3VwZXItc2VjcmV0LWtleS1oZXJlLXBhZGRpbmc=")),
+            action_config: Some(cfg_with_secret(TEST_KEY)),
             ..Default::default()
         };
-        m.save("/tools", "s", input).await.unwrap();
-
-        // Outbound reads are redacted...
+        let saved = m.save("/tools", "s", input).await.unwrap();
         let got = m.get("/tools", "s").await.unwrap();
-        assert_eq!(
-            got.action_config.as_ref().unwrap()["secrets"]["API_TOKEN"],
-            serde_json::json!("***")
-        );
-        // ...but non-secret fields survive, so the config stays inspectable.
-        assert_eq!(
-            got.action_config.as_ref().unwrap()["cwd"],
-            serde_json::json!("/work")
-        );
-
         let page = m
             .list(ListOptions {
                 path_prefix: Some("/tools".into()),
@@ -751,18 +871,29 @@ mod tests {
             })
             .await
             .unwrap();
-        let listed = page.items.iter().find(|a| a.name == "s").unwrap();
-        assert_eq!(
-            listed.action_config.as_ref().unwrap()["secrets"]["API_TOKEN"],
-            serde_json::json!("***")
-        );
+        let found = m
+            .search(ActionSearchQuery {
+                q: Some("s".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
 
-        // Execution reads through `get_unmasked`, so it still sees the key.
-        let raw = m.get_unmasked("/tools", "s").await.unwrap();
-        assert_eq!(
-            raw.action_config.as_ref().unwrap()["secrets"]["API_TOKEN"],
-            serde_json::json!("c3VwZXItc2VjcmV0LWtleS1oZXJlLXBhZGRpbmc=")
-        );
+        for out in [
+            serde_json::to_string(&saved).unwrap(),
+            serde_json::to_string(&got).unwrap(),
+            serde_json::to_string(&page).unwrap(),
+            serde_json::to_string(&found).unwrap(),
+        ] {
+            assert!(!out.contains(TEST_KEY), "key leaked: {out}");
+        }
+        let cfg = got.action_config.as_ref().unwrap();
+        assert_eq!(cfg["secrets"]["API_TOKEN"], serde_json::json!("***"));
+        assert_eq!(cfg["cwd"], serde_json::json!("/work"));
+
+        let (_, secrets) = m.get_with_secrets("/tools", "s").await.unwrap();
+        assert_eq!(secrets.key_for("API_TOKEN"), Some(TEST_KEY));
+        assert_eq!(secrets.key_for("UNLISTED"), None);
     }
 
     #[tokio::test]
@@ -1079,44 +1210,18 @@ mod tests {
             .any(|c| c == solx_config::CAP_DESTRUCTIVE));
     }
 
-    /// Regression test: `save`'s own response must be redacted too, not just
-    /// subsequent `get`/`list` calls -- an upsert's *request* necessarily
-    /// carries the real secret (that's how it gets stored), but echoing that
-    /// same value back in the *response* is the same leak `get`/`list`
-    /// exist to prevent, just one call earlier.
+    /// The round trip: fetch, edit an unrelated field, save the whole thing
+    /// back. The `"***"` read back is the stored value, so the key stays.
     #[tokio::test]
-    async fn save_response_redacts_secrets_too() {
+    async fn saving_back_a_fetched_config_keeps_the_key() {
         let (_d, _c, m) = setup().await;
-        let input = ActionInput {
-            action_type: Some(ActionType::Command),
-            fn_name: Some("echo".into()),
-            action_config: Some(cfg_with_secret("c3VwZXItc2VjcmV0LWtleS1oZXJlLXBhZGRpbmc=")),
-            ..Default::default()
-        };
-        let saved = m.save("/tools", "s", input).await.unwrap();
-        assert_eq!(
-            saved.action_config.as_ref().unwrap()["secrets"]["API_TOKEN"],
-            serde_json::json!("***")
-        );
-        assert_eq!(
-            saved.action_config.as_ref().unwrap()["cwd"],
-            serde_json::json!("/work")
-        );
-    }
-
-    /// The round trip that would otherwise destroy a key: fetch (redacted),
-    /// edit an unrelated field, save the whole thing back.
-    #[tokio::test]
-    async fn saving_back_a_redacted_config_preserves_the_key() {
-        let (_d, _c, m) = setup().await;
-        let real_key = "c3VwZXItc2VjcmV0LWtleS1oZXJlLXBhZGRpbmc=";
         m.save(
             "/tools",
             "s",
             ActionInput {
                 action_type: Some(ActionType::Command),
                 fn_name: Some("echo".into()),
-                action_config: Some(cfg_with_secret(real_key)),
+                action_config: Some(cfg_with_secret(TEST_KEY)),
                 ..Default::default()
             },
         )
@@ -1136,18 +1241,48 @@ mod tests {
         .await
         .unwrap();
 
-        let raw = m
-            .get_unmasked("/tools", "s")
+        let (action, secrets) = m.get_with_secrets("/tools", "s").await.unwrap();
+        assert_eq!(secrets.key_for("API_TOKEN"), Some(TEST_KEY));
+        assert_eq!(
+            action.action_config.unwrap()["cwd"],
+            serde_json::json!("/elsewhere")
+        );
+    }
+
+    /// An upsert without `action_config` keeps the key; a config without
+    /// `secrets` drops it.
+    #[tokio::test]
+    async fn the_key_follows_the_secrets_map() {
+        let (_d, _c, m) = setup().await;
+        let save = |cfg: Option<serde_json::Value>| ActionInput {
+            action_type: Some(ActionType::Command),
+            action_config: cfg,
+            ..Default::default()
+        };
+        m.save("/tools", "s", save(Some(cfg_with_secret(TEST_KEY))))
             .await
-            .unwrap()
-            .action_config
             .unwrap();
-        assert_eq!(raw["secrets"]["API_TOKEN"], serde_json::json!(real_key));
-        assert_eq!(raw["cwd"], serde_json::json!("/elsewhere"));
+        m.save("/tools", "s", save(None)).await.unwrap();
+        let (_, secrets) = m.get_with_secrets("/tools", "s").await.unwrap();
+        assert_eq!(secrets.key_for("API_TOKEN"), Some(TEST_KEY));
+
+        m.save(
+            "/tools",
+            "s",
+            save(Some(serde_json::json!({ "cwd": "/w" }))),
+        )
+        .await
+        .unwrap();
+        // Re-adding the name with "***" now has no key to fall back on.
+        let err = m
+            .save("/tools", "s", save(Some(cfg_with_secret("***"))))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("has no key yet"), "{err}");
     }
 
     #[tokio::test]
-    async fn saving_an_invented_mask_sentinel_is_rejected() {
+    async fn saving_a_mask_without_a_key_is_rejected() {
         let (_d, _c, m) = setup().await;
         let err = m
             .save(
@@ -1161,10 +1296,27 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(
-            err.to_string().contains("no stored value to restore"),
-            "{err}"
-        );
+        assert!(err.to_string().contains("has no key yet"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn saving_an_inline_credential_is_rejected() {
+        let (_d, _c, m) = setup().await;
+        let err = m
+            .save(
+                "/hooks",
+                "w",
+                ActionInput {
+                    action_type: Some(ActionType::Webhook),
+                    action_config: Some(serde_json::json!({
+                        "auth": { "type": "bearer", "token": "secret-token" }
+                    })),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("inline credential"), "{err}");
     }
 
     #[tokio::test]

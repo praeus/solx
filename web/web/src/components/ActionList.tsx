@@ -120,6 +120,7 @@ function ActionCard({
   const category = String(action.category ?? "").trim();
   const actionType = String(action.actionType ?? "").trim().toLowerCase() || "wasm";
   const trusted = Boolean(action.trusted);
+  const locked = Boolean(action.locked);
   const updatedAt = String(action.updatedAt ?? "");
   const deleteMutation = useDeleteAction();
 
@@ -147,6 +148,15 @@ function ActionCard({
           <span className="doc-card__name">{name}</span>
           <span className="doc-card__type-badge">{actionType}</span>
           {trusted && <span className="doc-card__type-badge" data-kind="trusted">trusted</span>}
+          {locked && (
+            <span
+              className="doc-card__type-badge"
+              data-kind="locked"
+              title="Locked: runs, but changes only through the solx CLI, a package install, or Settings"
+            >
+              locked
+            </span>
+          )}
         </div>
         {caption && <div className="doc-card__title">{caption}</div>}
         <div className="doc-card__path">{path}</div>
@@ -157,8 +167,10 @@ function ActionCard({
         className="doc-card__delete"
         onClick={handleDelete}
         aria-label={`Delete ${name}`}
-        title={trusted ? "Cannot delete trusted built-in" : "Delete"}
-        disabled={deleteMutation.isPending || trusted}
+        title={
+          trusted ? "Cannot delete trusted built-in" : locked ? "Cannot delete a locked action" : "Delete"
+        }
+        disabled={deleteMutation.isPending || trusted || locked}
       >
         ✕
       </button>

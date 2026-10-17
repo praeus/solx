@@ -1037,6 +1037,7 @@ mod tests {
             installed_at: "now".into(),
             granted_commands: vec![],
             granted_base_urls: vec![],
+            locked_actions: vec![],
         })
         .unwrap();
         assert_eq!(cfg.list_packages().len(), 1);

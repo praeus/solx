@@ -5,8 +5,9 @@ use axum::{Extension, Json, Router};
 use axum_extra::extract::Query;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use solx_surface::auth::NO_PRINCIPAL_HEADER;
+use solx_surface::auth::{EXEC_SCOPE_HEADER, NO_PRINCIPAL_HEADER};
 use solx_surface::entities::{Action, ActionExecResult, ActionInput};
+use solx_surface::error::SolxError;
 use solx_surface::managers::Solx;
 use solx_surface::query::{ActionSearchQuery, ListOptions, Page, PathFacet};
 use solx_surface::Principal;
@@ -44,14 +45,30 @@ pub fn router() -> Router<AppState> {
         .route("/actions-search", get(search_actions))
 }
 
+/// Only the root token may create or change an action with scoped secrets,
+/// change a locked action, or lock or unlock one — see
+/// `solx_actions::guard_keyed_action` and `solx_actions::guard_locked_action`.
 async fn save_action(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Path(reference): Path<String>,
     Query(mode): Query<ModeParam>,
     Json(input): Json<ActionInput>,
 ) -> Result<Json<Action>, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
     exclude::guard(&state, EntityKind::Action, &mode, &path, &name, true).await?;
+    if principal != Principal::Root {
+        let existing = match state.app.actions().get(&path, &name).await {
+            Ok(a) => Some(a),
+            Err(SolxError::NotFound(_)) => None,
+            Err(e) => return Err(e.into()),
+        };
+        let reference = format!("{path}/{name}");
+        solx_actions::guard_keyed_action(existing.as_ref(), &input, &reference)
+            .map_err(SolxError::Unauthorized)?;
+        solx_actions::guard_locked_action(existing.as_ref(), Some(&input), &reference)
+            .map_err(SolxError::Unauthorized)?;
+    }
     let action = state.app.actions().save(&path, &name, input).await?;
     Ok(Json(action))
 }
@@ -67,13 +84,24 @@ async fn get_action(
     Ok(Json(action))
 }
 
+/// Only the root token may delete a locked action.
 async fn delete_action(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Path(reference): Path<String>,
     Query(mode): Query<ModeParam>,
 ) -> Result<StatusCode, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
     exclude::guard(&state, EntityKind::Action, &mode, &path, &name, false).await?;
+    if principal != Principal::Root {
+        let existing = match state.app.actions().get(&path, &name).await {
+            Ok(a) => Some(a),
+            Err(SolxError::NotFound(_)) => None,
+            Err(e) => return Err(e.into()),
+        };
+        solx_actions::guard_locked_action(existing.as_ref(), None, &format!("{path}/{name}"))
+            .map_err(SolxError::Unauthorized)?;
+    }
     state.app.actions().delete(&path, &name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -139,6 +167,10 @@ struct SearchTerm {
 /// with no principal, like a local `exec`. `solx-client`'s `exec` does, so
 /// the CLI and its scripts can't reach root-only built-ins just because
 /// they present the loopback root token.
+///
+/// `X-Solx-Scope: tooling` ([`EXEC_SCOPE_HEADER`]) runs it in the tooling
+/// scope: `solx-client`'s `exec_tooling` sends it for an MCP server that
+/// proxies here. It only ever adds restrictions, so any caller may send it.
 async fn exec_action(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -148,15 +180,22 @@ async fn exec_action(
 ) -> Result<Json<ActionExecResult>, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
     let params = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
-    let drop_principal = headers
-        .get(NO_PRINCIPAL_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.trim().eq_ignore_ascii_case("none"));
+    let header_is = |header: &str, value: &str| {
+        headers
+            .get(header)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case(value))
+    };
+    let principal = (!header_is(NO_PRINCIPAL_HEADER, "none")).then_some(principal);
     let actions = state.app.actions();
-    let result = if drop_principal {
-        actions.exec(&path, &name, params).await?
-    } else {
-        actions.exec_for(&principal, &path, &name, params).await?
+    let result = match (principal, header_is(EXEC_SCOPE_HEADER, "tooling")) {
+        (principal, true) => {
+            actions
+                .exec_tooling(principal.as_ref(), &path, &name, params)
+                .await?
+        }
+        (Some(principal), false) => actions.exec_for(&principal, &path, &name, params).await?,
+        (None, false) => actions.exec(&path, &name, params).await?,
     };
     Ok(Json(result))
 }

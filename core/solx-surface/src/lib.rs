@@ -15,15 +15,15 @@ pub mod path;
 pub mod query;
 pub mod wire;
 
-pub use auth::{ActionCredential, Principal, TokenAuthority};
+pub use auth::{ActionCredential, ExecScope, Principal, TokenAuthority};
 pub use error::{Result, SolxError};
 
 pub use entities::{
-    Action, ActionExecResult, ActionInput, ActionType, DocLink, Document, DocumentInput, FileRef,
+    Action, ActionExecResult, ActionInput, ActionType, ArtifactPin, DocLink, Document, DocumentInput, FileRef,
     LinkKind, TypeEntity, TypeInput,
 };
 pub use internal_actions::{
-    ActionExecutor, Caller, CallerInfo, InternalActionHandler, InternalActionRegistry,
+    ActionExecutor, ActionSecrets, Caller, CallerInfo, InternalActionHandler, InternalActionRegistry,
     InternalCallCtx, SeedAction,
 };
 pub use managers::{ActionManager, DocManager, FileStore, Solx, TypeManager};

@@ -236,7 +236,7 @@ async fn a_detached_run_releases_its_token_at_completion() {
     let s = registry_setup(2, 0, None).await;
     let started = s
         .actions
-        .start_invocation("/t", "token", json!({}), None, None)
+        .start_invocation("/t", "token", json!({}), None, solx_surface::ExecScope::Unrestricted, None)
         .await
         .unwrap();
     let token = child_token(&s.token_file).await;

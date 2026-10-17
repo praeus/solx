@@ -208,7 +208,7 @@ const NONCE_LEN: usize = 12;
 /// Keys are meant to be produced only by the `solx random` command, so
 /// rejecting anything else keeps someone from wiring up a weak
 /// hand-typed key.
-fn decode_key(key_b64: &str) -> Result<[u8; KEY_LEN], String> {
+pub(crate) fn decode_key(key_b64: &str) -> Result<[u8; KEY_LEN], String> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(key_b64)
         .map_err(|e| format!("secret key is not valid base64: {e}"))?;

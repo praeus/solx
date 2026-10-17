@@ -60,6 +60,11 @@ pub struct App {
     /// wiring.
     #[cfg(feature = "registry")]
     registry: Option<Arc<solx_registry::Registry>>,
+    /// The concrete action manager behind `actions`, for checks that aren't
+    /// on the `ActionManager` trait (`guard_pinned_files`). `Some` only for
+    /// local wiring; a remote host enforces them itself.
+    #[cfg(feature = "local")]
+    local_actions: Option<Arc<LocalActionManager>>,
 }
 
 impl App {
@@ -183,6 +188,7 @@ impl App {
             .context("register the token registry's builtins")?;
         actions_concrete.set_self_ref(Arc::downgrade(&actions_concrete));
         actions_concrete.set_token_authority(authority.authority.clone());
+        let local_actions = Some(actions_concrete.clone());
         let actions: Arc<dyn ActionManager> = actions_concrete;
 
         Ok(Arc::new(App {
@@ -195,6 +201,7 @@ impl App {
             authority: Some(authority.authority),
             #[cfg(feature = "registry")]
             registry: Some(authority.registry),
+            local_actions,
         }))
     }
 
@@ -240,6 +247,8 @@ impl App {
             authority: None,
             #[cfg(feature = "registry")]
             registry: None,
+            #[cfg(feature = "local")]
+            local_actions: None,
         }))
     }
 
@@ -295,6 +304,51 @@ async fn build_authority(config: &Arc<ConfigService>) -> Result<BuiltAuthority> 
 }
 
 impl App {
+    /// Refuse, for content, a write or delete of any of `targets` that is a
+    /// locked action's pinned artifact — see
+    /// `solx_actions::LocalActionManager::guard_pinned_files`. A no-op for a
+    /// remote app, whose server enforces it.
+    pub async fn guard_pinned_files(&self, targets: &[&str]) -> solx_surface::error::Result<()> {
+        #[cfg(feature = "local")]
+        if let Some(local) = &self.local_actions {
+            return local.guard_pinned_files(targets.iter().copied()).await;
+        }
+        let _ = targets;
+        Ok(())
+    }
+
+    /// Refuse, for content, a save (`incoming`) or delete (`None`) of the
+    /// action at `path`/`name` that only an operator may make: any change
+    /// to a locked action, locking or unlocking, and a save of an action
+    /// with scoped secrets. See `solx_actions::guard_locked_action` and
+    /// `solx_actions::guard_keyed_action`. A no-op for a remote app, whose
+    /// server applies both to anything but the root token.
+    pub async fn guard_content_action_change(
+        &self,
+        path: &str,
+        name: &str,
+        incoming: Option<&solx_surface::entities::ActionInput>,
+    ) -> solx_surface::error::Result<()> {
+        #[cfg(feature = "local")]
+        if self.local_actions.is_some() {
+            use solx_surface::error::SolxError;
+            let existing = match self.actions.get(path, name).await {
+                Ok(a) => Some(a),
+                Err(SolxError::NotFound(_)) => None,
+                Err(e) => return Err(e),
+            };
+            let reference = format!("{path}/{name}");
+            if let Some(input) = incoming {
+                solx_actions::guard_keyed_action(existing.as_ref(), input, &reference)
+                    .map_err(SolxError::Unauthorized)?;
+            }
+            solx_actions::guard_locked_action(existing.as_ref(), incoming, &reference)
+                .map_err(SolxError::Unauthorized)?;
+        }
+        let _ = (path, name, incoming);
+        Ok(())
+    }
+
     /// Refuse direct access to an entity excluded under `mode` — the
     /// get/save/delete half of the exclusion lists, shared by every surface
     /// that has a mode to honour (solx-server's routes, the Tauri plugin).

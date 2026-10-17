@@ -186,10 +186,11 @@ pub async fn run_command(app: &Arc<App>, command: Commands, piped: Option<Value>
         Commands::InstallPackage { path } => {
             let runner = AppRunner { app: app.clone() };
             let path = PathBuf::from(path);
+            let actions = app.actions();
             let pkg = if path.is_file() {
-                solx_packages::install_package_zip(&runner, &app.config, &path).await
+                solx_packages::install_package_zip(&runner, &actions, &app.config, &path).await
             } else {
-                solx_packages::install_package(&runner, &app.config, &path).await
+                solx_packages::install_package(&runner, &actions, &app.config, &path).await
             }
             .map_err(to_anyhow)?;
             Ok(serde_json::to_value(pkg)?)
@@ -261,6 +262,14 @@ async fn handle_save(
         }
         Entity::Action => {
             let input: ActionInput = serde_json::from_value(body).context("parse action input")?;
+            // `save` is in `Commands`, so a `.solx` script — a package's
+            // `install.solx` included — can run it. Locking is left to the
+            // binary-only `solx action lock|unlock` and to the install itself.
+            if input.locked.is_some() {
+                anyhow::bail!(
+                    "`locked` can't be set with `save`; use `solx action lock` or `solx action unlock`"
+                );
+            }
             Ok(serde_json::to_value(
                 app.actions()
                     .save(&path, &name, input)

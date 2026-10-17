@@ -166,6 +166,13 @@ pub fn action_file_path(action_id: &str, file_name: &str) -> String {
     )
 }
 
+/// The store-relative path `rel` names, normalized exactly as every
+/// [`LocalFileStore`] read and write normalizes it (forward slashes, no
+/// `.`/empty segments, each segment sanitized). Refuses what they refuse.
+pub fn normalize_rel_path(rel: &str) -> Result<String> {
+    Ok(LocalFileStore::normalize_rel(rel)?.join("/"))
+}
+
 /// Build the conventional relative path for a shared action file.
 pub fn shared_action_file_path(file_name: &str) -> String {
     format!("files/actions/shared/{}", sanitize_segment(file_name))

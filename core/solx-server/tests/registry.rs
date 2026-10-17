@@ -399,3 +399,52 @@ async fn mcp_allows_root_and_refuses_a_client() -> anyhow::Result<()> {
     assert!(!ok && body.contains("needs the root token"), "{body}");
     Ok(())
 }
+
+/// `PUT /actions/{ref}` of an action with scoped secrets is root-only: a
+/// client token can neither create one (setting a key) nor modify one,
+/// while it can still save an ordinary action.
+#[tokio::test]
+async fn only_the_root_token_can_save_a_keyed_action() {
+    let s = spawn_server().await;
+    let client = s
+        .app
+        .registry()
+        .unwrap()
+        .issue_client(Some("editor"), None)
+        .await
+        .unwrap()
+        .token;
+    let key = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+    let put = |token: String, name: &'static str, body: Value| {
+        let url = format!("{}/actions/pkg/{name}", s.base);
+        async move {
+            http()
+                .put(url)
+                .bearer_auth(token)
+                .json(&body)
+                .send()
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+    let keyed = json!({
+        "actionType": "wasm",
+        "binName": "good.wasm",
+        "actionConfig": { "secrets": { "S": key } }
+    });
+
+    assert_eq!(put(client.clone(), "keyed", keyed.clone()).await, 401);
+    assert_eq!(put(s.root.clone(), "keyed", keyed).await, 200);
+    assert_eq!(
+        put(client.clone(), "keyed", json!({ "binName": "evil.wasm" })).await,
+        401
+    );
+    assert_eq!(
+        put(client, "plain", json!({ "actionType": "wasm", "binName": "x.wasm" })).await,
+        200
+    );
+
+    let kept = s.app.actions().get("/pkg", "keyed").await.unwrap();
+    assert_eq!(kept.bin_name.as_deref(), Some("good.wasm"));
+}

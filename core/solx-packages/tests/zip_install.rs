@@ -9,6 +9,23 @@ use solx_config::ConfigService;
 use solx_packages::{install_package_zip_bytes, uninstall_package};
 use solx_scripts::CommandRunner;
 
+/// No actions to lock: these tests are about what an install does around
+/// its script, and the fake runner saves nothing.
+struct NoActions;
+
+#[async_trait]
+impl solx_packages::PackageActions for NoActions {
+    async fn actions_under(&self, _base: &str) -> solx_surface::error::Result<Vec<(String, String)>> {
+        Ok(Vec::new())
+    }
+    async fn set_locked(&self, _p: &str, _n: &str, _l: bool) -> solx_surface::error::Result<()> {
+        Ok(())
+    }
+    async fn has_secrets(&self, _p: &str, _n: &str) -> solx_surface::error::Result<bool> {
+        Ok(false)
+    }
+}
+
 struct NoopRunner;
 
 #[async_trait]
@@ -51,7 +68,7 @@ async fn installs_from_a_top_level_folder_and_uninstall_deletes_it() {
         ("demo-1.0/install.solx", SCRIPT),
         ("demo-1.0/bin/tool", b"x"),
     ]);
-    let out = install_package_zip_bytes(&NoopRunner, &cfg, zip)
+    let out = install_package_zip_bytes(&NoopRunner, &NoActions, &cfg, zip)
         .await
         .unwrap();
     let dir = cfg.packages_dir().join("demo");
@@ -75,7 +92,7 @@ async fn ignores_build_time_siblings_but_not_several_packages() {
         ("demo/install.solx", SCRIPT),
         ("lib/Cargo.toml", b"x"),
     ]);
-    install_package_zip_bytes(&NoopRunner, &cfg, zip)
+    install_package_zip_bytes(&NoopRunner, &NoActions, &cfg, zip)
         .await
         .unwrap();
     let packages = cfg.packages_dir();
@@ -86,7 +103,7 @@ async fn ignores_build_time_siblings_but_not_several_packages() {
         ("a/solx-package.json", MANIFEST),
         ("b/solx-package.json", MANIFEST),
     ]);
-    assert!(install_package_zip_bytes(&NoopRunner, &cfg, two)
+    assert!(install_package_zip_bytes(&NoopRunner, &NoActions, &cfg, two)
         .await
         .is_err());
 }
@@ -100,7 +117,7 @@ async fn reinstall_replaces_files_and_failed_reinstall_keeps_the_old_ones() {
         ("install.solx", SCRIPT),
         ("old", b"1"),
     ]);
-    install_package_zip_bytes(&NoopRunner, &cfg, v1)
+    install_package_zip_bytes(&NoopRunner, &NoActions, &cfg, v1)
         .await
         .unwrap();
 
@@ -109,7 +126,7 @@ async fn reinstall_replaces_files_and_failed_reinstall_keeps_the_old_ones() {
         ("install.solx", SCRIPT),
         ("new", b"2"),
     ]);
-    install_package_zip_bytes(&NoopRunner, &cfg, v2)
+    install_package_zip_bytes(&NoopRunner, &NoActions, &cfg, v2)
         .await
         .unwrap();
     let dir = cfg.packages_dir().join("demo");
@@ -117,7 +134,7 @@ async fn reinstall_replaces_files_and_failed_reinstall_keeps_the_old_ones() {
 
     // No install.solx: install fails, so the previous version must survive.
     let bad = zip_of(&[("solx-package.json", MANIFEST), ("bad", b"3")]);
-    assert!(install_package_zip_bytes(&NoopRunner, &cfg, bad)
+    assert!(install_package_zip_bytes(&NoopRunner, &NoActions, &cfg, bad)
         .await
         .is_err());
     assert!(dir.join("new").exists() && !dir.join("bad").exists());
@@ -128,23 +145,23 @@ async fn rejects_bad_zips_and_unsafe_names() {
     let _serial = CWD.lock().await;
     let (_d, cfg) = cfg();
     assert!(
-        install_package_zip_bytes(&NoopRunner, &cfg, b"nope".to_vec())
+        install_package_zip_bytes(&NoopRunner, &NoActions, &cfg, b"nope".to_vec())
             .await
             .is_err()
     );
     let no_manifest = zip_of(&[("readme.md", b"hi"), ("other", b"x")]);
-    assert!(install_package_zip_bytes(&NoopRunner, &cfg, no_manifest)
+    assert!(install_package_zip_bytes(&NoopRunner, &NoActions, &cfg, no_manifest)
         .await
         .is_err());
     let evil = zip_of(&[
         ("solx-package.json", br#"{"name":"../evil"}"#),
         ("install.solx", b""),
     ]);
-    assert!(install_package_zip_bytes(&NoopRunner, &cfg, evil)
+    assert!(install_package_zip_bytes(&NoopRunner, &NoActions, &cfg, evil)
         .await
         .is_err());
     let escape = zip_of(&[("../x", b"1")]);
-    assert!(install_package_zip_bytes(&NoopRunner, &cfg, escape)
+    assert!(install_package_zip_bytes(&NoopRunner, &NoActions, &cfg, escape)
         .await
         .is_err());
     assert!(cfg.list_packages().is_empty());

@@ -187,36 +187,15 @@ read as a fallback, with a warning.
 
 ---
 
-## 2. Secrets masking review (solx-core) — do alongside #1
+## 2. Secrets masking review (solx-core) — superseded
 
-**Status: already implemented, and it's solid.** `solx-actions/src/mask.rs`:
-
-- `mask_action_config` redacts every string under `action_config.secrets`
-  (the AES key blobs) and every string under `action_config.auth` *except*
-  a small explicit visible-allowlist (`type`, `auth_url`, `token_url`,
-  `redirect_uri`, `scope`, `keyring_service`, `keyring_account`, `*_env`).
-  New auth fields are masked by default — allowlist-shaped, same philosophy
-  proposed for #1.
-- `unmask_merge` restores the real value wherever a caller echoes back the
-  `"***"` sentinel, so a `get` → edit → `post` round trip doesn't destroy
-  keys it was never shown. A literal `"***"` typed by a caller (not echoed
-  from a prior read) is a hard error, not silent corruption.
-- Wired correctly: `ActionManager::get`/`list` mask after calling
-  `get_unmasked`; execution (`exec_as`) always reads through
-  `get_unmasked` so real values still reach dispatch.
-- 8 unit tests, including the round-trip case and the deliberately-tricky
-  `client_secret` vs `client_id_secret` suffix ambiguity.
-
-`design-and-progress.md` §10 still lists this as a "suggested next step" —
-that's the doc being stale, not the code.
-
-**Next action:**
-- Update `design-and-progress.md` §10 to move this to done.
-- Spot-check that every read surface (`solx-cli get action`, `solx-mcp` tool
-  responses, the HTTP `GET /actions/:ref` route) actually routes through
-  `ActionManager::get` and not `get_unmasked` — confirm no surface bypasses
-  masking. (Nothing found in this pass suggests a bypass, but it wasn't
-  exhaustively traced end-to-end through every transport.)
+Read-time masking (`mask.rs`) was replaced by keeping secrets out of
+`action_config` altogether: the key moved to the actions table's
+`secret_key` column, `action_config.secrets` holds only names mapped to
+`"***"`, inline `auth` credentials are refused on save, and only root can
+create or change an action with secrets. With nothing secret in the config,
+there is no read surface left to audit for a masking bypass. See
+`security-design.md` §5.2.
 
 ---
 

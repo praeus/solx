@@ -270,6 +270,10 @@ pub(crate) async fn docs_search(
 // ── actions ── (`/actions`, `/actions/{*ref}`, `/actions-paths`, `/actions-search`)
 
 /// `PUT /actions/{*ref}`
+///
+/// The main window hosts package widgets, so this is content: it can't
+/// change a locked action, lock or unlock one, or save an action with
+/// scoped secrets. [`config_actions_save`] (Settings window only) can.
 #[command]
 pub(crate) async fn actions_save(
     state: State<'_, SolxState>,
@@ -288,7 +292,33 @@ pub(crate) async fn actions_save(
         true,
     )
     .await?;
+    app.guard_content_action_change(&path, &name, Some(&input))
+        .await?;
     app.actions().save(&path, &name, input).await
+}
+
+/// [`actions_save`] for the operator: in the `config` permission set, so
+/// only the Settings window, which never loads widgets, holds it.
+#[command]
+pub(crate) async fn config_actions_save(
+    state: State<'_, SolxState>,
+    path: String,
+    name: String,
+    input: ActionInput,
+) -> Result<Action> {
+    let (path, name) = entity(&path, &name)?;
+    state.app()?.actions().save(&path, &name, input).await
+}
+
+/// [`actions_delete`] for the operator — see [`config_actions_save`].
+#[command]
+pub(crate) async fn config_actions_delete(
+    state: State<'_, SolxState>,
+    path: String,
+    name: String,
+) -> Result<()> {
+    let (path, name) = entity(&path, &name)?;
+    state.app()?.actions().delete(&path, &name).await
 }
 
 /// `GET /actions/{*ref}`
@@ -330,6 +360,8 @@ pub(crate) async fn actions_delete(
         false,
     )
     .await?;
+    // Content — see `actions_save`.
+    app.guard_content_action_change(&path, &name, None).await?;
     app.actions().delete(&path, &name).await
 }
 
@@ -414,7 +446,10 @@ pub(crate) async fn files_put(state: State<'_, SolxState>, request: Request<'_>)
             ));
         }
     };
-    state.app()?.files().put(&rel_path, bytes).await
+    let app = state.app()?;
+    // Content (see `actions_save`): no locked action's artifact.
+    app.guard_pinned_files(&[rel_path.as_str()]).await?;
+    app.files().put(&rel_path, bytes).await
 }
 
 /// `GET /files/{*rel_path}` — answered as a raw `ArrayBuffer`, not JSON.
@@ -427,7 +462,9 @@ pub(crate) async fn files_get(state: State<'_, SolxState>, rel_path: String) -> 
 /// `DELETE /files/{*rel_path}`
 #[command]
 pub(crate) async fn files_delete(state: State<'_, SolxState>, rel_path: String) -> Result<()> {
-    state.app()?.files().delete(&rel_path).await
+    let app = state.app()?;
+    app.guard_pinned_files(&[rel_path.as_str()]).await?;
+    app.files().delete(&rel_path).await
 }
 
 /// `GET /files?prefix=` — the bare path list (HTTP wraps it as `{paths}`).
@@ -737,7 +774,9 @@ async fn install_package_zip(state: &SolxState, bytes: Vec<u8>) -> Result<Packag
     let app = state.app()?;
     host_config(state)?;
     let runner = solx_cli::AppRunner { app: app.clone() };
-    let outcome = solx_packages::install_package_zip_bytes(&runner, &app.config, bytes).await?;
+    let outcome =
+        solx_packages::install_package_zip_bytes(&runner, &app.actions(), &app.config, bytes)
+            .await?;
     Ok(PackageResult {
         config: config_view(&app.config),
         warnings: outcome.warnings,
@@ -837,7 +876,8 @@ mod catalog {
         let source = PackageSource::from_env();
         let release = resolve_cached(&source, false).await?;
         let runner = solx_cli::AppRunner { app: app.clone() };
-        let outcome = install_from_catalog(&runner, &app.config, &release, name).await?;
+        let outcome =
+            install_from_catalog(&runner, &app.actions(), &app.config, &release, name).await?;
         result(
             catalog_view(&app.config, &source, &release),
             outcome.warnings,

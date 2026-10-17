@@ -34,7 +34,7 @@ fi
 # The URL isn't allowed yet — exec must be denied before any request reaches
 # the mock server.
 out=$(solx save action /demo/actions/ping-webhook \
-  --json "{\"action_type\":\"webhook\",\"fn_name\":\"http://127.0.0.1:$PORT/echo\",\"action_config\":{\"auth\":{\"type\":\"bearer\",\"token\":\"secret-token\"},\"headers\":{\"X-Demo\":\"1\"}}}")
+  --json "{\"action_type\":\"webhook\",\"fn_name\":\"http://127.0.0.1:$PORT/echo\",\"action_config\":{\"headers\":{\"X-Demo\":\"1\"}}}")
 assert_eq "$(jget "$out" action_type)" "webhook" "save action: action_type is webhook"
 if solx exec /demo/actions/ping-webhook --json '{"greeting":"hi"}' >/dev/null 2>&1; then
   echo "  [FAIL] exec: webhook to an unlisted URL should be denied"

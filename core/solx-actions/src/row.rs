@@ -3,13 +3,13 @@
 use chrono::{DateTime, Utc};
 use libsql::Connection;
 use serde_json::Value;
-use solx_surface::entities::{Action, ActionType, FileRef};
+use solx_surface::entities::{Action, ActionType, ArtifactPin, FileRef};
 use solx_surface::error::{Result, SolxError};
 use uuid::Uuid;
 
 use crate::db::map_db;
 
-pub(crate) const SELECT: &str = "SELECT id,path,name,caption,description,capabilities,phrases,category,param_type_ref,result_type_ref,action_type,fn_name,bin_name,action_config,files,trusted,created_at,updated_at FROM actions";
+pub(crate) const SELECT: &str = "SELECT id,path,name,caption,description,capabilities,phrases,category,param_type_ref,result_type_ref,action_type,fn_name,bin_name,action_config,files,trusted,created_at,updated_at,locked,pin_path,pin_sha256 FROM actions";
 
 pub(crate) fn opt(s: String) -> Option<String> {
     Some(s).filter(|v| !v.is_empty())
@@ -68,6 +68,13 @@ pub(crate) fn row_to_action(row: &libsql::Row) -> Result<Action> {
     let trusted: bool = row.get::<i64>(15).map_err(map_db)? != 0;
     let created_at = parse_dt(&row.get::<String>(16).map_err(map_db)?)?;
     let updated_at = parse_dt(&row.get::<String>(17).map_err(map_db)?)?;
+    let locked: bool = row.get::<i64>(18).map_err(map_db)? != 0;
+    let pin_path: String = row.get(19).map_err(map_db)?;
+    let pin_sha256: String = row.get(20).map_err(map_db)?;
+    let artifact_pin = (!pin_path.is_empty()).then_some(ArtifactPin {
+        rel_path: pin_path,
+        sha256: pin_sha256,
+    });
     Ok(Action {
         id,
         path,
@@ -85,9 +92,31 @@ pub(crate) fn row_to_action(row: &libsql::Row) -> Result<Action> {
         action_config,
         files,
         trusted,
+        locked,
+        artifact_pin,
         created_at,
         updated_at,
     })
+}
+
+/// The row's `secret_key` column, or `None` when the row is missing or has
+/// no key. Deliberately not part of [`SELECT`]/[`row_to_action`].
+pub(crate) async fn get_secret_key(
+    conn: &Connection,
+    path: &str,
+    name: &str,
+) -> Result<Option<String>> {
+    let mut rows = conn
+        .query(
+            "SELECT secret_key FROM actions WHERE path=?1 AND name=?2",
+            libsql::params![path.to_string(), name.to_string()],
+        )
+        .await
+        .map_err(map_db)?;
+    match rows.next().await.map_err(map_db)? {
+        Some(row) => Ok(opt(row.get::<String>(0).map_err(map_db)?)),
+        None => Ok(None),
+    }
 }
 
 pub(crate) async fn get_row(conn: &Connection, path: &str, name: &str) -> Result<Option<Action>> {

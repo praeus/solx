@@ -8,8 +8,9 @@ use serde_json::{json, Value};
 use solx_console::{console, invocations};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::internal_actions::CallerInfo;
+use solx_surface::managers::ActionManager;
 use solx_surface::path::{full_ref, split_ref};
-use solx_surface::Principal;
+use solx_surface::{ExcludeMode, ExecScope, Principal};
 use uuid::Uuid;
 
 use crate::caller::Caller;
@@ -49,9 +50,9 @@ impl LocalActionManager {
     /// process (which exits the instant `exec` returns) a "successfully
     /// started" invocation would be killed before it could ever be polled.
     ///
-    /// `principal` and `caller` are those of the `action-start` call, moved
-    /// into the spawned task so the detached run is attributed — and
-    /// authorized — exactly as a synchronous nested `exec` would be. The
+    /// `principal`, `scope` and `caller` are those of the `action-start`
+    /// call, moved into the spawned task so the detached run is attributed —
+    /// and authorized — exactly as a synchronous nested `exec` would be. The
     /// full [`Caller`] (secrets included) is rebuilt here from the calling
     /// action's row, since a plugin handler only ever sees [`CallerInfo`].
     pub async fn start_invocation(
@@ -60,6 +61,7 @@ impl LocalActionManager {
         name: &str,
         params: Value,
         principal: Option<Principal>,
+        scope: ExecScope,
         caller: Option<CallerInfo>,
     ) -> Result<Value> {
         if !is_long_lived_host() {
@@ -74,12 +76,19 @@ impl LocalActionManager {
         // Resolved (and validated) up front, outside the spawned task, so a
         // bad path/name/action_type fails the `start` call itself rather
         // than silently producing a row that immediately goes `failed`.
-        let action = self.get_unmasked(path, name).await?;
+        let action = self.get(path, name).await?;
         let action_ref = full_ref(&action.path, &action.name)?;
         if action.action_type.is_none() {
             return Err(SolxError::Exec(format!(
                 "action {action_ref} has no action_type to execute"
             )));
+        }
+        // The spawned run is refused anyway, but only after its row exists,
+        // and a `failed` row would tell the caller the action is there.
+        if scope == ExecScope::Tooling {
+            self.config
+                .exclusion_policy()
+                .guard_action(ExcludeMode::Tooling, &action, false)?;
         }
 
         let invocation_id = Uuid::new_v4().to_string();
@@ -107,6 +116,7 @@ impl LocalActionManager {
                     params,
                     caller.as_ref(),
                     principal.as_ref(),
+                    scope,
                     Some(&task_id),
                 )
                 .await;
@@ -254,19 +264,15 @@ impl LocalActionManager {
     /// `script-exec`'s), the frame has no secrets but is still a caller — so
     /// the detached run is never mistaken for an external call.
     async fn rebuild_caller(&self, info: &CallerInfo) -> Caller {
-        let action_config = match split_ref(info.action_ref()) {
+        let secrets = match split_ref(info.action_ref()) {
             Ok((path, name)) => self
-                .get_unmasked(&path, &name)
+                .get_with_secrets(&path, &name)
                 .await
                 .ok()
-                .and_then(|a| a.action_config),
+                .map(|(_, secrets)| secrets),
             Err(_) => None,
         };
-        Caller::with_invocation(
-            info.action_ref(),
-            action_config.as_ref(),
-            info.invocation_id(),
-        )
+        Caller::with_invocation(info.action_ref(), secrets, info.invocation_id())
     }
 }
 
@@ -331,7 +337,7 @@ mod tests {
         save_command(&m, &cfg, "quick", quick_ok()).await;
 
         let err = m
-            .start_invocation("/t", "quick", serde_json::json!({}), None, None)
+            .start_invocation("/t", "quick", serde_json::json!({}), None, ExecScope::Unrestricted, None)
             .await
             .unwrap_err();
         assert!(
@@ -348,7 +354,7 @@ mod tests {
         save_command(&m, &cfg, "quick", quick_ok()).await;
 
         let started = m
-            .start_invocation("/t", "quick", serde_json::json!({}), None, None)
+            .start_invocation("/t", "quick", serde_json::json!({}), None, ExecScope::Unrestricted, None)
             .await
             .unwrap();
         let id = started["invocation_id"].as_str().unwrap().to_string();
@@ -391,7 +397,7 @@ mod tests {
         save_command(&m, &cfg, "hangs", hangs_forever()).await;
 
         let started = m
-            .start_invocation("/t", "hangs", serde_json::json!({}), None, None)
+            .start_invocation("/t", "hangs", serde_json::json!({}), None, ExecScope::Unrestricted, None)
             .await
             .unwrap();
         let id = started["invocation_id"].as_str().unwrap().to_string();
@@ -423,7 +429,7 @@ mod tests {
         save_command(&m, &cfg, "hangs", hangs_forever()).await;
 
         let started = m
-            .start_invocation("/t", "hangs", serde_json::json!({}), None, None)
+            .start_invocation("/t", "hangs", serde_json::json!({}), None, ExecScope::Unrestricted, None)
             .await
             .unwrap();
         let id = started["invocation_id"].as_str().unwrap().to_string();

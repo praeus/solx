@@ -8,11 +8,11 @@ use serde_json::Value;
 use solx_surface::entities::{Action, ActionExecResult, ActionType};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::path::full_ref;
-use solx_surface::Principal;
+use solx_surface::{ExcludeMode, ExecScope, Principal};
 use uuid::Uuid;
 
 use crate::caller::Caller;
-use crate::{exec, internal, script, wasm, LocalActionManager};
+use crate::{exec, internal, lock, script, wasm, LocalActionManager};
 
 /// Per-action wall-clock ceiling from `action_config.timeout_secs`, using
 /// the same untyped-config convention as `cwd`. `None` means the backend's
@@ -21,41 +21,86 @@ fn timeout_secs(action_config: &Option<Value>) -> Option<u64> {
     action_config.as_ref()?.get("timeout_secs")?.as_u64()
 }
 
+/// Params for an internal built-in run in [`ExecScope::Tooling`], with the
+/// tooling exclusion mode forced on.
+///
+/// The entity built-ins (`entity-list-documents`, `entity-get-type`,
+/// `search-documents`, ...) apply no configured exclusions unless asked, and
+/// a model chooses its own arguments - so without this, anything excluded
+/// from tooling would be one call away. Every spelling of the flag is
+/// replaced rather than added beside: [`internal::normalize_params`] aliases
+/// camelCase and snake_case, so a model-supplied `exclude_mode: "none"`
+/// would otherwise survive next to ours.
+///
+/// Keyed on the action *type*, not on a `/builtin` path: an `Internal` row
+/// saved anywhere else dispatches to the same handlers.
+pub(crate) fn force_tooling_scope(params: Value) -> Value {
+    let Value::Object(mut args) = params else {
+        return params;
+    };
+    for key in [
+        "excludeMode",
+        "exclude_mode",
+        "excludeHidden",
+        "exclude_hidden",
+    ] {
+        args.remove(key);
+    }
+    args.insert("excludeMode".into(), Value::from("tooling"));
+    Value::Object(args)
+}
+
 impl LocalActionManager {
+    /// Hold one frame of a call chain to its [`ExecScope`]. Under `Tooling`,
+    /// an action excluded from tooling (`exclusions.tooling`, the legacy
+    /// `tool_exclude`/`mcp_exclude`, or `solx:hidden`) is refused as if it
+    /// did not exist, and an internal built-in runs in the tooling scope.
+    ///
+    /// Runs on every frame, not just the first, which is the point: the MCP
+    /// server's own check sees only the tool the model called, and that tool
+    /// can be a Script or WASM action, or `action-start`, that calls another.
+    fn enforce_scope(&self, scope: ExecScope, action: &Action, params: Value) -> Result<Value> {
+        if scope == ExecScope::Unrestricted {
+            return Ok(params);
+        }
+        self.config
+            .exclusion_policy()
+            .guard_action(ExcludeMode::Tooling, action, false)?;
+        Ok(if action.action_type == Some(ActionType::Internal) {
+            force_tooling_scope(params)
+        } else {
+            params
+        })
+    }
+
     /// Resolve a WASM action's `bin_name` to bytes: try the shared
-    /// artifact location first, then the action's own scratch space.
+    /// artifact location first, then the action's own scratch space — or,
+    /// for a locked action, only its pinned artifact, checked against its
+    /// hash (see `crate::lock::load_artifact`).
     ///
     /// Returned behind an `Arc` because the bytes are handed to
     /// `wasm::exec`, which moves them onto the blocking pool to
     /// compile on a cache miss.
-    async fn load_wasm_bytes(&self, action: &Action, bin_name: &str) -> Result<Arc<Vec<u8>>> {
-        let shared = solx_files::shared_action_file_path(bin_name);
-        if let Ok(bytes) = self.files.get(&shared).await {
-            return Ok(Arc::new(bytes));
-        }
-        let owned = solx_files::action_file_path(&action.id.to_string(), bin_name);
-        self.files.get(&owned).await.map(Arc::new).map_err(|_| {
-            SolxError::Exec(format!(
-                "wasm artifact '{bin_name}' not found (tried '{shared}' and '{owned}')"
-            ))
-        })
+    async fn load_wasm_bytes(
+        &self,
+        action: &Action,
+        reference: &str,
+        bin_name: &str,
+    ) -> Result<Arc<Vec<u8>>> {
+        lock::load_artifact(&self.files, action, reference, bin_name, "wasm")
+            .await
+            .map(Arc::new)
     }
 
     /// Resolve a `Script` action's `bin_name` to its `.solx` source text —
-    /// same shared/owned lookup order as [`Self::load_wasm_bytes`].
-    async fn load_script_source(&self, action: &Action, bin_name: &str) -> Result<String> {
-        let shared = solx_files::shared_action_file_path(bin_name);
-        let bytes = match self.files.get(&shared).await {
-            Ok(bytes) => bytes,
-            Err(_) => {
-                let owned = solx_files::action_file_path(&action.id.to_string(), bin_name);
-                self.files.get(&owned).await.map_err(|_| {
-                    SolxError::Exec(format!(
-                        "script artifact '{bin_name}' not found (tried '{shared}' and '{owned}')"
-                    ))
-                })?
-            }
-        };
+    /// same lookup (and pin check) as [`Self::load_wasm_bytes`].
+    async fn load_script_source(
+        &self,
+        action: &Action,
+        reference: &str,
+        bin_name: &str,
+    ) -> Result<String> {
+        let bytes = lock::load_artifact(&self.files, action, reference, bin_name, "script").await?;
         String::from_utf8(bytes).map_err(|e| {
             SolxError::Exec(format!(
                 "script artifact '{bin_name}' is not valid UTF-8: {e}"
@@ -75,6 +120,10 @@ impl LocalActionManager {
     /// `principal` is the authenticated party the call chain started from
     /// (see `ActionManager::exec_for`), inherited unchanged by nested
     /// frames; `None` for local entry points.
+    ///
+    /// `scope` is inherited the same way. Under [`ExecScope::Tooling`] every
+    /// frame of the chain is held to the tooling exclusions (see
+    /// [`Self::enforce_scope`]).
     pub async fn exec_as(
         &self,
         path: &str,
@@ -82,8 +131,9 @@ impl LocalActionManager {
         params: Value,
         caller: Option<&Caller>,
         principal: Option<&Principal>,
+        scope: ExecScope,
     ) -> Result<ActionExecResult> {
-        self.exec_as_with(path, name, params, caller, principal, None)
+        self.exec_as_with(path, name, params, caller, principal, scope, None)
             .await
     }
 
@@ -111,6 +161,7 @@ impl LocalActionManager {
     /// `start_invocation`'s spawned task) can then simply trust — the same
     /// trick `#[async_trait]` uses under the hood for object-safe trait
     /// methods, applied by hand here since this isn't a trait method.
+    #[allow(clippy::too_many_arguments)]
     pub fn exec_as_with<'a>(
         &'a self,
         path: &'a str,
@@ -118,6 +169,7 @@ impl LocalActionManager {
         params: Value,
         caller: Option<&'a Caller>,
         principal: Option<&'a Principal>,
+        scope: ExecScope,
         invocation_id: Option<&'a str>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ActionExecResult>> + Send + 'a>>
     {
@@ -127,10 +179,12 @@ impl LocalActionManager {
             params,
             caller,
             principal,
+            scope,
             invocation_id,
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn exec_as_with_inner(
         &self,
         path: &str,
@@ -138,10 +192,12 @@ impl LocalActionManager {
         params: Value,
         caller: Option<&Caller>,
         principal: Option<&Principal>,
+        scope: ExecScope,
         invocation_id: Option<&str>,
     ) -> Result<ActionExecResult> {
-        let action = self.get_unmasked(path, name).await?;
+        let (action, secrets) = self.get_with_secrets(path, name).await?;
         let action_ref = full_ref(&action.path, &action.name)?;
+        let params = self.enforce_scope(scope, &action, params)?;
 
         // Internal built-ins mix two wire-key conventions (camelCase
         // entity/search structs, snake_case raw-key handlers) — see
@@ -211,7 +267,6 @@ impl LocalActionManager {
                     .ok_or_else(|| SolxError::Exec("webhook action has no fn_name (URL)".into()))?;
                 exec::run_webhook(
                     &self.config,
-                    self,
                     self.console.clone(),
                     &action_ref,
                     invocation_id,
@@ -219,6 +274,7 @@ impl LocalActionManager {
                     &action.name,
                     url,
                     &action.action_config,
+                    &secrets,
                     &params,
                 )
                 .await?
@@ -238,6 +294,7 @@ impl LocalActionManager {
                     action_config: action.action_config.clone(),
                     caller: caller.cloned(),
                     principal: principal.cloned(),
+                    scope,
                 };
                 internal::run_internal(fn_name, &params, &ctx)
                     .await
@@ -247,7 +304,7 @@ impl LocalActionManager {
                 let bin_name = action.bin_name.as_deref().ok_or_else(|| {
                     SolxError::Exec("wasm action has no bin_name (artifact)".into())
                 })?;
-                let bytes = self.load_wasm_bytes(&action, bin_name).await?;
+                let bytes = self.load_wasm_bytes(&action, &action_ref, bin_name).await?;
                 // A new caller frame: anything this guest invokes is invoked
                 // by *this* action, not by whoever invoked it. The incoming
                 // `caller` is therefore dropped rather than forwarded, so a
@@ -257,11 +314,8 @@ impl LocalActionManager {
                 // already committed to the `invocations` row — for a plain
                 // `exec_as` call this is exactly the freshly-minted id above,
                 // so behavior is unchanged from before this method existed.
-                let frame = Caller::with_invocation(
-                    &action_ref,
-                    action.action_config.as_ref(),
-                    invocation_id,
-                );
+                let frame =
+                    Caller::with_invocation(&action_ref, Some(secrets.clone()), invocation_id);
                 // WASM execution reports its own success/message (a guest can
                 // report a handled failure without erroring the host call), so
                 // it returns a full ActionExecResult directly rather than
@@ -274,6 +328,7 @@ impl LocalActionManager {
                     &params,
                     frame,
                     principal.cloned(),
+                    scope,
                     effective_timeout,
                 )
                 .await;
@@ -282,20 +337,18 @@ impl LocalActionManager {
                 let bin_name = action.bin_name.as_deref().ok_or_else(|| {
                     SolxError::Exec("script action has no bin_name (artifact)".into())
                 })?;
-                let source = self.load_script_source(&action, bin_name).await?;
+                let source = self.load_script_source(&action, &action_ref, bin_name).await?;
                 // Same reasoning as the Wasm arm above: a fresh caller frame
                 // for this action's own identity, not the incoming one — a
                 // script's nested `exec` calls must never reach an outer
                 // action's secret keys.
-                let frame = Caller::with_invocation(
-                    &action_ref,
-                    action.action_config.as_ref(),
-                    invocation_id,
-                );
+                let frame =
+                    Caller::with_invocation(&action_ref, Some(secrets.clone()), invocation_id);
                 let runner = script::ActionCommandRunner {
                     actions: self.self_arc()?,
                     caller: frame,
                     principal: principal.cloned(),
+                    scope,
                 };
                 let initial =
                     std::collections::HashMap::from([("params".to_string(), params.clone())]);
@@ -334,6 +387,55 @@ mod tests {
     use solx_surface::entities::ActionInput;
     use solx_surface::managers::{ActionManager, DocManager, FileStore, TypeManager};
     use solx_types::LocalTypeManager;
+
+    #[test]
+    fn the_tooling_scope_replaces_every_spelling_of_the_mode() {
+        let got = force_tooling_scope(serde_json::json!({
+            "pathPrefix": "/a",
+            "exclude_mode": "none",
+            "excludeHidden": false,
+        }));
+        assert_eq!(
+            got,
+            serde_json::json!({"pathPrefix": "/a", "excludeMode": "tooling"})
+        );
+    }
+
+    /// An `Internal` row saved outside `/builtin` dispatches to the same
+    /// handlers, so the tooling scope can't key on the path.
+    #[tokio::test]
+    async fn the_tooling_scope_forces_the_mode_on_internal_rows_anywhere() {
+        let (_d, _cfg, m) = setup().await;
+        m.save(
+            "/t",
+            "list-docs",
+            ActionInput {
+                action_type: Some(ActionType::Internal),
+                fn_name: Some("entity-list-documents".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let (action, _) = m.get_with_secrets("/t", "list-docs").await.unwrap();
+        let params = m
+            .enforce_scope(
+                ExecScope::Tooling,
+                &action,
+                serde_json::json!({"excludeMode": "none"}),
+            )
+            .unwrap();
+        assert_eq!(params, serde_json::json!({"excludeMode": "tooling"}));
+
+        let params = m
+            .enforce_scope(
+                ExecScope::Unrestricted,
+                &action,
+                serde_json::json!({"excludeMode": "none"}),
+            )
+            .unwrap();
+        assert_eq!(params, serde_json::json!({"excludeMode": "none"}));
+    }
 
     /// Proves the aliasing chokepoint lives ahead of param-type validation,
     /// not just ahead of dispatch: `FilePutParams` requires `rel_path`
@@ -574,7 +676,7 @@ mod tests {
             .unwrap_err();
             assert!(err.to_string().contains("use the solx CLI"), "{ty}: {err}");
             assert!(
-                m.get_unmasked("/evil", "shell").await.is_err(),
+                m.get("/evil", "shell").await.is_err(),
                 "{ty} was created anyway"
             );
         }
@@ -607,7 +709,7 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("use the solx CLI"), "{err}");
         assert_eq!(
-            m.get_unmasked("/tools", "safe")
+            m.get("/tools", "safe")
                 .await
                 .unwrap()
                 .fn_name
@@ -640,7 +742,7 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("use the solx CLI"), "{err}");
         assert!(
-            m.get_unmasked("/tools", "safe").await.is_ok(),
+            m.get("/tools", "safe").await.is_ok(),
             "action was deleted anyway"
         );
     }
@@ -660,7 +762,64 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(m.get_unmasked("/tools", "w").await.is_ok());
+        assert!(m.get("/tools", "w").await.is_ok());
+    }
+
+    // ── entity-save-action: keyed actions are root-only ─────────────────
+
+    #[tokio::test]
+    async fn entity_save_action_refuses_to_set_a_key() {
+        let (_d, _cfg, m) = setup_wired().await;
+        let err = exec_builtin(
+            &m,
+            "entity-save-action",
+            serde_json::json!({
+                "path": "/tools", "name": "w",
+                "actionType": "wasm", "binName": "x.wasm",
+                "actionConfig": { "secrets": { "S": TEST_KEY } }
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("only root"), "{err}");
+        assert!(m.get("/tools", "w").await.is_err());
+    }
+
+    /// Not just the key: adding a name would extend the key to another
+    /// secret, and repointing `binName` would run new code with it.
+    #[tokio::test]
+    async fn entity_save_action_refuses_to_modify_a_keyed_action() {
+        let (_d, _cfg, m) = setup_wired().await;
+        m.save(
+            "/pkg",
+            "w",
+            ActionInput {
+                action_type: Some(ActionType::Wasm),
+                bin_name: Some("good.wasm".into()),
+                action_config: Some(serde_json::json!({ "secrets": { "S": TEST_KEY } })),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        for change in [
+            serde_json::json!({ "binName": "evil.wasm" }),
+            serde_json::json!({ "actionConfig": { "secrets": { "S": "***", "OTHER": "***" } } }),
+            serde_json::json!({ "actionConfig": {} }),
+        ] {
+            let mut params = serde_json::json!({ "path": "/pkg", "name": "w" });
+            params
+                .as_object_mut()
+                .unwrap()
+                .extend(change.as_object().unwrap().clone());
+            let err = exec_builtin(&m, "entity-save-action", params)
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("only root"), "{change}: {err}");
+        }
+        let kept = m.get("/pkg", "w").await.unwrap();
+        assert_eq!(kept.bin_name.as_deref(), Some("good.wasm"));
     }
 
     #[tokio::test]
@@ -930,7 +1089,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(m.get_unmasked("/tools", "s").await.is_ok());
+        assert!(m.get("/tools", "s").await.is_ok());
     }
 
     #[tokio::test]

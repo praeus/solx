@@ -290,32 +290,6 @@ impl SolxMcpServer {
     }
 }
 
-/// Arguments for a call a model issued, with the tooling exclusion scope
-/// forced onto every built-in.
-///
-/// The entity built-ins (`entity-list-documents`, `entity-get-type`,
-/// `search-documents`, ...) apply no configured exclusions unless asked, and
-/// the model chooses its own arguments - so without this, anything excluded
-/// from tooling would be one call away. Every spelling of the flag is
-/// replaced rather than added beside: the dispatcher aliases camelCase and
-/// snake_case, so a model-supplied `exclude_mode: "none"` would otherwise
-/// survive next to ours. Package actions are left alone; their parameters
-/// are their own.
-fn force_tooling_scope(path: &str, mut args: Map<String, Value>) -> Value {
-    if path == "/builtin" || path.starts_with("/builtin/") {
-        for key in [
-            "excludeMode",
-            "exclude_mode",
-            "excludeHidden",
-            "exclude_hidden",
-        ] {
-            args.remove(key);
-        }
-        args.insert("excludeMode".into(), Value::from("tooling"));
-    }
-    Value::Object(args)
-}
-
 /// The [`Principal`] `solx-server`'s `require_bearer` attached to the HTTP
 /// request this tool call arrived on. The streamable HTTP transport hands
 /// each request's `http::request::Parts` (extensions included) to the
@@ -407,7 +381,10 @@ impl ServerHandler for SolxMcpServer {
         // dispatch (see `rmcp::model::meta`'s `GetMeta` doc comment) — so
         // `ctx.meta` is the one that's actually populated here.
         let progress_token = ctx.meta.get_progress_token();
-        let params = force_tooling_scope(&path, request.arguments.unwrap_or_default());
+        // The whole chain runs in the tooling scope: the dispatcher refuses
+        // excluded actions at every hop, not just this first one, and forces
+        // the tooling `excludeMode` onto every built-in.
+        let params = Value::Object(request.arguments.unwrap_or_default());
 
         // Only pay for the tail loop if the client actually asked for
         // progress updates (attached a `progressToken`) — most callers of
@@ -420,15 +397,11 @@ impl ServerHandler for SolxMcpServer {
             _ => None,
         };
 
-        let exec_result = match request_principal(&ctx) {
-            Some(principal) => {
-                self.app
-                    .actions()
-                    .exec_for(&principal, &path, &name, params)
-                    .await
-            }
-            None => self.app.actions().exec(&path, &name, params).await,
-        };
+        let exec_result = self
+            .app
+            .actions()
+            .exec_tooling(request_principal(&ctx).as_ref(), &path, &name, params)
+            .await;
         if let Some(handle) = tail_handle {
             handle.stop_and_drain().await;
         }
@@ -558,30 +531,4 @@ async fn send_progress(
         .get("next_cursor")
         .and_then(Value::as_i64)
         .unwrap_or(fallback_cursor)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::force_tooling_scope;
-    use serde_json::{json, Map, Value};
-
-    fn obj(v: Value) -> Map<String, Value> {
-        v.as_object().cloned().unwrap()
-    }
-
-    #[test]
-    fn builtins_always_run_in_the_tooling_scope() {
-        let got = force_tooling_scope(
-            "/builtin/document",
-            obj(json!({"pathPrefix": "/a", "exclude_mode": "none", "excludeHidden": false})),
-        );
-        assert_eq!(got, json!({"pathPrefix": "/a", "excludeMode": "tooling"}));
-    }
-
-    #[test]
-    fn package_actions_keep_their_own_arguments() {
-        let args = json!({"excludeMode": "none", "q": "x"});
-        assert_eq!(force_tooling_scope("/packages/p", obj(args.clone())), args);
-        assert_eq!(force_tooling_scope("/builtinx", obj(args.clone())), args);
-    }
 }

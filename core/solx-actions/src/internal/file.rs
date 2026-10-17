@@ -4,7 +4,9 @@
 //! These are general-purpose and unrestricted — Internal actions carry
 //! the same trust level as the dispatcher itself, same as the OAuth
 //! loopback. There is no sandboxing model for them the way there is for
-//! untrusted WASM guests.
+//! untrusted WASM guests — with one exception: none of them writes or
+//! deletes a locked action's pinned artifact (see `crate::lock`). A
+//! directory operation checks every entry before touching any.
 
 use std::sync::Arc;
 
@@ -13,9 +15,26 @@ use serde_json::{json, Value};
 use solx_surface::managers::FileStore;
 
 use super::require_str;
+use crate::LocalActionManager;
 
-pub(super) async fn file_put(params: &Value, files: &Arc<dyn FileStore>) -> Result<Value, String> {
+/// Refuse when any of `targets` is a locked action's pinned artifact.
+async fn guard_pinned<'a>(
+    local: &LocalActionManager,
+    targets: impl IntoIterator<Item = &'a str>,
+) -> Result<(), String> {
+    local
+        .guard_pinned_files(targets)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+pub(super) async fn file_put(
+    params: &Value,
+    files: &Arc<dyn FileStore>,
+    local: &LocalActionManager,
+) -> Result<Value, String> {
     let rel_path = require_str(params, "rel_path")?;
+    guard_pinned(local, [rel_path]).await?;
     let content = require_str(params, "content")?;
     let encoding = params
         .get("encoding")
@@ -55,8 +74,10 @@ pub(super) async fn file_get(params: &Value, files: &Arc<dyn FileStore>) -> Resu
 pub(super) async fn file_delete(
     params: &Value,
     files: &Arc<dyn FileStore>,
+    local: &LocalActionManager,
 ) -> Result<Value, String> {
     let rel_path = require_str(params, "rel_path")?;
+    guard_pinned(local, [rel_path]).await?;
     files.delete(rel_path).await.map_err(|e| e.to_string())?;
     Ok(json!({ "deleted": true }))
 }
@@ -67,9 +88,14 @@ pub(super) async fn file_list(params: &Value, files: &Arc<dyn FileStore>) -> Res
     Ok(json!({ "files": entries }))
 }
 
-pub(super) async fn file_copy(params: &Value, files: &Arc<dyn FileStore>) -> Result<Value, String> {
+pub(super) async fn file_copy(
+    params: &Value,
+    files: &Arc<dyn FileStore>,
+    local: &LocalActionManager,
+) -> Result<Value, String> {
     let source = require_str(params, "source")?;
     let dest = require_str(params, "dest")?;
+    guard_pinned(local, [dest]).await?;
     let bytes = files.get(source).await.map_err(|e| e.to_string())?;
     files.put(dest, bytes).await.map_err(|e| e.to_string())?;
     Ok(json!({ "dest": dest }))
@@ -77,19 +103,29 @@ pub(super) async fn file_copy(params: &Value, files: &Arc<dyn FileStore>) -> Res
 
 /// Recursively copies every entry under `source` to the matching relative
 /// position under `dest`.
-pub(super) async fn dir_copy(params: &Value, files: &Arc<dyn FileStore>) -> Result<Value, String> {
+pub(super) async fn dir_copy(
+    params: &Value,
+    files: &Arc<dyn FileStore>,
+    local: &LocalActionManager,
+) -> Result<Value, String> {
     let source = require_str(params, "source")?;
     let dest = require_str(params, "dest")?;
     let source_prefix = source.trim_end_matches('/');
     let dest_prefix = dest.trim_end_matches('/');
     let entries = files.list(source).await.map_err(|e| e.to_string())?;
-    let mut copied = Vec::with_capacity(entries.len());
-    for entry in &entries {
-        let rel = entry
-            .strip_prefix(source_prefix)
-            .unwrap_or(entry)
-            .trim_start_matches('/');
-        let dest_entry = format!("{dest_prefix}/{rel}");
+    let pairs: Vec<(&String, String)> = entries
+        .iter()
+        .map(|entry| {
+            let rel = entry
+                .strip_prefix(source_prefix)
+                .unwrap_or(entry)
+                .trim_start_matches('/');
+            (entry, format!("{dest_prefix}/{rel}"))
+        })
+        .collect();
+    guard_pinned(local, pairs.iter().map(|(_, dest)| dest.as_str())).await?;
+    let mut copied = Vec::with_capacity(pairs.len());
+    for (entry, dest_entry) in pairs {
         let bytes = files.get(entry).await.map_err(|e| e.to_string())?;
         files
             .put(&dest_entry, bytes)
@@ -109,18 +145,21 @@ pub(super) async fn dir_copy(params: &Value, files: &Arc<dyn FileStore>) -> Resu
 pub(super) async fn dir_delete(
     params: &Value,
     files: &Arc<dyn FileStore>,
+    local: &LocalActionManager,
 ) -> Result<Value, String> {
     let rel_path = require_str(params, "rel_path")?;
     let prefix = rel_path.trim_end_matches('/');
     let entries = files.list(rel_path).await.map_err(|e| e.to_string())?;
+    // Defensive: only delete entries actually under `prefix`. If a
+    // concurrent write lands a sibling outside the subtree between `list`
+    // and the per-entry `delete`, we don't follow it.
+    let entries: Vec<&String> = entries
+        .iter()
+        .filter(|entry| *entry != prefix && entry.starts_with(&format!("{prefix}/")))
+        .collect();
+    guard_pinned(local, entries.iter().map(|e| e.as_str())).await?;
     let mut deleted = Vec::with_capacity(entries.len());
-    for entry in &entries {
-        // Defensive: only delete entries actually under `prefix`. If a
-        // concurrent write lands a sibling outside the subtree between
-        // `list` and the per-entry `delete`, we don't follow it.
-        if entry == prefix || !entry.starts_with(&format!("{prefix}/")) {
-            continue;
-        }
+    for entry in entries {
         files.delete(entry).await.map_err(|e| e.to_string())?;
         deleted.push(entry.clone());
     }

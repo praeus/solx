@@ -61,6 +61,10 @@ interface Props {
 
 export function ActionEditor({ open, onClose, existing, existingEntity, defaultPath, onSaved }: Props) {
   const isEdit = existing !== null;
+  // A locked action can still be run here, but not changed: the server or
+  // the desktop app refuses the save anyway.
+  const locked = isEdit && Boolean(existingEntity?.locked);
+  const lockedRef = existingEntity ? `${existingEntity.path}/${existingEntity.name}` : "";
   const categoriesQuery = useActions({ limit: 1000, sortBy: "category", sortOrder: "asc", enabled: open });
   const createMutation = useCreateAction();
 
@@ -263,6 +267,15 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
         </div>
 
         <div className="dialog__body">
+          {locked && (
+            <div className="dialog__notice" role="note">
+              This action is locked: it can be run, but not changed or deleted from here. To edit
+              it, unlock it with <code>solx action unlock {lockedRef}</code>, or reinstall its
+              package.
+            </div>
+          )}
+
+          <fieldset disabled={locked} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <div className="form-field">
             <label className="form-label">
               Name <span className="required-star">*</span>
@@ -289,6 +302,7 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
               spellCheck={false}
             />
           </div>
+          </fieldset>
 
           {/* Run — only in edit mode; opens the detached ActionRunner. */}
           {isEdit && (
@@ -302,6 +316,7 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
             </div>
           )}
 
+          <fieldset disabled={locked} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <div className="doc-editor-section-sep">Execution</div>
 
           <div className="form-field">
@@ -525,6 +540,7 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
               />
             </div>
           </details>
+          </fieldset>
 
           {error && <div className="dialog__error">{error}</div>}
         </div>
@@ -536,7 +552,8 @@ export function ActionEditor({ open, onClose, existing, existingEntity, defaultP
           <button
             className="dialog__btn dialog__btn--primary"
             onClick={() => void handleSave()}
-            disabled={createMutation.isPending}
+            disabled={createMutation.isPending || locked}
+            title={locked ? "Locked actions can't be changed here" : undefined}
           >
             {createMutation.isPending ? "Saving…" : "Save"}
           </button>

@@ -6,10 +6,11 @@
 //! an earlier version did, meant no key ever resolved and both built-ins
 //! were silently inert.
 //!
-//! An action wanting `get-secret`/`set-secret` must carry a `name -> key`
-//! mapping in its own `action_config.secrets`. The key never leaves the
-//! host: these return the decrypted *value*, never the key that unlocked
-//! it.
+//! An action wanting `get-secret`/`set-secret` must list the secret's name
+//! in its own `action_config.secrets` and have a key (kept in the actions
+//! table's `secret_key` column, not in the config). The key never leaves
+//! the host: these return the decrypted *value*, never the key that
+//! unlocked it.
 
 use serde_json::{json, Value};
 
@@ -32,7 +33,7 @@ pub(super) async fn set_secret(params: &Value, caller: Option<&Caller>) -> Resul
     Ok(json!({ "set": true }))
 }
 
-/// Look up the AES key the calling action has configured for `name`.
+/// Look up the calling action's AES key, if it may use `name`.
 fn caller_secret_key<'a>(caller: Option<&'a Caller>, name: &str) -> Result<&'a str, String> {
     let caller = caller.ok_or_else(|| {
         format!(
@@ -41,6 +42,9 @@ fn caller_secret_key<'a>(caller: Option<&'a Caller>, name: &str) -> Result<&'a s
         )
     })?;
     caller.secret_key(name).ok_or_else(|| {
-        format!("no key configured for secret '{name}' in {caller}'s action_config.secrets")
+        format!(
+            "{caller} has no key for secret '{name}' (the name must be listed in its \
+             action_config.secrets, and the action needs a key)"
+        )
     })
 }

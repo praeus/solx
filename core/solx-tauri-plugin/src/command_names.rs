@@ -38,6 +38,8 @@ const COMMANDS: &[&str] = &[
     "config_update",
     "config_install_package",
     "config_uninstall_package",
+    "config_actions_save",
+    "config_actions_delete",
     "packages_catalog",
     "packages_install",
     "packages_uninstall",

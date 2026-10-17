@@ -18,7 +18,7 @@ use serde_json::Value;
 use solx_scripts::CommandRunner;
 use solx_surface::error::{Result, SolxError};
 use solx_surface::path::split_ref;
-use solx_surface::Principal;
+use solx_surface::{ExecScope, Principal};
 
 use crate::caller::Caller;
 use crate::LocalActionManager;
@@ -29,6 +29,7 @@ pub struct ActionCommandRunner {
     /// Inherited from the call that started this script; carried on to
     /// every nested `exec` stage.
     pub principal: Option<Principal>,
+    pub scope: ExecScope,
 }
 
 #[async_trait]
@@ -95,6 +96,7 @@ impl ActionCommandRunner {
                 params,
                 Some(&self.caller),
                 self.principal.as_ref(),
+                self.scope,
             )
             .await?;
         serde_json::to_value(&result)

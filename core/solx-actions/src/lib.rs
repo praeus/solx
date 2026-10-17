@@ -16,12 +16,13 @@ mod dispatch;
 mod exec;
 pub mod internal;
 mod invocation;
+mod lock;
 pub mod loopback;
-mod mask;
 pub mod net;
 mod row;
 mod schema;
 pub mod script;
+mod secret_config;
 pub mod secrets;
 mod seed;
 mod store;
@@ -32,6 +33,8 @@ pub mod test_probe;
 pub mod wasm;
 
 pub use invocation::set_long_lived_host;
+pub use lock::guard_locked_action;
+pub use secret_config::guard_keyed_action;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -45,7 +48,7 @@ use solx_surface::auth::TokenAuthority;
 use solx_surface::error::{Result, SolxError};
 use solx_surface::internal_actions::{ActionExecutor, CallerInfo, InternalActionRegistry};
 use solx_surface::managers::{DocManager, FileStore, TypeManager};
-use solx_surface::Principal;
+use solx_surface::{ExecScope, Principal};
 use tokio::task::AbortHandle;
 
 use db::Db;
@@ -109,9 +112,11 @@ impl ActionExecutor for LocalActionManager {
         name: &str,
         params: Value,
         principal: Option<Principal>,
+        scope: ExecScope,
         caller: Option<CallerInfo>,
     ) -> Result<Value> {
-        LocalActionManager::start_invocation(self, path, name, params, principal, caller).await
+        LocalActionManager::start_invocation(self, path, name, params, principal, scope, caller)
+            .await
     }
 
     async fn stop_invocation(

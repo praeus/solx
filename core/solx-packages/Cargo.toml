@@ -7,6 +7,8 @@ description = "Install/uninstall solx packages by running their install.solx scr
 
 [dependencies]
 solx-surface = { workspace = true }
+# `PackageActions` (see src/lib.rs).
+async-trait = { workspace = true }
 solx-config = { workspace = true }
 solx-scripts = { workspace = true }
 serde = { workspace = true }

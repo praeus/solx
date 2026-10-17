@@ -22,7 +22,7 @@ use serde_json::Value;
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::FileStore;
 use solx_surface::path::split_ref;
-use solx_surface::Principal;
+use solx_surface::{ExecScope, Principal};
 use wasmtime::component::Component;
 use wasmtime::{Config, Engine};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
@@ -151,6 +151,8 @@ pub(super) struct HostState {
     /// Inherited from the call that started this guest; carried on to
     /// every nested `action-exec`.
     principal: Option<Principal>,
+    /// Inherited and carried on exactly like `principal`.
+    scope: ExecScope,
     wasi: WasiCtx,
     table: ResourceTable,
 }
@@ -161,12 +163,14 @@ impl HostState {
         files: Arc<dyn FileStore>,
         caller: Caller,
         principal: Option<Principal>,
+        scope: ExecScope,
     ) -> Self {
         HostState {
             actions,
             files,
             caller,
             principal,
+            scope,
             wasi: WasiCtxBuilder::new().build(),
             table: ResourceTable::new(),
         }
@@ -234,6 +238,7 @@ impl sol::actions::action_exec::Host for HostState {
                 params,
                 Some(&self.caller),
                 self.principal.as_ref(),
+                self.scope,
             )
             .await
             .map_err(|e| e.to_string())?;

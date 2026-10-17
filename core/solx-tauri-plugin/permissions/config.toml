@@ -2,10 +2,12 @@
 
 [[set]]
 identifier = "config"
-description = "Allows reading and editing solx-config.json, and installing and uninstalling packages (which grant allowlist entries), including the command and outbound-URL allowlists. Grant only to a window that never loads package widgets (the desktop app's Settings window) — never alongside widget-hosting content."
+description = "Allows reading and editing solx-config.json, installing and uninstalling packages (which grant allowlist entries), including the command and outbound-URL allowlists, and saving or deleting actions as the operator (locked actions, locking and unlocking, actions with scoped secrets). Grant only to a window that never loads package widgets (the desktop app's Settings window) — never alongside widget-hosting content."
 permissions = [
     "allow-config-get",
     "allow-config-update",
     "allow-config-install-package",
     "allow-config-uninstall-package",
+    "allow-config-actions-save",
+    "allow-config-actions-delete",
 ]

@@ -118,8 +118,22 @@ export interface Action {
   files: FileRef[];
   /** Historical trust flag — no longer affects WASM dispatch (every built-in moved to `Internal`), metadata only. */
   trusted: boolean;
+  /**
+   * A locked action, and the artifact it was locked against, change only
+   * through an operator path (the solx CLI, a package install, the root
+   * token, the desktop app's Settings window).
+   */
+  locked?: boolean;
+  /** The artifact a locked Script/WASM action runs, checked before every run. */
+  artifactPin?: ArtifactPin;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ArtifactPin {
+  relPath: string;
+  /** Lowercase hex SHA-256. */
+  sha256: string;
 }
 
 export interface ActionInput {
@@ -136,6 +150,8 @@ export interface ActionInput {
   actionConfig?: JsonObject;
   files?: FileRef[];
   trusted?: boolean;
+  /** Honored only on operator paths; content that sets it is refused. */
+  locked?: boolean;
 }
 
 // ---------- ActionExecResult ----------

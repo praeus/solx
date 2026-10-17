@@ -72,6 +72,38 @@ pub(crate) fn allow_webhook_prefix(cfg: &ConfigService, prefix: &str) {
     cfg.add_allowed_base_url(prefix).unwrap();
 }
 
+/// A valid action key: 32 bytes, base64-encoded.
+pub(crate) const TEST_KEY: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+
 pub(crate) fn cfg_with_secret(key: &str) -> Value {
     serde_json::json!({ "cwd": "/work", "secrets": { "API_TOKEN": key } })
+}
+
+/// In-memory stand-in for the OS credential manager behind the scoped
+/// secret store, cleared each time it is built. `fn` pointers can't
+/// capture state, so the map lives in a static.
+pub(crate) fn fake_secret_backend() -> crate::secrets::SecretBackendOverride {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static FAKE_SECRETS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    fn store() -> &'static Mutex<HashMap<String, String>> {
+        FAKE_SECRETS.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    store().lock().unwrap().clear();
+    crate::secrets::SecretBackendOverride {
+        get: |name| Ok(store().lock().unwrap().get(name).cloned()),
+        set: |name, blob| {
+            store()
+                .lock()
+                .unwrap()
+                .insert(name.to_string(), blob.to_string());
+            Ok(())
+        },
+        delete: |name| {
+            store().lock().unwrap().remove(name);
+            Ok(())
+        },
+    }
 }

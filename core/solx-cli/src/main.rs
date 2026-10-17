@@ -52,8 +52,26 @@ enum BinCommand {
         #[arg(long)]
         print: bool,
     },
+    /// Lock or unlock an action. A locked action, and the artifact it was
+    /// locked against, change only through the solx CLI, a package
+    /// install, the root token, or the desktop app's Settings window.
+    /// Locking a Script/WASM action pins its current artifact; locking again
+    /// re-pins it.
+    Action {
+        #[command(subcommand)]
+        op: ActionOp,
+    },
     #[command(flatten)]
     Core(Commands),
+}
+
+/// Not in `Commands`, so no `.solx` script can lock or unlock anything.
+#[derive(Subcommand)]
+enum ActionOp {
+    /// Lock an action (`/path/name`), pinning its artifact.
+    Lock { reference: String },
+    /// Unlock an action, dropping its pin.
+    Unlock { reference: String },
 }
 
 #[derive(Subcommand)]
@@ -119,6 +137,7 @@ async fn main() -> Result<()> {
             credential,
             print,
         } => run_connect(target, credential, print).await?,
+        BinCommand::Action { op } => run_action(op).await?,
         BinCommand::Core(command) => {
             let app = build_app().await?;
             run_command(&app, command, None).await?
@@ -129,6 +148,32 @@ async fn main() -> Result<()> {
         other => println!("{}", serde_json::to_string_pretty(&other)?),
     }
     Ok(())
+}
+
+async fn run_action(op: ActionOp) -> Result<Value> {
+    let (reference, locked) = match op {
+        ActionOp::Lock { reference } => (reference, true),
+        ActionOp::Unlock { reference } => (reference, false),
+    };
+    let (path, name) = solx_surface::path::split_ref(&reference).map_err(solx_cli::to_anyhow)?;
+    let app = build_app().await?;
+    let action = app
+        .actions()
+        .save(
+            &path,
+            &name,
+            solx_surface::entities::ActionInput {
+                locked: Some(locked),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(solx_cli::to_anyhow)?;
+    Ok(json!({
+        "action": format!("{}/{}", action.path, action.name),
+        "locked": action.locked,
+        "artifactPin": action.artifact_pin,
+    }))
 }
 
 async fn run_token(action: TokenAction) -> Result<Value> {
