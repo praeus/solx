@@ -374,11 +374,12 @@ OAuth actions end-to-end against a real compiled binary.
    axum/reqwest); `solx-manager` picks local vs remote impls from
    `server_url`/`SOLX_SERVER_URL` per process.
 5. ~~Secrets out of `action_config`~~ — done
-   (`solx-actions/src/secret_config.rs`). An action's key lives in the
-   `secret_key` column, never in `action_config`, whose `secrets` values are
-   all `"***"`; inline `auth` credentials are refused on save. Reads need no
-   masking, and only root can create or change an action with secrets. This
-   replaced the earlier read-time masking (`mask.rs`).
+   (`solx-actions/src/secret_config.rs`). `action_config.secrets` lists only
+   names; each package (or standalone action) has one solx-generated key in
+   the `secret_keys` table, and its own credential-manager entries. Inline
+   `auth` credentials are refused on save. Reads need no masking, and only
+   root can create or change an action with secrets. This replaced the
+   earlier read-time masking (`mask.rs`).
 6. MCP Resources/Prompts (e.g. `solx://doc/{path}/{name}` URI templates) for
    GUI/context-attachment MCP clients — `solx-mcp` is tools-only today.
 7. ~~Real config-level allowlists for `Command`/`Webhook` actions~~ — done.

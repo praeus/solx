@@ -1136,7 +1136,8 @@ mod tests {
         ctx.exec = ExecContext::local().enter(Caller::from_action(
             "/pkg/foo",
             Some(solx_surface::ActionSecrets::new(
-                Some(&json!({ "secrets": { "FOO": "***" } })),
+                "package:pkg",
+                Some(&json!({ "secrets": ["FOO"] })),
                 Some(key_b64()),
             )),
         ));
@@ -1154,11 +1155,11 @@ mod tests {
             .unwrap();
         assert_eq!(got.get("value").and_then(Value::as_str), Some("s3cret"));
 
-        // A secret the caller has no key for stays out of reach.
+        // A secret the caller doesn't list stays out of reach.
         let err = run_internal("get-secret", &json!({"name": "BAR"}), &ctx)
             .await
             .unwrap_err();
-        assert!(err.contains("has no key for secret 'BAR'"), "{err}");
+        assert!(err.contains("can't use secret 'BAR'"), "{err}");
         assert!(err.contains("action://pkg/foo"), "{err}");
         crate::secrets::set_secret_backend_for_tests(None);
     }

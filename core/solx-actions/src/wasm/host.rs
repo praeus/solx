@@ -9,7 +9,7 @@
 //! from the row it was handed and passes it to [`HostState::new`], and
 //! every `action-exec` call the guest makes goes through
 //! [`crate::LocalActionManager::exec_as`] carrying it. That is what scopes
-//! `get-secret`/`set-secret` to the guest's own keys. The frame is rebuilt
+//! `get-secret`/`set-secret` to the guest's own secrets. The frame is rebuilt
 //! per nesting level, so a guest invoking another guest cannot reach the
 //! outer one's secrets.
 

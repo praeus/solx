@@ -190,9 +190,9 @@ read as a fallback, with a warning.
 ## 2. Secrets masking review (solx-core) — superseded
 
 Read-time masking (`mask.rs`) was replaced by keeping secrets out of
-`action_config` altogether: the key moved to the actions table's
-`secret_key` column, `action_config.secrets` holds only names mapped to
-`"***"`, inline `auth` credentials are refused on save, and only root can
+`action_config` altogether: keys are solx's own, one per package in the
+`secret_keys` table, `action_config.secrets` holds only names, inline
+`auth` credentials are refused on save, and only root can
 create or change an action with secrets. With nothing secret in the config,
 there is no read surface left to audit for a masking bypass. See
 `security-design.md` §5.2.

@@ -3,40 +3,34 @@
 //!
 //! An action's config never holds a secret, so reads need no redaction:
 //!
-//! * **The AES key** for the action's scoped secrets (see [`crate::secrets`])
-//!   lives in the actions table's `secret_key` column, never in an
-//!   [`Action`](solx_surface::entities::Action). `action_config.secrets`
-//!   keeps only the secret *names* the action may use, each mapped to the
-//!   literal [`MASK`]. A save may still carry a real key there — that is how
-//!   an install script sets one — and [`normalize`] lifts it into the column.
+//! * **Keys** aren't in a config at all. Each secret scope (a package, or a
+//!   standalone action — see [`solx_surface::secret_scope`]) has one AES key,
+//!   which solx generates and keeps in the actions database's `secret_keys`
+//!   table. `action_config.secrets` is only the list of secret *names* the
+//!   action may use. [`normalize`] stores it as a list and drops whatever an
+//!   older install script put in the values of the object form (`$key` or
+//!   `"***"`).
 //! * **Credentials** (`auth.token`, `auth.client_secret`, …) are refused
 //!   inline. They are resolved at call time from a `<field>_secret` pointer
 //!   into the scoped secret store, or a keyring reference — see
 //!   [`crate::auth::secret_field`].
-//!
-//! Because `"***"` is the stored value itself, the `get` → edit → `save`
-//! round trip keeps working without any merge: the echoed `"***"` is
-//! written back as is, and the column keeps its key.
 
 use serde_json::Value;
 use solx_surface::entities::{Action, ActionInput};
 
-/// Stands in for the key in `action_config.secrets`.
-pub const MASK: &str = "***";
-
-/// Refuse a save that would create or change a *keyed* action — one whose
-/// stored or incoming config declares `secrets` — for a caller that isn't
-/// root.
+/// Refuse a save that would create or change an action with secrets — one
+/// whose stored or incoming config declares `secrets` — for a caller that
+/// isn't root.
 ///
 /// Root is any in-process host (the CLI, a package install, Tauri) or an
 /// HTTP request with the root token; those call `ActionManager::save`
 /// directly. Everyone else — an MCP tool call, a WASM guest, a script, an
 /// HTTP client token — must pass this check first.
 ///
-/// It covers the whole row, not just the key. Adding a name to a keyed
-/// action's `secrets` would extend its key to another package's secrets
-/// (and a failed decrypt clears the entry), and repointing its `bin_name`
-/// or `files` would run new code with the key.
+/// It covers the whole row, not just the names. The key comes from the
+/// action's scope, so declaring a name under `/packages/<pkg>/` would read
+/// that package's secret, and repointing `bin_name` or `files` of an action
+/// that has secrets would run new code with them.
 pub fn guard_keyed_action(
     existing: Option<&Action>,
     incoming: &ActionInput,
@@ -54,68 +48,52 @@ pub fn guard_keyed_action(
     Ok(())
 }
 
-/// Validate `cfg` for storage and work out the action's key.
-///
-/// Rewrites every value under `secrets` to [`MASK`] and returns the key to
-/// store in the `secret_key` column: the one supplied in `cfg`, else
-/// `existing_key` when every value is already the mask, else `None` when
-/// the config declares no secrets at all.
-pub(crate) fn normalize(
-    cfg: &mut Value,
-    existing_key: Option<&str>,
-) -> Result<Option<String>, String> {
+/// Validate `cfg` for storage. Rewrites `secrets` as a sorted list of names
+/// (accepting the older object form, whose values are ignored) and returns
+/// whether the action declares any, so the caller can make sure its scope
+/// has a key.
+pub(crate) fn normalize(cfg: &mut Value) -> Result<bool, String> {
     reject_inline_credentials(cfg)?;
     let Some(secrets) = cfg.get_mut("secrets") else {
-        return Ok(None);
+        return Ok(false);
     };
-    let map = secrets.as_object_mut().ok_or_else(|| {
-        "action_config.secrets must be an object mapping secret names to a key".to_string()
-    })?;
-    if map.is_empty() {
-        return Ok(None);
-    }
-
-    let mut supplied: Option<&str> = None;
-    for (name, value) in map.iter() {
-        let key = value.as_str().ok_or_else(|| {
-            format!("action_config.secrets.{name} must be a string (a base64 key, or \"{MASK}\")")
-        })?;
-        if key == MASK {
-            continue;
-        }
-        match supplied {
-            None => supplied = Some(key),
-            Some(k) if k == key => {}
-            Some(_) => {
-                return Err(
-                    "action_config.secrets holds more than one key; an action has a single \
-                     key, so give every secret name the same one"
-                        .to_string(),
-                )
-            }
-        }
-    }
-
-    let key = match supplied {
-        Some(k) => {
-            crate::secrets::decode_key(k).map_err(|e| format!("action_config.secrets: {e}"))?;
-            k.to_string()
-        }
-        None => match existing_key {
-            Some(k) => k.to_string(),
-            None => {
-                let name = map.keys().next().map(String::as_str).unwrap_or_default();
-                return Err(format!(
-                    "action_config.secrets.{name} is \"{MASK}\" but this action has no key \
-                     yet; supply one (e.g. from `random 32`)"
-                ));
-            }
-        },
+    let names: Vec<String> = match secrets {
+        Value::Array(items) => items
+            .iter()
+            .map(|v| {
+                v.as_str().map(str::to_string).ok_or_else(|| {
+                    "action_config.secrets must list secret names (strings)".to_string()
+                })
+            })
+            .collect::<Result<_, _>>()?,
+        Value::Object(map) => map.keys().cloned().collect(),
+        _ => return Err("action_config.secrets must be a list of secret names".to_string()),
     };
-    for value in map.values_mut() {
-        *value = Value::String(MASK.to_string());
+    for name in &names {
+        validate_name(name)?;
     }
-    Ok(Some(key))
+    let names: std::collections::BTreeSet<String> = names.into_iter().collect();
+    let declares = !names.is_empty();
+    *secrets = Value::Array(names.into_iter().map(Value::String).collect());
+    Ok(declares)
+}
+
+/// A secret name becomes part of a credential-manager account
+/// (`<scope>/<name>`), so it may not contain a separator or anything else
+/// that could make one account look like another's.
+fn validate_name(name: &str) -> Result<(), String> {
+    let ok = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "action_config.secrets: '{name}' isn't a valid secret name (letters, digits, \
+             '_', '-' and '.' only)"
+        ))
+    }
 }
 
 /// What [`scrub_legacy`] did to one row's config.
@@ -123,21 +101,16 @@ pub(crate) fn normalize(
 pub(crate) struct Scrubbed {
     /// The config changed and must be written back.
     pub changed: bool,
-    /// A key lifted out of `secrets`, for the `secret_key` column.
-    pub key: Option<String>,
-    /// Problems worth a log line: inline credentials dropped, keys that
-    /// were malformed or disagreed.
+    /// Inline credentials or keys that were dropped, for a log line.
     pub notes: Vec<String>,
 }
 
-/// Bring a config stored before [`normalize`] existed into its shape.
-///
-/// Such a row keeps its real key(s) under `secrets` and may hold inline
-/// credentials under `auth`. With read-time masking gone, every `get` and
-/// `list` would return both. So the first valid key moves to the column,
-/// every `secrets` value becomes [`MASK`], and inline credentials (which
-/// execution no longer uses) are dropped. Unlike `normalize` it never
-/// fails: it runs at startup over rows nobody is there to fix.
+/// Strip secret material from a config stored before [`normalize`] did:
+/// keys in the values of the object form of `secrets`, and inline `auth`
+/// credentials. Both would otherwise be returned by every `get` and `list`.
+/// The keys are discarded, not kept: each scope's key is regenerated, so
+/// secrets stored under an old key read as not set. Unlike `normalize` it
+/// never fails: it runs at startup over rows nobody is there to fix.
 pub(crate) fn scrub_legacy(cfg: &mut Value) -> Scrubbed {
     let mut out = Scrubbed::default();
     if let Some(auth) = cfg.get_mut("auth").and_then(Value::as_object_mut) {
@@ -152,25 +125,17 @@ pub(crate) fn scrub_legacy(cfg: &mut Value) -> Scrubbed {
             }
         }
     }
-    if let Some(map) = cfg.get_mut("secrets").and_then(Value::as_object_mut) {
-        for value in map.values_mut() {
-            if value.as_str() == Some(MASK) {
-                continue;
-            }
-            match value.as_str() {
-                Some(k) if crate::secrets::decode_key(k).is_ok() => match &out.key {
-                    None => out.key = Some(k.to_string()),
-                    Some(kept) if kept == k => {}
-                    Some(_) => out.notes.push(
-                        "secrets held more than one key; kept the first, so secrets stored \
-                         under the others will read as not set"
-                            .to_string(),
-                    ),
-                },
-                _ => out.notes.push("dropped a malformed key under secrets".to_string()),
-            }
-            *value = Value::String(MASK.to_string());
-            out.changed = true;
+    if let Some(Value::Object(map)) = cfg.get("secrets") {
+        let held_a_key = map.values().any(|v| v.as_str() != Some("***"));
+        let names: Vec<Value> = map.keys().cloned().map(Value::String).collect();
+        cfg["secrets"] = Value::Array(names);
+        out.changed = true;
+        if held_a_key {
+            out.notes.push(
+                "dropped a key stored in action_config.secrets; the scope gets a new key, \
+                 so secrets stored under the old one must be set again"
+                    .to_string(),
+            );
         }
     }
     out
@@ -201,78 +166,60 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn supplied_key_is_lifted_out_and_masked() {
-        let mut cfg = json!({ "cwd": "/w", "secrets": { "A": TEST_KEY, "B": TEST_KEY } });
-        let key = normalize(&mut cfg, None).unwrap();
-        assert_eq!(key.as_deref(), Some(TEST_KEY));
-        assert_eq!(
-            cfg,
-            json!({ "cwd": "/w", "secrets": { "A": MASK, "B": MASK } })
-        );
+    fn names_are_stored_as_a_sorted_list() {
+        let mut cfg = json!({ "cwd": "/w", "secrets": ["B", "A", "B"] });
+        assert!(normalize(&mut cfg).unwrap());
+        assert_eq!(cfg, json!({ "cwd": "/w", "secrets": ["A", "B"] }));
+    }
+
+    /// The form older install scripts write: its values (a key, or "***")
+    /// are dropped, never stored.
+    #[test]
+    fn the_object_form_keeps_only_its_names() {
+        let mut cfg = json!({ "secrets": { "A": TEST_KEY, "B": "***" } });
+        assert!(normalize(&mut cfg).unwrap());
+        assert_eq!(cfg, json!({ "secrets": ["A", "B"] }));
+        assert!(!cfg.to_string().contains(TEST_KEY));
     }
 
     #[test]
-    fn mask_keeps_the_existing_key() {
-        let mut cfg = json!({ "secrets": { "A": MASK } });
-        assert_eq!(
-            normalize(&mut cfg, Some("old")).unwrap().as_deref(),
-            Some("old")
-        );
+    fn no_names_means_no_secrets() {
+        assert!(!normalize(&mut json!({ "cwd": "/w" })).unwrap());
+        assert!(!normalize(&mut json!({ "secrets": [] })).unwrap());
     }
 
     #[test]
-    fn a_new_key_replaces_the_existing_one() {
-        let mut cfg = json!({ "secrets": { "A": TEST_KEY, "B": MASK } });
-        assert_eq!(
-            normalize(&mut cfg, Some("old")).unwrap().as_deref(),
-            Some(TEST_KEY)
-        );
-        assert_eq!(cfg["secrets"]["B"], json!(MASK));
-    }
-
-    #[test]
-    fn mask_without_any_key_is_refused() {
-        let err = normalize(&mut json!({ "secrets": { "A": MASK } }), None).unwrap_err();
-        assert!(err.contains("has no key yet"), "{err}");
-    }
-
-    #[test]
-    fn differing_keys_are_refused() {
-        let other = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
-        let err = normalize(
-            &mut json!({ "secrets": { "A": TEST_KEY, "B": other } }),
-            None,
-        )
-        .unwrap_err();
-        assert!(err.contains("more than one key"), "{err}");
-    }
-
-    #[test]
-    fn malformed_key_is_refused() {
-        let err = normalize(&mut json!({ "secrets": { "A": "c2hvcnQ=" } }), None).unwrap_err();
-        assert!(err.contains("must decode to 32 bytes"), "{err}");
-    }
-
-    #[test]
-    fn no_secrets_means_no_key() {
-        assert_eq!(
-            normalize(&mut json!({ "cwd": "/w" }), Some("old")).unwrap(),
-            None
-        );
-        assert_eq!(
-            normalize(&mut json!({ "secrets": {} }), Some("old")).unwrap(),
-            None
-        );
+    fn bad_names_and_shapes_are_refused() {
+        for bad in [
+            json!({ "secrets": ["a/b"] }),
+            json!({ "secrets": [""] }),
+            json!({ "secrets": [42] }),
+            json!({ "secrets": "A" }),
+        ] {
+            let mut cfg = bad.clone();
+            assert!(normalize(&mut cfg).is_err(), "{bad}");
+        }
     }
 
     #[test]
     fn inline_credentials_are_refused() {
-        let err = normalize(
-            &mut json!({ "auth": { "type": "bearer", "token": "t" } }),
-            None,
-        )
-        .unwrap_err();
+        let err = normalize(&mut json!({ "auth": { "type": "bearer", "token": "t" } }))
+            .unwrap_err();
         assert!(err.contains("auth.token is an inline credential"), "{err}");
+    }
+
+    #[test]
+    fn pointers_and_keyring_references_are_accepted() {
+        let mut cfg = json!({
+            "secrets": ["TOKEN"],
+            "auth": {
+                "type": "oauth_refresh",
+                "client_id_secret": "TOKEN",
+                "refresh_token": { "keyring_service": "s", "keyring_account": "a" },
+                "token_uri": "https://example.com/token"
+            }
+        });
+        assert!(normalize(&mut cfg).is_ok());
     }
 
     #[test]
@@ -288,13 +235,12 @@ mod tests {
         });
         let out = scrub_legacy(&mut cfg);
         assert!(out.changed);
-        assert_eq!(out.key.as_deref(), Some(TEST_KEY));
-        assert_eq!(out.notes.len(), 1, "{:?}", out.notes);
+        assert_eq!(out.notes.len(), 2, "{:?}", out.notes);
         assert_eq!(
             cfg,
             json!({
                 "cwd": "/w",
-                "secrets": { "A": MASK, "B": MASK },
+                "secrets": ["A", "B"],
                 "auth": {
                     "type": "bearer",
                     "refresh_token": { "keyring_service": "s", "keyring_account": "a" }
@@ -305,27 +251,14 @@ mod tests {
         assert_eq!(scrub_legacy(&mut cfg), Scrubbed::default());
     }
 
+    /// A masked object (the shape just before this change) holds no key,
+    /// so it only becomes a list.
     #[test]
-    fn legacy_scrub_masks_even_bad_keys() {
-        let other = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
-        let mut cfg = json!({ "secrets": { "A": TEST_KEY, "B": other, "C": "short" } });
+    fn a_masked_object_becomes_a_list_quietly() {
+        let mut cfg = json!({ "secrets": { "A": "***" } });
         let out = scrub_legacy(&mut cfg);
-        assert_eq!(out.key.as_deref(), Some(TEST_KEY));
-        assert_eq!(out.notes.len(), 2, "{:?}", out.notes);
-        assert_eq!(cfg, json!({ "secrets": { "A": MASK, "B": MASK, "C": MASK } }));
-    }
-
-    #[test]
-    fn pointers_and_keyring_references_are_accepted() {
-        let mut cfg = json!({
-            "secrets": { "TOKEN": TEST_KEY },
-            "auth": {
-                "type": "oauth_refresh",
-                "client_id_secret": "TOKEN",
-                "refresh_token": { "keyring_service": "s", "keyring_account": "a" },
-                "token_uri": "https://example.com/token"
-            }
-        });
-        assert!(normalize(&mut cfg, None).is_ok());
+        assert!(out.changed);
+        assert!(out.notes.is_empty(), "{:?}", out.notes);
+        assert_eq!(cfg, json!({ "secrets": ["A"] }));
     }
 }

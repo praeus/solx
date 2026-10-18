@@ -119,9 +119,9 @@ impl Caller {
         &self.invocation_id
     }
 
-    /// The AES key this action may use for `name`, if any.
-    pub fn secret_key(&self, name: &str) -> Option<&str> {
-        self.secrets.key_for(name)
+    /// Secret `name`, if this action may use it.
+    pub fn secret(&self, name: &str) -> Option<SecretHandle> {
+        self.secrets.resolve(name)
     }
 
     /// The secrets this caller may resolve.
@@ -139,39 +139,71 @@ impl Caller {
     }
 }
 
-/// The scoped-secret access of one action: the secret names it declares in
-/// `action_config.secrets` and the AES key stored for it in the actions
-/// table's `secret_key` column — never in the config itself, where every
-/// value is the literal `"***"`.
+/// The secret scope an action belongs to: the unit that owns one AES key
+/// and one namespace in the credential manager.
 ///
-/// The names are an allowlist, not decoration. The secret store is keyed by
-/// name alone, so without it any action holding a key could reach another
-/// package's secrets by name — and a decrypt failure clears the entry.
+/// Every action under `/packages/<pkg>/` shares `package:<pkg>`, so a
+/// package's actions read each other's secrets and an update can add one
+/// that does too. Any other action is its own scope, `action:<full ref>`.
+/// The prefixes keep the two kinds apart: an action at `/packages` named
+/// `x` is `action:/packages/x`, not package `x`.
+pub fn secret_scope(path: &str, name: &str) -> String {
+    let mut segments = path.split('/').filter(|s| !s.is_empty());
+    if let (Some("packages"), Some(package)) = (segments.next(), segments.next()) {
+        return format!("package:{package}");
+    }
+    format!("action:{}/{}", path.trim_end_matches('/'), name)
+}
+
+/// The secret names an action declares in `action_config.secrets`: a list
+/// of names, or (the form older install scripts write) an object whose keys
+/// are the names. Its values are ignored: keys are never taken from a
+/// config.
+pub fn secret_names(action_config: Option<&Value>) -> BTreeSet<String> {
+    match action_config.and_then(|c| c.get("secrets")) {
+        Some(Value::Array(names)) => names
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        Some(Value::Object(map)) => map.keys().cloned().collect(),
+        _ => BTreeSet::new(),
+    }
+}
+
+/// The scoped-secret access of one action: the secret names it declares in
+/// `action_config.secrets`, its [`secret_scope`], and that scope's AES key,
+/// which solx keeps in the actions database, never in a config.
+///
+/// The names are an allowlist, not decoration: an action reaches only the
+/// secrets it declares, even within its own scope.
 #[derive(Clone, Default)]
 pub struct ActionSecrets {
+    scope: String,
     key: Option<String>,
     names: BTreeSet<String>,
 }
 
 impl ActionSecrets {
-    /// `action_config` supplies the names; `key` comes from the row's
-    /// `secret_key` column.
-    pub fn new(action_config: Option<&Value>, key: Option<String>) -> Self {
-        let names = action_config
-            .and_then(|c| c.get("secrets"))
-            .and_then(Value::as_object)
-            .map(|m| m.keys().cloned().collect())
-            .unwrap_or_default();
+    /// `scope` is the action's [`secret_scope`]; `action_config` supplies the
+    /// names; `key` is the scope's key.
+    pub fn new(scope: impl Into<String>, action_config: Option<&Value>, key: Option<String>) -> Self {
         ActionSecrets {
+            scope: scope.into(),
             key: key.filter(|k| !k.is_empty()),
-            names,
+            names: secret_names(action_config),
         }
     }
 
-    /// The key for secret `name`, if the action declares that name and has
-    /// a key at all.
-    pub fn key_for(&self, name: &str) -> Option<&str> {
-        self.key.as_deref().filter(|_| self.names.contains(name))
+    /// Where secret `name` lives and the key that opens it, if the action
+    /// declares that name and its scope has a key.
+    pub fn resolve(&self, name: &str) -> Option<SecretHandle> {
+        let key = self.key.as_ref().filter(|_| self.names.contains(name))?;
+        Some(SecretHandle {
+            name: name.to_string(),
+            account: format!("{}/{name}", self.scope),
+            key: key.clone(),
+        })
     }
 }
 
@@ -179,9 +211,79 @@ impl ActionSecrets {
 impl fmt::Debug for ActionSecrets {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ActionSecrets")
+            .field("scope", &self.scope)
             .field("has_key", &self.key.is_some())
             .field("names", &self.names)
             .finish()
+    }
+}
+
+/// One secret an action may use: its credential-manager account
+/// (`<scope>/<name>`, so two scopes never share an entry) and the key that
+/// encrypts it. Obtained only from [`ActionSecrets::resolve`].
+#[derive(Clone)]
+pub struct SecretHandle {
+    name: String,
+    account: String,
+    key: String,
+}
+
+impl SecretHandle {
+    /// The name the action uses for it, e.g. `GOOGLE_OAUTH_REFRESH_TOKEN`.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The credential-manager account it is stored under.
+    pub fn account(&self) -> &str {
+        &self.account
+    }
+
+    /// The base64 AES-256 key. Never returned to a caller.
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+}
+
+/// Never prints the key.
+impl fmt::Debug for SecretHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SecretHandle")
+            .field("account", &self.account)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod secret_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn packages_share_a_scope_and_everything_else_is_its_own() {
+        assert_eq!(secret_scope("/packages/solx-google", "a"), "package:solx-google");
+        assert_eq!(secret_scope("/packages/solx-google/_private", "b"), "package:solx-google");
+        assert_eq!(secret_scope("/packages", "x"), "action:/packages/x");
+        assert_eq!(secret_scope("/tools", "hook"), "action:/tools/hook");
+    }
+
+    #[test]
+    fn names_come_from_a_list_or_an_objects_keys() {
+        let list = json!({ "secrets": ["A", "B"] });
+        let object = json!({ "secrets": { "A": "ignored", "B": "***" } });
+        assert_eq!(secret_names(Some(&list)), secret_names(Some(&object)));
+        assert!(secret_names(Some(&json!({}))).is_empty());
+    }
+
+    #[test]
+    fn only_declared_names_resolve_and_accounts_are_scoped() {
+        let cfg = json!({ "secrets": ["A"] });
+        let secrets = ActionSecrets::new("package:p", Some(&cfg), Some("k".into()));
+        let handle = secrets.resolve("A").unwrap();
+        assert_eq!(handle.account(), "package:p/A");
+        assert_eq!(handle.key(), "k");
+        assert!(secrets.resolve("B").is_none());
+        assert!(ActionSecrets::new("package:p", Some(&cfg), None).resolve("A").is_none());
     }
 }
 
@@ -194,7 +296,7 @@ impl fmt::Display for Caller {
 
 /// Non-secret identity of the calling action — everything a pluggable
 /// [`InternalActionHandler`] is allowed to see about who invoked it. Unlike
-/// [`Caller`], this type has no `secret_key` method and no secrets field to
+/// [`Caller`], this type has no `secret` method and no secrets field to
 /// add one to later by accident: the exclusion is a compile-time fact, not
 /// just a documented convention.
 #[derive(Debug, Clone)]

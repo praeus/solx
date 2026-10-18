@@ -120,7 +120,7 @@ impl LocalActionManager {
     /// `ctx` is the chain's [`ExecContext`]. Its caller is `Some` only on a
     /// recursive hop from another action (a WASM guest's `action-exec`, a
     /// script's `exec` stage), and scopes `get-secret`/`set-secret` to the
-    /// *calling* action's own keys. Its principal and exclusion mode were
+    /// *calling* action's own secrets. Its principal and exclusion mode were
     /// fixed where the chain entered; under [`ExcludeMode::Tooling`] every
     /// frame is held to the tooling exclusions (see [`Self::enforce_scope`]).
     pub async fn exec_as(

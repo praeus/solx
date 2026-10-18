@@ -15,12 +15,12 @@
 //! Credentials ([`CREDENTIAL_FIELDS`]) are never inline in the config —
 //! `crate::secret_config` refuses them on save. Each comes from either a
 //! pointer into the scoped secret store (`client_secret_secret`, etc — see
-//! `secrets.rs`), decrypted with the action's own key and allowed only for
+//! `secrets.rs`), decrypted with the action's scope key and allowed only for
 //! a name listed in its `action_config.secrets`:
 //!
 //! ```json
 //! { "action_config": {
-//!     "secrets": { "GOOGLE_OAUTH_CLIENT_SECRET": "***" },
+//!     "secrets": ["GOOGLE_OAUTH_CLIENT_SECRET"],
 //!     "auth": { "type": "oauth_refresh", "client_secret_secret": "GOOGLE_OAUTH_CLIENT_SECRET", ... }
 //! } }
 //! ```
@@ -50,7 +50,7 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use solx_surface::ActionSecrets;
+use solx_surface::{ActionSecrets, SecretHandle};
 
 /// The `auth` fields that hold credentials. Each is resolved through
 /// [`secret_field`] and has a `<field>_secret` pointer form; an inline
@@ -282,7 +282,7 @@ impl RefreshRequest {
 ///
 /// 1. `auth.<field>` as a keyring-ref object.
 /// 2. `auth.<field>_secret` — name of a secret in the scoped secret
-///    store, decrypted with the action's key; the name must be listed in
+///    store, decrypted with the action's scope key; the name must be listed in
 ///    the action's `action_config.secrets`.
 /// 3. `Err` — neither was present.
 ///
@@ -330,14 +330,13 @@ pub(crate) async fn secret_field(
     // 2. Scoped secret-store indirection.
     if let Some(name) = secret_field_name.and_then(|f| auth.get(f).and_then(Value::as_str)) {
         if !name.is_empty() {
-            let key = secrets.key_for(name).ok_or_else(|| {
+            let secret = secrets.resolve(name).ok_or_else(|| {
                 format!(
                     "auth.type='{auth_type_label}': field '{field}' points to secret \
-                     '{name}' but the action has no key for it (the name must be listed \
-                     in action_config.secrets)"
+                     '{name}', which isn't listed in action_config.secrets"
                 )
             })?;
-            let value = crate::secrets::get_secret(name, key).await.map_err(|e| {
+            let value = crate::secrets::get_secret(&secret).await.map_err(|e| {
                 format!("auth.type='{auth_type_label}': failed to read secret '{name}': {e}")
             })?;
             return value.filter(|v| !v.is_empty()).ok_or_else(|| {
@@ -418,8 +417,8 @@ enum RefreshStorage {
     /// — write the new value through the keyring.
     Keyring { service: String, account: String },
     /// The action has `"refresh_token_secret": "<name>"` — write the new
-    /// value through the scoped secret store, using the action's key.
-    Secret { name: String, key: String },
+    /// value through the scoped secret store.
+    Secret(SecretHandle),
 }
 
 impl RefreshStorage {
@@ -427,11 +426,8 @@ impl RefreshStorage {
     /// a refresh token that just resolved, since it came from one of these.
     fn from_auth(secrets: &ActionSecrets, auth: &Value) -> Option<Self> {
         if let Some(name) = auth.get("refresh_token_secret").and_then(Value::as_str) {
-            if let Some(key) = secrets.key_for(name) {
-                return Some(RefreshStorage::Secret {
-                    name: name.to_string(),
-                    key: key.to_string(),
-                });
+            if let Some(secret) = secrets.resolve(name) {
+                return Some(RefreshStorage::Secret(secret));
             }
         }
         if let Some(obj) = auth.get("refresh_token").and_then(Value::as_object) {
@@ -546,15 +542,12 @@ async fn persist_rotated_refresh_token(
                 );
             }
         }
-        Some(RefreshStorage::Secret {
-            name: secret_name,
-            key,
-        }) => {
-            if let Err(e) = crate::secrets::set_secret(&secret_name, new_refresh_token, &key).await
-            {
+        Some(RefreshStorage::Secret(secret)) => {
+            if let Err(e) = crate::secrets::set_secret(&secret, new_refresh_token).await {
                 tracing::warn!(
-                    "failed to persist rotated refresh_token to secret '{secret_name}' \
-                     for action '{name}': {e}"
+                    "failed to persist rotated refresh_token to secret '{}' \
+                     for action '{name}': {e}",
+                    secret.name()
                 );
             }
         }
@@ -914,36 +907,42 @@ mod tests {
         crate::secrets::set_secret_backend_for_tests(Some(
             crate::test_support::fake_secret_backend(),
         ));
-        let key = crate::test_support::TEST_KEY;
-        crate::secrets::set_secret("BEARER", "from-store", key)
-            .await
-            .unwrap();
         let cfg = json!({
-            "secrets": { "BEARER": "***" },
+            "secrets": ["BEARER"],
             "auth": { "type": "bearer", "token_secret": "BEARER" }
         });
-        let secrets = ActionSecrets::new(Some(&cfg), Some(key.to_string()));
+        let secrets = ActionSecrets::new(
+            "action:/test/pointer",
+            Some(&cfg),
+            Some(crate::test_support::TEST_KEY.to_string()),
+        );
+        crate::secrets::set_secret(&secrets.resolve("BEARER").unwrap(), "from-store")
+            .await
+            .unwrap();
         let out = resolve_auth("/test", "pointer", &cfg, &secrets).await;
         crate::secrets::set_secret_backend_for_tests(None);
         assert_eq!(out.unwrap().unwrap(), "Bearer from-store");
     }
 
-    /// The key alone isn't enough: the name has to be in the action's
-    /// `secrets` allowlist.
+    /// A key isn't enough: the name has to be in the action's `secrets`
+    /// allowlist.
     #[serial(auth_cache, secrets_backend)]
     #[tokio::test]
     async fn secret_pointer_outside_the_allowlist_is_refused() {
         clear();
         let cfg = json!({
-            "secrets": { "OTHER": "***" },
+            "secrets": ["OTHER"],
             "auth": { "type": "bearer", "token_secret": "BEARER" }
         });
-        let secrets =
-            ActionSecrets::new(Some(&cfg), Some(crate::test_support::TEST_KEY.to_string()));
+        let secrets = ActionSecrets::new(
+            "action:/test/outside",
+            Some(&cfg),
+            Some(crate::test_support::TEST_KEY.to_string()),
+        );
         let err = resolve_auth("/test", "outside", &cfg, &secrets)
             .await
             .unwrap_err();
-        assert!(err.contains("has no key for it"), "{err}");
+        assert!(err.contains("isn't listed in action_config.secrets"), "{err}");
     }
 
     // ── optional_secret_field (oauth_authorization_code client_secret) ─────
@@ -1014,12 +1013,12 @@ mod tests {
 
     #[test]
     fn refresh_storage_detects_secret_pointer_when_key_configured() {
-        let cfg = json!({"secrets": {"GOOGLE_OAUTH_REFRESH_TOKEN": "***"}});
-        let secrets = ActionSecrets::new(Some(&cfg), Some("the-key".into()));
+        let cfg = json!({"secrets": ["GOOGLE_OAUTH_REFRESH_TOKEN"]});
+        let secrets = ActionSecrets::new("package:p", Some(&cfg), Some("the-key".into()));
         let auth = json!({"refresh_token_secret": "GOOGLE_OAUTH_REFRESH_TOKEN"});
         assert!(matches!(
             RefreshStorage::from_auth(&secrets, &auth),
-            Some(RefreshStorage::Secret { .. })
+            Some(RefreshStorage::Secret(_))
         ));
     }
 

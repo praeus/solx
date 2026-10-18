@@ -127,10 +127,10 @@ async fn types_docs_actions_files_round_trip_over_http() {
     assert!(docs.get("/research/ai", "note").await.is_err());
 
     // Actions (Command — exercises exec() end to end, server-side).
-    // The config carries a secret key, so this also covers keeping it off
-    // the wire: save moves it out of the config into its own column, so the
-    // key must never appear in an HTTP response, while exec — which looks
-    // the key up server-side — still works.
+    // The config is in the form older install scripts write, with a key as
+    // the value, so this also covers keeping it off the wire: save keeps
+    // only the name (the scope's key is solx's own), so the supplied key
+    // never appears in an HTTP response, while exec still works.
     let real_key = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
     actions
         .save(
@@ -156,9 +156,9 @@ async fn types_docs_actions_files_round_trip_over_http() {
     );
     let cfg = fetched.action_config.as_ref().unwrap();
     assert_eq!(
-        cfg["secrets"]["API_TOKEN"],
-        json!("***"),
-        "secret key crossed the wire"
+        cfg["secrets"],
+        json!(["API_TOKEN"]),
+        "secrets should come back as names only"
     );
     assert_eq!(
         cfg["cwd"],
@@ -198,8 +198,8 @@ async fn types_docs_actions_files_round_trip_over_http() {
         .unwrap();
     assert_eq!(action_page.total, 1);
     assert_eq!(
-        action_page.items[0].action_config.as_ref().unwrap()["secrets"]["API_TOKEN"],
-        json!("***"),
+        action_page.items[0].action_config.as_ref().unwrap()["secrets"],
+        json!(["API_TOKEN"]),
         "list must not carry the key either"
     );
     actions.delete("/tools", "echo").await.unwrap();

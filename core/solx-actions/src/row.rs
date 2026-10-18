@@ -99,24 +99,70 @@ pub(crate) fn row_to_action(row: &libsql::Row) -> Result<Action> {
     })
 }
 
-/// The row's `secret_key` column, or `None` when the row is missing or has
-/// no key. Deliberately not part of [`SELECT`]/[`row_to_action`].
-pub(crate) async fn get_secret_key(
-    conn: &Connection,
-    path: &str,
-    name: &str,
-) -> Result<Option<String>> {
+/// The key of secret scope `scope`, creating one if it has none. Concurrent
+/// callers agree: the insert is `OR IGNORE`, and everyone reads back the
+/// row that won. Deliberately not part of [`SELECT`]/[`row_to_action`].
+pub(crate) async fn ensure_scope_key(conn: &Connection, scope: &str) -> Result<String> {
+    conn.execute(
+        "INSERT OR IGNORE INTO secret_keys (scope, key, created_at) VALUES (?1, ?2, ?3)",
+        libsql::params![
+            scope.to_string(),
+            crate::secrets::generate_key(),
+            Utc::now().to_rfc3339()
+        ],
+    )
+    .await
+    .map_err(map_db)?;
     let mut rows = conn
         .query(
-            "SELECT secret_key FROM actions WHERE path=?1 AND name=?2",
-            libsql::params![path.to_string(), name.to_string()],
+            "SELECT key FROM secret_keys WHERE scope=?1",
+            libsql::params![scope.to_string()],
         )
         .await
         .map_err(map_db)?;
-    match rows.next().await.map_err(map_db)? {
-        Some(row) => Ok(opt(row.get::<String>(0).map_err(map_db)?)),
-        None => Ok(None),
+    let row = rows
+        .next()
+        .await
+        .map_err(map_db)?
+        .ok_or_else(|| SolxError::Db(format!("secret key for {scope} vanished after write")))?;
+    row.get::<String>(0).map_err(map_db)
+}
+
+/// Delete the key of secret scope `scope` once no action belongs to it, so
+/// uninstalling a package (deleting its actions) also forgets its key. A
+/// package scope is in use while any action remains under its path; an
+/// action's own scope, while that action exists.
+pub(crate) async fn delete_scope_key_if_unused(conn: &Connection, scope: &str) -> Result<()> {
+    let in_use = if let Some(package) = scope.strip_prefix("package:") {
+        let base = format!("/packages/{package}");
+        conn.query(
+            "SELECT 1 FROM actions WHERE path=?1 OR substr(path, 1, length(?1) + 1) = ?1 || '/' \
+             LIMIT 1",
+            libsql::params![base],
+        )
+        .await
+        .map_err(map_db)?
+        .next()
+        .await
+        .map_err(map_db)?
+        .is_some()
+    } else if let Some(reference) = scope.strip_prefix("action:") {
+        match solx_surface::path::split_ref(reference) {
+            Ok((path, name)) => get_row(conn, &path, &name).await?.is_some(),
+            Err(_) => false,
+        }
+    } else {
+        true
+    };
+    if !in_use {
+        conn.execute(
+            "DELETE FROM secret_keys WHERE scope=?1",
+            libsql::params![scope.to_string()],
+        )
+        .await
+        .map_err(map_db)?;
     }
+    Ok(())
 }
 
 pub(crate) async fn get_row(conn: &Connection, path: &str, name: &str) -> Result<Option<Action>> {

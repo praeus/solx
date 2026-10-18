@@ -8,7 +8,7 @@ use serde_json::Value;
 use solx_surface::entities::{Action, ActionExecResult, ActionInput, ActionType};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::ActionManager;
-use solx_surface::{ActionSecrets, ExecContext, Principal};
+use solx_surface::{secret_names, secret_scope, ActionSecrets, ExecContext, Principal};
 use solx_surface::path::{full_ref, normalize_path, validate_name};
 use solx_surface::query::{
     ActionSearchQuery, ExcludeMode, ListOptions, ListSchema, ListSql, Page, PathFacet, SortOrder,
@@ -16,7 +16,9 @@ use solx_surface::query::{
 use uuid::Uuid;
 
 use crate::db::map_db;
-use crate::row::{action_type_to_str, get_row, get_secret_key, row_to_action, SELECT};
+use crate::row::{
+    action_type_to_str, delete_scope_key_if_unused, ensure_scope_key, get_row, row_to_action, SELECT,
+};
 use crate::{lock, secret_config, LocalActionManager};
 
 const DEFAULT_LIMIT: usize = 50;
@@ -96,8 +98,9 @@ fn fts_match_query(q: &str) -> String {
 }
 
 impl LocalActionManager {
-    /// Read a row along with its [`ActionSecrets`] — the key from the
-    /// `secret_key` column, which nothing else reads.
+    /// Read a row along with its [`ActionSecrets`]: the names it declares
+    /// and its scope's key (created now if the scope has none yet, as for a
+    /// row saved before keys were per scope). Nothing else reads the key.
     ///
     /// For execution only: the result must never leave the process.
     pub(crate) async fn get_with_secrets(
@@ -112,8 +115,13 @@ impl LocalActionManager {
         let action = get_row(&conn, &path, name.trim())
             .await?
             .ok_or_else(|| SolxError::NotFound(format!("action {fr}")))?;
-        let key = get_secret_key(&conn, &path, name.trim()).await?;
-        let secrets = ActionSecrets::new(action.action_config.as_ref(), key);
+        let scope = secret_scope(&action.path, &action.name);
+        let key = if secret_names(action.action_config.as_ref()).is_empty() {
+            None
+        } else {
+            Some(ensure_scope_key(&conn, &scope).await?)
+        };
+        let secrets = ActionSecrets::new(scope, action.action_config.as_ref(), key);
         Ok((action, secrets))
     }
 
@@ -197,24 +205,20 @@ impl ActionManager for LocalActionManager {
         let action_type = input
             .action_type
             .or_else(|| existing.as_ref().and_then(|a| a.action_type));
-        // A key supplied under `secrets` moves to its own column, and inline
-        // credentials are refused, so the stored config holds no secret
-        // material — see `crate::secret_config`.
-        let existing_key = match existing {
-            Some(_) => get_secret_key(&conn, &path, &name).await?,
-            None => None,
-        };
-        let (action_config, secret_key) = match input.action_config {
+        // `secrets` is stored as a list of names (whatever an older install
+        // script put in its values is dropped), and inline credentials are
+        // refused, so the stored config holds no secret material — see
+        // `crate::secret_config`. The key belongs to the action's scope.
+        let action_config = match input.action_config {
             Some(mut incoming) => {
-                let key = secret_config::normalize(&mut incoming, existing_key.as_deref())
-                    .map_err(SolxError::Invalid)?;
-                (Some(incoming), key)
+                secret_config::normalize(&mut incoming).map_err(SolxError::Invalid)?;
+                Some(incoming)
             }
-            None => (
-                existing.as_ref().and_then(|a| a.action_config.clone()),
-                existing_key,
-            ),
+            None => existing.as_ref().and_then(|a| a.action_config.clone()),
         };
+        if !secret_names(action_config.as_ref()).is_empty() {
+            ensure_scope_key(&conn, &secret_scope(&path, &name)).await?;
+        }
         let capabilities = merge_vec!(capabilities);
         let phrases = merge_vec!(phrases);
         let files = merge_vec!(files);
@@ -265,7 +269,6 @@ impl ActionManager for LocalActionManager {
             trusted,
             created_at.to_rfc3339(),
             now_s.clone(),
-            secret_key.unwrap_or_default(),
             locked,
             pin.as_ref().map(|p| p.rel_path.clone()).unwrap_or_default(),
             pin.map(|p| p.sha256).unwrap_or_default(),
@@ -273,15 +276,15 @@ impl ActionManager for LocalActionManager {
 
         if existing.is_some() {
             conn.execute(
-                "UPDATE actions SET caption=?4,description=?5,capabilities=?6,phrases=?7,category=?8,param_type_ref=?9,result_type_ref=?10,action_type=?11,fn_name=?12,bin_name=?13,action_config=?14,files=?15,trusted=?16,updated_at=?18,secret_key=?19,locked=?20,pin_path=?21,pin_sha256=?22 WHERE path=?2 AND name=?3",
+                "UPDATE actions SET caption=?4,description=?5,capabilities=?6,phrases=?7,category=?8,param_type_ref=?9,result_type_ref=?10,action_type=?11,fn_name=?12,bin_name=?13,action_config=?14,files=?15,trusted=?16,updated_at=?18,locked=?19,pin_path=?20,pin_sha256=?21 WHERE path=?2 AND name=?3",
                 params,
             )
             .await
             .map_err(map_db)?;
         } else {
             conn.execute(
-                "INSERT INTO actions (id,path,name,caption,description,capabilities,phrases,category,param_type_ref,result_type_ref,action_type,fn_name,bin_name,action_config,files,trusted,created_at,updated_at,secret_key,locked,pin_path,pin_sha256) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
+                "INSERT INTO actions (id,path,name,caption,description,capabilities,phrases,category,param_type_ref,result_type_ref,action_type,fn_name,bin_name,action_config,files,trusted,created_at,updated_at,locked,pin_path,pin_sha256) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
                 params,
             )
             .await
@@ -318,7 +321,9 @@ impl ActionManager for LocalActionManager {
         if affected == 0 {
             return Err(SolxError::NotFound(format!("action {fr}")));
         }
-        Ok(())
+        // Uninstalling a package deletes its actions; the last one takes
+        // the package's key with it.
+        delete_scope_key_if_unused(&conn, &secret_scope(&path, name.trim())).await
     }
 
     async fn list(&self, opts: ListOptions) -> Result<Page<Action>> {
@@ -497,6 +502,36 @@ mod tests {
     use crate::db::{map_db, Db};
     use crate::schema::DDL;
     use crate::test_support::*;
+
+    /// The key `secrets` would open `name` with, if it may use it.
+    fn key_of(secrets: &ActionSecrets, name: &str) -> Option<String> {
+        secrets.resolve(name).map(|h| h.key().to_string())
+    }
+
+    /// The key action `path`/`name` runs with for `API_TOKEN`.
+    async fn run_key(m: &LocalActionManager, path: &str, name: &str) -> Option<String> {
+        let (_, secrets) = m.get_with_secrets(path, name).await.unwrap();
+        key_of(&secrets, "API_TOKEN")
+    }
+
+    async fn stored_scope_keys(m: &LocalActionManager) -> i64 {
+        let conn = m.db.connect().await.unwrap();
+        let mut rows = conn
+            .query("SELECT count(*) FROM secret_keys", ())
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    }
+
+    /// A Command action declaring `API_TOKEN`.
+    fn with_secret(cfg: serde_json::Value) -> ActionInput {
+        ActionInput {
+            action_type: Some(ActionType::Command),
+            fn_name: Some("echo".into()),
+            action_config: Some(cfg),
+            ..Default::default()
+        }
+    }
 
     /// Seed a handful of actions with distinguishable fields for list tests.
     async fn seed_list_fixtures(m: &LocalActionManager) {
@@ -714,26 +749,34 @@ mod tests {
         assert_eq!(page.items[0].name, "old-timer");
     }
 
-    /// A row saved before the `secret_key` column holds its key (and maybe
-    /// an inline credential) in `action_config`. Read-time masking is gone,
-    /// so opening the database must move both out before anything reads it.
+    /// A database from before keys were per scope: a row with its key in
+    /// the old `secret_key` column, and (older still) another copy in
+    /// `action_config` beside an inline credential. Opening it strips the
+    /// config and drops the column without carrying any key over; the
+    /// first run creates a fresh key for the scope.
     #[tokio::test]
-    async fn opening_moves_a_legacy_key_out_of_the_config() {
+    async fn opening_an_older_database_regenerates_keys() {
         let dir = tempfile::tempdir().unwrap();
         let actions_db_path = dir.path().join("actions.db");
         {
             let db = Db::open(&actions_db_path).await.unwrap();
             let conn = db.connect().await.unwrap();
             conn.execute_batch(DDL).await.map_err(map_db).unwrap();
+            conn.execute(
+                "ALTER TABLE actions ADD COLUMN secret_key TEXT NOT NULL DEFAULT ''",
+                (),
+            )
+            .await
+            .unwrap();
             let now = Utc::now().to_rfc3339();
             let cfg = serde_json::json!({
                 "secrets": { "API_TOKEN": TEST_KEY },
                 "auth": { "type": "bearer", "token": "inline-token" }
             });
             conn.execute(
-                "INSERT INTO actions (id,path,name,caption,description,capabilities,phrases,category,param_type_ref,result_type_ref,action_type,fn_name,bin_name,action_config,files,trusted,created_at,updated_at) \
-                 VALUES (?1,'/tools','legacy','','','[]','[]','','','','webhook','https://example.com','',?2,'[]',0,?3,?3)",
-                libsql::params![Uuid::new_v4().to_string(), cfg.to_string(), now],
+                "INSERT INTO actions (id,path,name,caption,description,capabilities,phrases,category,param_type_ref,result_type_ref,action_type,fn_name,bin_name,action_config,files,trusted,created_at,updated_at,secret_key) \
+                 VALUES (?1,'/packages/p','legacy','','','[]','[]','','','','webhook','https://example.com','',?2,'[]',0,?3,?3,?4)",
+                libsql::params![Uuid::new_v4().to_string(), cfg.to_string(), now, TEST_KEY],
             )
             .await
             .map_err(map_db)
@@ -741,27 +784,36 @@ mod tests {
         }
 
         let (_cfg, m) = open_manager(dir.path(), &actions_db_path).await;
-        let got = serde_json::to_string(&m.get("/tools", "legacy").await.unwrap()).unwrap();
+        let got = serde_json::to_string(&m.get("/packages/p", "legacy").await.unwrap()).unwrap();
         assert!(!got.contains(TEST_KEY), "key leaked: {got}");
         assert!(!got.contains("inline-token"), "credential leaked: {got}");
-        let (action, secrets) = m.get_with_secrets("/tools", "legacy").await.unwrap();
-        assert_eq!(secrets.key_for("API_TOKEN"), Some(TEST_KEY));
-        assert_eq!(
-            action.action_config.unwrap()["secrets"]["API_TOKEN"],
-            serde_json::json!("***")
-        );
+        let conn = m.db.connect().await.unwrap();
+        let column = conn
+            .query(
+                "SELECT 1 FROM pragma_table_info('actions') WHERE name='secret_key'",
+                (),
+            )
+            .await
+            .unwrap()
+            .next()
+            .await
+            .unwrap();
+        assert!(column.is_none(), "secret_key column survived");
+        assert_eq!(stored_scope_keys(&m).await, 0, "a key was carried over");
 
-        // A package reinstall saves "***", which needs the moved key.
-        m.save(
-            "/tools",
-            "legacy",
-            ActionInput {
-                action_config: Some(cfg_with_secret("***")),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
+        let (action, _) = m.get_with_secrets("/packages/p", "legacy").await.unwrap();
+        assert_eq!(
+            action.action_config.unwrap()["secrets"],
+            serde_json::json!(["API_TOKEN"])
+        );
+        let fresh = run_key(&m, "/packages/p", "legacy").await.unwrap();
+        assert_ne!(fresh, TEST_KEY);
+
+        // A package reinstall in the old style ("***") keeps the new key.
+        m.save("/packages/p", "legacy", with_secret(cfg_with_secret("***")))
+            .await
+            .unwrap();
+        assert_eq!(run_key(&m, "/packages/p", "legacy").await, Some(fresh));
     }
 
     #[tokio::test]
@@ -843,8 +895,9 @@ mod tests {
         assert_eq!(desc, vec!["/tools/beta-tool", "/tools/alpha-tool"]);
     }
 
-    /// The key moves to its own column on save: every read shows `"***"`,
-    /// and only `get_with_secrets` (execution) can reach the key.
+    /// A key supplied in the config is dropped, never stored; the scope gets
+    /// its own. Reads return only the names, and only `get_with_secrets`
+    /// (execution) can reach the key.
     #[tokio::test]
     async fn the_key_is_stored_apart_from_the_config() {
         let (_d, _c, m) = setup().await;
@@ -871,21 +924,22 @@ mod tests {
             .await
             .unwrap();
 
+        let (_, secrets) = m.get_with_secrets("/tools", "s").await.unwrap();
+        let key = key_of(&secrets, "API_TOKEN").unwrap();
+        assert_ne!(key, TEST_KEY);
+        assert_eq!(key_of(&secrets, "UNLISTED"), None);
         for out in [
             serde_json::to_string(&saved).unwrap(),
             serde_json::to_string(&got).unwrap(),
             serde_json::to_string(&page).unwrap(),
             serde_json::to_string(&found).unwrap(),
         ] {
-            assert!(!out.contains(TEST_KEY), "key leaked: {out}");
+            assert!(!out.contains(TEST_KEY), "supplied key leaked: {out}");
+            assert!(!out.contains(&key), "scope key leaked: {out}");
         }
         let cfg = got.action_config.as_ref().unwrap();
-        assert_eq!(cfg["secrets"]["API_TOKEN"], serde_json::json!("***"));
+        assert_eq!(cfg["secrets"], serde_json::json!(["API_TOKEN"]));
         assert_eq!(cfg["cwd"], serde_json::json!("/work"));
-
-        let (_, secrets) = m.get_with_secrets("/tools", "s").await.unwrap();
-        assert_eq!(secrets.key_for("API_TOKEN"), Some(TEST_KEY));
-        assert_eq!(secrets.key_for("UNLISTED"), None);
     }
 
     #[tokio::test]
@@ -1203,7 +1257,7 @@ mod tests {
     }
 
     /// The round trip: fetch, edit an unrelated field, save the whole thing
-    /// back. The `"***"` read back is the stored value, so the key stays.
+    /// back. The key belongs to the scope, so it stays.
     #[tokio::test]
     async fn saving_back_a_fetched_config_keeps_the_key() {
         let (_d, _c, m) = setup().await;
@@ -1220,6 +1274,7 @@ mod tests {
         .await
         .unwrap();
 
+        let before = run_key(&m, "/tools", "s").await.unwrap();
         let mut fetched = m.get("/tools", "s").await.unwrap().action_config.unwrap();
         fetched["cwd"] = serde_json::json!("/elsewhere");
         m.save(
@@ -1234,61 +1289,75 @@ mod tests {
         .unwrap();
 
         let (action, secrets) = m.get_with_secrets("/tools", "s").await.unwrap();
-        assert_eq!(secrets.key_for("API_TOKEN"), Some(TEST_KEY));
+        assert_eq!(key_of(&secrets, "API_TOKEN"), Some(before));
         assert_eq!(
             action.action_config.unwrap()["cwd"],
             serde_json::json!("/elsewhere")
         );
     }
 
-    /// An upsert without `action_config` keeps the key; a config without
-    /// `secrets` drops it.
+    /// Every action under `/packages/<pkg>/` shares one key, including one a
+    /// package update adds later in the old `"***"` form — the case that
+    /// used to fail with "has no key yet". Other scopes get their own.
     #[tokio::test]
-    async fn the_key_follows_the_secrets_map() {
+    async fn a_packages_actions_share_one_key() {
         let (_d, _c, m) = setup().await;
-        let save = |cfg: Option<serde_json::Value>| ActionInput {
-            action_type: Some(ActionType::Command),
-            action_config: cfg,
-            ..Default::default()
-        };
-        m.save("/tools", "s", save(Some(cfg_with_secret(TEST_KEY))))
+        let names = serde_json::json!({ "secrets": ["API_TOKEN"] });
+        m.save("/packages/p", "a", with_secret(names.clone())).await.unwrap();
+        m.save("/packages/p/sub", "b", with_secret(names.clone())).await.unwrap();
+        m.save("/packages/p", "added", with_secret(cfg_with_secret("***")))
             .await
             .unwrap();
-        m.save("/tools", "s", save(None)).await.unwrap();
-        let (_, secrets) = m.get_with_secrets("/tools", "s").await.unwrap();
-        assert_eq!(secrets.key_for("API_TOKEN"), Some(TEST_KEY));
+        m.save("/packages/q", "a", with_secret(names.clone())).await.unwrap();
+        m.save("/tools", "s", with_secret(names)).await.unwrap();
 
-        m.save(
-            "/tools",
-            "s",
-            save(Some(serde_json::json!({ "cwd": "/w" }))),
-        )
-        .await
-        .unwrap();
-        // Re-adding the name with "***" now has no key to fall back on.
-        let err = m
-            .save("/tools", "s", save(Some(cfg_with_secret("***"))))
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("has no key yet"), "{err}");
+        let key = run_key(&m, "/packages/p", "a").await.unwrap();
+        assert_eq!(run_key(&m, "/packages/p/sub", "b").await.as_ref(), Some(&key));
+        assert_eq!(run_key(&m, "/packages/p", "added").await.as_ref(), Some(&key));
+        assert_ne!(run_key(&m, "/packages/q", "a").await.as_ref(), Some(&key));
+        assert_ne!(run_key(&m, "/tools", "s").await.as_ref(), Some(&key));
+        assert_eq!(stored_scope_keys(&m).await, 3);
+    }
+
+    /// Uninstalling a package deletes its actions; the last one takes the
+    /// key with it, and a later install starts with a fresh key.
+    #[tokio::test]
+    async fn the_scopes_last_action_takes_its_key() {
+        let (_d, _c, m) = setup().await;
+        let names = serde_json::json!({ "secrets": ["API_TOKEN"] });
+        m.save("/packages/p", "a", with_secret(names.clone())).await.unwrap();
+        m.save("/packages/p/sub", "b", with_secret(names.clone())).await.unwrap();
+        // Another package whose name starts the same way stays unrelated.
+        m.save("/packages/p-extra", "a", with_secret(names.clone())).await.unwrap();
+        let old = run_key(&m, "/packages/p", "a").await.unwrap();
+
+        m.delete("/packages/p", "a").await.unwrap();
+        assert_eq!(run_key(&m, "/packages/p/sub", "b").await, Some(old.clone()));
+        m.delete("/packages/p/sub", "b").await.unwrap();
+        assert_eq!(stored_scope_keys(&m).await, 1, "only p-extra's key is left");
+
+        m.save("/packages/p", "a", with_secret(names.clone())).await.unwrap();
+        assert_ne!(run_key(&m, "/packages/p", "a").await, Some(old));
+
+        // A standalone action's key goes with it.
+        m.save("/tools", "s", with_secret(names)).await.unwrap();
+        assert_eq!(stored_scope_keys(&m).await, 3);
+        m.delete("/tools", "s").await.unwrap();
+        assert_eq!(stored_scope_keys(&m).await, 2);
     }
 
     #[tokio::test]
-    async fn saving_a_mask_without_a_key_is_rejected() {
+    async fn a_bad_secret_name_is_rejected() {
         let (_d, _c, m) = setup().await;
         let err = m
             .save(
                 "/tools",
                 "s",
-                ActionInput {
-                    action_type: Some(ActionType::Command),
-                    action_config: Some(serde_json::json!({ "secrets": { "NEW": "***" } })),
-                    ..Default::default()
-                },
+                with_secret(serde_json::json!({ "secrets": ["../other/NAME"] })),
             )
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("has no key yet"), "{err}");
+        assert!(err.to_string().contains("isn't a valid secret name"), "{err}");
     }
 
     #[tokio::test]

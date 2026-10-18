@@ -36,6 +36,7 @@ use aes_gcm::{Aes256Gcm, Key, Nonce};
 use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::Value;
+use solx_surface::SecretHandle;
 
 /// Alternate shape accepted by [`resolve_str`] and friends.
 ///
@@ -188,26 +189,28 @@ pub async fn load_keyring_with_test_override(r: &KeyringRef) -> Result<String, S
 
 // ── Scoped secret store ──────────────────────────────────────────────────────
 //
-// Unlike `resolve`/`KeyringRef` above (which serve the existing
-// inline/keyring-ref `auth` fields), this store backs the `get
-// secret`/`set secret` built-in actions and the `*_secret` auth
-// fields. Every value is additionally encrypted with a caller-supplied
-// 32-byte key before being written to the OS credential manager, and
-// that key lives in the calling action's own `action_config.secrets`
-// map (see `internal::secrets::get-secret`/`set-secret`) — so reading a secret
-// back out requires both a keyring hit *and* possession of the
-// matching key. The host never hands a key to a guest itself; it only
-// ever looks one up from the config of the action that is currently
-// calling in.
+// Unlike `resolve`/`KeyringRef` above (which serve keyring-ref `auth`
+// fields), this store backs the `get-secret`/`set-secret` built-ins and
+// the `*_secret` auth fields. Every value is encrypted with its scope's
+// 32-byte key before it is written to the OS credential manager, and that
+// key lives in the actions database (`secret_keys`), never beside it — so
+// reading a secret back out needs both the keyring entry *and* the key.
+// Entries are addressed by a `SecretHandle`, whose account is
+// `<scope>/<name>`: two scopes never share an entry, so one package can't
+// read, overwrite or (through self-heal) delete another's secret. The host
+// never hands a key to a guest; it only resolves one for the action that
+// is currently calling in.
 
 const SECRETS_KEYRING_SERVICE: &str = "sol-secrets";
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 
+/// A fresh base64 AES-256 key for a secret scope, from the OS RNG.
+pub(crate) fn generate_key() -> String {
+    base64::engine::general_purpose::STANDARD.encode(Aes256Gcm::generate_key(&mut OsRng))
+}
+
 /// Decode a base64 key and enforce it is exactly 32 bytes (AES-256).
-/// Keys are meant to be produced only by the `solx random` command, so
-/// rejecting anything else keeps someone from wiring up a weak
-/// hand-typed key.
 pub(crate) fn decode_key(key_b64: &str) -> Result<[u8; KEY_LEN], String> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(key_b64)
@@ -248,35 +251,35 @@ fn decrypt_with_key(blob_b64: &str, key_bytes: &[u8; KEY_LEN]) -> Result<String,
     String::from_utf8(plaintext).map_err(|e| format!("decrypted secret is not valid UTF-8: {e}"))
 }
 
-/// Encrypt `value` with `key_b64` and write it to the OS credential
-/// manager under `name`. `key_b64` must be a 32-byte, base64-encoded
-/// value (as produced by `solx random`).
-pub async fn set_secret(name: &str, value: &str, key_b64: &str) -> Result<(), String> {
+/// Encrypt `value` with the handle's key and write it to the OS credential
+/// manager under the handle's account.
+pub async fn set_secret(secret: &SecretHandle, value: &str) -> Result<(), String> {
     // AES-GCM stays inline: hardware-accelerated and microseconds on
     // secret-sized payloads. Only the keyring hop is worth offloading.
-    let blob = encrypt(value, key_b64)?;
-    raw_set(name, &blob).await
+    let blob = encrypt(value, secret.key())?;
+    raw_set(secret.account(), &blob).await
 }
 
-/// Read the value stored under `name`, decrypting with `key_b64`.
-/// Returns `Ok(None)` if no entry exists under that name. Also returns
-/// `Ok(None)` — after clearing the entry — if one exists but can't be
-/// decrypted (wrong key or corrupted blob): a self-heal so a caller that
-/// lost its encryption key isn't stuck forever behind a dead entry, it
-/// just goes through its normal "nothing persisted yet" path again.
-/// Still returns `Err` if `key_b64` itself is malformed, since that's a
-/// caller config problem, not something clearing the entry would fix.
-pub async fn get_secret(name: &str, key_b64: &str) -> Result<Option<String>, String> {
-    let key_bytes = decode_key(key_b64)?;
-    match raw_get(name).await? {
+/// Read the value stored for `secret`, decrypting with its key. Returns
+/// `Ok(None)` if no entry exists. Also returns `Ok(None)` — after clearing
+/// the entry — if one exists but can't be decrypted (wrong key or
+/// corrupted blob): a self-heal so a scope whose key was regenerated isn't
+/// stuck behind a dead entry, it just goes through its normal "nothing
+/// persisted yet" path again. The entry is the scope's own, so this never
+/// touches another scope's secret. Still returns `Err` if the key itself
+/// is malformed, since clearing the entry wouldn't fix that.
+pub async fn get_secret(secret: &SecretHandle) -> Result<Option<String>, String> {
+    let key_bytes = decode_key(secret.key())?;
+    let account = secret.account();
+    match raw_get(account).await? {
         Some(blob) => match decrypt_with_key(&blob, &key_bytes) {
             Ok(value) => Ok(Some(value)),
             Err(e) => {
                 tracing::warn!(
-                    "secret '{name}' could not be decrypted ({e}); clearing the \
+                    "secret '{account}' could not be decrypted ({e}); clearing the \
                      corrupted entry so it can be re-created"
                 );
-                raw_delete(name).await?;
+                raw_delete(account).await?;
                 Ok(None)
             }
         },
@@ -284,10 +287,9 @@ pub async fn get_secret(name: &str, key_b64: &str) -> Result<Option<String>, Str
     }
 }
 
-/// Remove the entry stored under `name`, if any. Used by package
-/// uninstall flows so they don't leave orphaned keyring entries.
-pub async fn delete_secret(name: &str) -> Result<(), String> {
-    raw_delete(name).await
+/// Remove the entry stored for `secret`, if any.
+pub async fn delete_secret(secret: &SecretHandle) -> Result<(), String> {
+    raw_delete(secret.account()).await
 }
 
 // ── Raw keyring I/O (test-overridable) ───────────────────────────────────────
@@ -514,15 +516,27 @@ mod tests {
         base64::engine::general_purpose::STANDARD.encode([2u8; KEY_LEN])
     }
 
+    /// `MY_SECRET` in `scope`, opened with `key`.
+    fn handle_in(scope: &str, key: String) -> SecretHandle {
+        let cfg = json!({ "secrets": ["MY_SECRET"] });
+        solx_surface::ActionSecrets::new(scope, Some(&cfg), Some(key))
+            .resolve("MY_SECRET")
+            .unwrap()
+    }
+
+    fn handle(key: String) -> SecretHandle {
+        handle_in("package:p", key)
+    }
+
     #[tokio::test]
     #[serial(secrets_backend)]
     async fn set_then_get_secret_round_trips_with_the_right_key() {
         install_fake_backend();
-        set_secret("MY_SECRET", "top-secret-value", &key_a())
+        set_secret(&handle(key_a()), "top-secret-value")
             .await
             .unwrap();
         assert_eq!(
-            get_secret("MY_SECRET", &key_a()).await.unwrap(),
+            get_secret(&handle(key_a())).await.unwrap(),
             Some("top-secret-value".to_string())
         );
         set_secret_backend_for_tests(None);
@@ -532,13 +546,13 @@ mod tests {
     #[serial(secrets_backend)]
     async fn get_secret_with_wrong_key_self_heals_by_clearing_entry() {
         install_fake_backend();
-        set_secret("MY_SECRET", "top-secret-value", &key_a())
+        set_secret(&handle(key_a()), "top-secret-value")
             .await
             .unwrap();
-        assert_eq!(get_secret("MY_SECRET", &key_b()).await.unwrap(), None);
+        assert_eq!(get_secret(&handle(key_b())).await.unwrap(), None);
         // The corrupted entry was cleared, not just masked -- even the
         // originally-correct key now finds nothing.
-        assert_eq!(get_secret("MY_SECRET", &key_a()).await.unwrap(), None);
+        assert_eq!(get_secret(&handle(key_a())).await.unwrap(), None);
         set_secret_backend_for_tests(None);
     }
 
@@ -546,16 +560,16 @@ mod tests {
     #[serial(secrets_backend)]
     async fn get_secret_with_malformed_key_errors_without_deleting_entry() {
         install_fake_backend();
-        set_secret("MY_SECRET", "top-secret-value", &key_a())
+        set_secret(&handle(key_a()), "top-secret-value")
             .await
             .unwrap();
         let bad_key = base64::engine::general_purpose::STANDARD.encode(b"not-32-bytes");
-        let err = get_secret("MY_SECRET", &bad_key).await.unwrap_err();
+        let err = get_secret(&handle(bad_key)).await.unwrap_err();
         assert!(err.contains("must decode to"), "{err}");
         // A malformed key argument is a caller config problem, not a
         // corrupted entry -- the stored secret must survive untouched.
         assert_eq!(
-            get_secret("MY_SECRET", &key_a()).await.unwrap(),
+            get_secret(&handle(key_a())).await.unwrap(),
             Some("top-secret-value".to_string())
         );
         set_secret_backend_for_tests(None);
@@ -565,7 +579,7 @@ mod tests {
     #[serial(secrets_backend)]
     async fn get_secret_missing_entry_returns_none() {
         install_fake_backend();
-        assert_eq!(get_secret("NOT_STORED", &key_a()).await.unwrap(), None);
+        assert_eq!(get_secret(&handle(key_a())).await.unwrap(), None);
         set_secret_backend_for_tests(None);
     }
 
@@ -573,10 +587,39 @@ mod tests {
     #[serial(secrets_backend)]
     async fn delete_secret_removes_the_entry() {
         install_fake_backend();
-        set_secret("MY_SECRET", "value", &key_a()).await.unwrap();
-        delete_secret("MY_SECRET").await.unwrap();
-        assert_eq!(get_secret("MY_SECRET", &key_a()).await.unwrap(), None);
+        set_secret(&handle(key_a()), "value").await.unwrap();
+        delete_secret(&handle(key_a())).await.unwrap();
+        assert_eq!(get_secret(&handle(key_a())).await.unwrap(), None);
         set_secret_backend_for_tests(None);
+    }
+
+    /// Two scopes using the same name have separate entries: neither reads
+    /// the other's value, and one failing to decrypt (self-heal) never
+    /// deletes the other's.
+    #[tokio::test]
+    #[serial(secrets_backend)]
+    async fn scopes_sharing_a_name_never_touch_each_other() {
+        install_fake_backend();
+        let a = handle_in("package:a", key_a());
+        let b = handle_in("package:b", key_b());
+        assert_eq!(a.account(), "package:a/MY_SECRET");
+        set_secret(&a, "for-a").await.unwrap();
+        set_secret(&b, "for-b").await.unwrap();
+        assert_eq!(get_secret(&a).await.unwrap().as_deref(), Some("for-a"));
+        assert_eq!(get_secret(&b).await.unwrap().as_deref(), Some("for-b"));
+
+        // b's key is regenerated: b self-heals, a is untouched.
+        let regenerated = handle_in("package:b", key_a());
+        assert_eq!(get_secret(&regenerated).await.unwrap(), None);
+        assert_eq!(get_secret(&a).await.unwrap().as_deref(), Some("for-a"));
+        set_secret_backend_for_tests(None);
+    }
+
+    #[test]
+    fn generated_keys_are_valid_and_distinct() {
+        let (k1, k2) = (generate_key(), generate_key());
+        assert!(decode_key(&k1).is_ok());
+        assert_ne!(k1, k2);
     }
 
     #[tokio::test]
@@ -584,7 +627,7 @@ mod tests {
     async fn short_key_is_rejected() {
         install_fake_backend();
         let short_key = base64::engine::general_purpose::STANDARD.encode([1u8; 16]);
-        let err = set_secret("MY_SECRET", "value", &short_key)
+        let err = set_secret(&handle(short_key), "value")
             .await
             .unwrap_err();
         assert!(err.contains("must decode to 32 bytes"), "{err}");

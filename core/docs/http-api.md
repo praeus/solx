@@ -214,9 +214,10 @@ into `(path, name)` and fetching it — which `GET /types/{ref}` already is.
 processing of the request payload". The body is optional: a parameterless
 action can be invoked with an empty `POST` and no `Content-Type`.
 
-An action's `actionConfig` holds no secrets. Its key, if supplied under
-`actionConfig.secrets` on save, is stored separately; every value under
-`secrets` reads back as `"***"`, and saving `"***"` back keeps the key.
+An action's `actionConfig` holds no secrets. `actionConfig.secrets` is a
+list of secret names; the older object form (`{"NAME": …}`) is accepted on
+save, its values ignored, and reads back as a list. Keys are solx's own,
+one per package, and never cross the API.
 Inline credentials under `actionConfig.auth` are refused (400). Creating or
 changing an action that has `secrets` needs the root token (401 otherwise).
 
