@@ -23,12 +23,15 @@ default = ["server"]
 # over HTTP by an embedded solx-server sharing the same `App`. The token
 # registry is listed explicitly: solx-manager is a `default-features = false`
 # dependency here, so its default-on `registry` would otherwise be off.
+# The same goes for solx-server's `tls` (`server_tls`).
 server = [
     "solx-manager/local",
     "solx-manager/registry",
     "solx-server/registry",
+    "solx-server/tls",
     "solx-tauri-plugin/local",
     "dep:solx-server",
+    "dep:solx-certs",
     "dep:solx-actions",
     "dep:tokio",
 ]
@@ -51,6 +54,8 @@ solx-tauri-plugin = { path = "../../core/solx-tauri-plugin" }
 solx-manager = { path = "../../core/solx-manager", default-features = false }
 solx-config = { path = "../../core/solx-config" }
 solx-server = { path = "../../core/solx-server", optional = true, default-features = false }
+# Provisions `server_tls: "auto"` certificates (`solx_certs::provision`).
+solx-certs = { path = "../../core/solx-certs", optional = true }
 solx-actions = { path = "../../core/solx-actions", optional = true }
 tokio = { version = "1", features = ["net", "io-util", "time", "sync"], optional = true }
 

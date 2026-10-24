@@ -30,10 +30,16 @@ impl std::fmt::Debug for Exchanged {
     }
 }
 
-/// Redeem `code` (any spacing) at `server_url` for a client token.
-pub async fn exchange_connect_code(server_url: &str, code: &str) -> Result<Exchanged, SolxError> {
+/// Redeem `code` (any spacing) at `server_url` for a client token, over
+/// `http` (a [`crate::http_client`], so an `https://` server's root is
+/// trusted the same way the managers will trust it).
+pub async fn exchange_connect_code(
+    http: &reqwest::Client,
+    server_url: &str,
+    code: &str,
+) -> Result<Exchanged, SolxError> {
     let url = collection_url(server_url, "auth/exchange")?;
-    let resp = reqwest::Client::new()
+    let resp = http
         .post(url)
         .json(&json!({ "code": code }))
         .send()

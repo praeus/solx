@@ -445,6 +445,66 @@
           "markdownDescription": "Denies the config_install_package command without any pre-configured scope."
         },
         {
+          "description": "Enables the config_tls_reissue command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-config-tls-reissue",
+          "markdownDescription": "Enables the config_tls_reissue command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the config_tls_reissue command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-config-tls-reissue",
+          "markdownDescription": "Denies the config_tls_reissue command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the config_tls_reset command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-config-tls-reset",
+          "markdownDescription": "Enables the config_tls_reset command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the config_tls_reset command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-config-tls-reset",
+          "markdownDescription": "Denies the config_tls_reset command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the config_tls_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-config-tls-status",
+          "markdownDescription": "Enables the config_tls_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the config_tls_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-config-tls-status",
+          "markdownDescription": "Denies the config_tls_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the config_tls_trust command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-config-tls-trust",
+          "markdownDescription": "Enables the config_tls_trust command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the config_tls_trust command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-config-tls-trust",
+          "markdownDescription": "Denies the config_tls_trust command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the config_tls_untrust command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-config-tls-untrust",
+          "markdownDescription": "Enables the config_tls_untrust command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the config_tls_untrust command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-config-tls-untrust",
+          "markdownDescription": "Denies the config_tls_untrust command without any pre-configured scope."
+        },
+        {
           "description": "Enables the config_uninstall_package command without any pre-configured scope.",
           "type": "string",
           "const": "allow-config-uninstall-package",
@@ -745,10 +805,10 @@
           "markdownDescription": "Denies the types_validate command without any pre-configured scope."
         },
         {
-          "description": "Allows reading and editing solx-config.json, installing and uninstalling packages (which grant allowlist entries), including the command and outbound-URL allowlists, and saving or deleting actions as the operator (locked actions, locking and unlocking, actions with scoped secrets). Grant only to a window that never loads package widgets (the desktop app's Settings window) — never alongside widget-hosting content.\n#### This permission set includes:\n\n- `allow-config-get`\n- `allow-config-update`\n- `allow-config-install-package`\n- `allow-config-uninstall-package`\n- `allow-config-actions-save`\n- `allow-config-actions-delete`",
+          "description": "Allows reading and editing solx-config.json, installing and uninstalling packages (which grant allowlist entries), including the command and outbound-URL allowlists, and saving or deleting actions as the operator (locked actions, locking and unlocking, actions with scoped secrets), and managing the TLS certificate authority (trusting its root on this machine, reissuing the server certificate, resetting the CA). Grant only to a window that never loads package widgets (the desktop app's Settings window) — never alongside widget-hosting content.\n#### This permission set includes:\n\n- `allow-config-get`\n- `allow-config-update`\n- `allow-config-install-package`\n- `allow-config-uninstall-package`\n- `allow-config-actions-save`\n- `allow-config-actions-delete`\n- `allow-config-tls-status`\n- `allow-config-tls-trust`\n- `allow-config-tls-untrust`\n- `allow-config-tls-reissue`\n- `allow-config-tls-reset`",
           "type": "string",
           "const": "config",
-          "markdownDescription": "Allows reading and editing solx-config.json, installing and uninstalling packages (which grant allowlist entries), including the command and outbound-URL allowlists, and saving or deleting actions as the operator (locked actions, locking and unlocking, actions with scoped secrets). Grant only to a window that never loads package widgets (the desktop app's Settings window) — never alongside widget-hosting content.\n#### This permission set includes:\n\n- `allow-config-get`\n- `allow-config-update`\n- `allow-config-install-package`\n- `allow-config-uninstall-package`\n- `allow-config-actions-save`\n- `allow-config-actions-delete`"
+          "markdownDescription": "Allows reading and editing solx-config.json, installing and uninstalling packages (which grant allowlist entries), including the command and outbound-URL allowlists, and saving or deleting actions as the operator (locked actions, locking and unlocking, actions with scoped secrets), and managing the TLS certificate authority (trusting its root on this machine, reissuing the server certificate, resetting the CA). Grant only to a window that never loads package widgets (the desktop app's Settings window) — never alongside widget-hosting content.\n#### This permission set includes:\n\n- `allow-config-get`\n- `allow-config-update`\n- `allow-config-install-package`\n- `allow-config-uninstall-package`\n- `allow-config-actions-save`\n- `allow-config-actions-delete`\n- `allow-config-tls-status`\n- `allow-config-tls-trust`\n- `allow-config-tls-untrust`\n- `allow-config-tls-reissue`\n- `allow-config-tls-reset`"
         },
         {
           "description": "Allows every solx command: the full manager surface (types, docs, actions, files) plus host info and client connect/disconnect.\n#### This default permission set includes:\n\n- `allow-types-save`\n- `allow-types-get`\n- `allow-types-delete`\n- `allow-types-list`\n- `allow-types-paths`\n- `allow-types-resolve`\n- `allow-types-validate`\n- `allow-docs-save`\n- `allow-docs-get`\n- `allow-docs-delete`\n- `allow-docs-list`\n- `allow-docs-paths`\n- `allow-docs-search`\n- `allow-actions-save`\n- `allow-actions-get`\n- `allow-actions-delete`\n- `allow-actions-list`\n- `allow-actions-paths`\n- `allow-actions-search`\n- `allow-actions-exec`\n- `allow-files-put`\n- `allow-files-get`\n- `allow-files-delete`\n- `allow-files-list`\n- `allow-info`\n- `allow-connect`\n- `allow-disconnect`",

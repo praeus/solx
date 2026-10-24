@@ -1,10 +1,12 @@
 # TLS and certificate pinning: implementation plan
 
-Status: **Phase 1 done** (`solx-certs`: file and CNG backends, CLI). Phases
-2–4 are not started. It builds on
-the token registry ([token-registry-plan.md](token-registry-plan.md)), which
-is being implemented in the working tree. Phase 2 below has to be
-coordinated with that plan's server-route step.
+Status: **Phases 1–3 done** (`solx-certs`: file and CNG backends, CLI;
+`solx-server` serves TLS from `server_tls`; the desktop app provisions
+certificates and has a "Secure connections" section; solx clients share one
+rustls client). Phase 4 (pinning) is not started.
+It builds on the token registry
+([token-registry-plan.md](token-registry-plan.md)), whose server routes
+(`ConnectInfo`, `/connect`) phase 2 builds on.
 
 ## Goal
 
@@ -286,10 +288,11 @@ Added to `[workspace.dependencies]`:
   5. Either way, insert `ConnectInfo<SocketAddr>` for the connection. The
      registry's loopback-only root check depends on it.
 - With TLS off, the loop behaves exactly like `axum::serve` does today.
-- **Reverse-proxy caveat.** Every request through a proxy on the same
-  machine looks like loopback. The registry plan already raises this.
-  Treating peers as non-loopback when `server_public_url` is set covers this
-  case too.
+- **Reverse proxies are not supported.** solx-server terminates TLS itself.
+  Every request through a proxy on the same machine looks like loopback,
+  which defeats the root-from-loopback-only rule (a known gap in
+  security-design.md). No special handling is planned, and solx no longer
+  suggests a proxy.
 
 #### URLs and warnings
 
@@ -441,17 +444,81 @@ and from then on accepts only chains that end in it.
      adapter, and store binding.
    - The CLI.
    - Measure TPM signing.
-2. **Server TLS.** Coordinate with the registry plan's step 4, which adds
-   `ConnectInfo` and `/connect`.
-   - `server_tls` config and validation.
-   - `tls.rs`.
-   - The sniffing `serve_listener`, used by `serve` and `main.rs`.
+2. **Server TLS.** Done.
+   - `server_tls` config and validation (`solx_config::ServerTls`). It is
+     kept as raw JSON in `SolxConfig` and parsed by
+     `ConfigService::server_tls`, so a bad value fails server startup
+     instead of resetting the whole snapshot.
+   - `tls.rs`: `TlsSource`, `source_from_config`, `source_from_certs_dir`
+     (`"auto"`), `server_config`.
+   - The sniffing `serve_listener`, used by `serve` and `main.rs`. With TLS
+     off, it is `axum::serve`.
    - `https` advertised URLs and the conditional warning.
-3. **Desktop app, clients and docs.**
-   - `ensure_server_cert` in solx-browser and the Settings section.
+
+   As built:
+   - `serve` reads `server_tls` itself, so the desktop app's embedded server
+     follows it with no code change. `serve_with_tls` takes an explicit
+     configuration. `spawn_embedded` (the CLI's loopback server) always
+     serves plain HTTP.
+   - Standalone `"auto"` only reads `<appdata>/certs/tls.json`. If no
+     certificate is there, it fails and names the `solx-certs` command to
+     run. Provisioning stays with solx-browser (phase 3).
+   - For a CNG directory, `"auto"` serves the store certificate followed by
+     `solx-root.crt`. A bare `store_thumbprint` serves the chain Windows
+     builds, which leaves out a self-signed root.
+   - A bare host in `server_public_url`, or given as a connect code's link
+     address, gets `https://` when TLS is on, so links never point at the
+     plain port. A full URL is still taken as written.
+   - Reverse proxies get no special handling (decided 2026-10-20); see
+     "The accept loop".
+   - Found while testing: Windows Schannel clients (for example curl on
+     Windows) refuse these certificates by default ("the revocation status
+     is unknown"), because they name no CRL or OCSP endpoint.
+     `curl --ssl-no-revoke` works. Decided 2026-10-20: no revocation
+     endpoint (it would need a plain-HTTP exception from other machines, a
+     fixed address for a server whose addresses change, and the CA key
+     signing on a schedule, for little gain when clients pin the root).
+     The docs cover `--ssl-no-revoke`.
+3. **Desktop app, clients and docs.** Done.
+   - `solx_certs::provision` (`certs_dir`, `wanted_sans`) in solx-browser's
+     `start()`, and the Settings section.
    - The shared `solx_client::http_client` with OS roots and
      `server_ca_file`.
    - SECURITY.md, security-design.md, http-api.md, README.
+
+   As built:
+   - `ensure_server_cert(&config, wanted_sans)` became
+     `solx_certs::provision(&config)`, which works out the names itself
+     (`wanted_sans`): the defaults, the bound address or, for `0.0.0.0`,
+     every IPv4 interface address that's up (`if-addrs`), and the host of
+     `server_public_url`. A `::` bind adds IPv6 addresses too. IPv4 only for
+     `0.0.0.0`, so rotating IPv6 temporary addresses don't reissue the
+     certificate every day.
+   - The "effective default" is written down: on Windows, a network bind
+     with `server_tls` unset makes the desktop app set it to `"auto"` in
+     solx-config.json. That keeps connect links, `server_public_url` and
+     other solx processes consistent with what is served, shows in
+     Settings, and `"off"` opts out.
+   - If the TLS it's configured for can't be set up, the desktop app doesn't
+     start its embedded server at all (never plain HTTP instead), and
+     Settings shows why (`SolxState::set_server_error`).
+   - Settings commands, in the `config` set: `config_tls_status`,
+     `config_tls_trust`, `config_tls_untrust`, `config_tls_reissue` and
+     `config_tls_reset`. Reissue and reset take effect when the app
+     restarts; Settings offers the restart. "Open certificates folder" is an
+     app command (`reveal_certs_folder`), next to `restart_app`, through the
+     opener plugin, with the path fixed in Rust.
+   - Server settings got an "Encryption (HTTPS)" choice (Default, On, Off,
+     and "Your own certificate" when `server_tls` is a files or store value).
+   - The client: `solx_client::ClientTls` and `http_client(_for)`. Every
+     `Remote*` manager has `with_client`; `App::remote` shares one client
+     across all four, and `exchange_connect_code` takes it too. `new` still
+     works (Node bindings), with `SOLX_CA_FILE` only. reqwest gained
+     `rustls-tls-native-roots`. Before this, reqwest's default features
+     made `Client::new()` use native-tls (Schannel on Windows).
+   - Still to check by hand: whether curl on Windows accepts the server once
+     the root is trusted through "Trust on this machine" (or still needs
+     `--ssl-no-revoke`). It needs someone to answer Windows' dialog.
 4. **Pinning.**
    - `pin=` in links and server URLs; `tls_pin` from `create-connect-code`
      and `issue-client`.

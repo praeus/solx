@@ -1,4 +1,4 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 
 use anyhow::Context;
 use clap::Parser;
@@ -53,30 +53,32 @@ async fn main() -> anyhow::Result<()> {
         host,
         snap.server_cors_origins.as_deref().unwrap_or_default(),
     );
+    let tls = solx_server::tls_config(&app.config).context("server_tls")?;
     let state = AppState::new(app)?;
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("bind {addr}"))?;
-    solx_server::announce_bound(&state, listener.local_addr()?);
+    solx_server::announce_bound(&state, listener.local_addr()?, tls.is_some());
     let router = solx_server::build_router_with_cors(state, cors);
-    tracing::info!("solx-server listening on http://{addr}");
-    println!("solx-server listening on http://{addr}");
-    if !host.is_loopback() {
+    let scheme = if tls.is_some() { "https" } else { "http" };
+    tracing::info!("solx-server listening on {scheme}://{addr}");
+    println!("solx-server listening on {scheme}://{addr}");
+    if tls.is_some() {
+        println!("Plain http:// is accepted from this machine only.");
+    } else if !host.is_loopback() {
         // Off loopback, anyone who can reach the port can attempt auth, and
-        // the bearer token travels in cleartext.
-        let warning = "solx-server is reachable from the network: bearer tokens are the \
-                       only gate and traffic is unencrypted HTTP. Use a private network \
-                       (e.g. Tailscale/WireGuard) or a TLS reverse proxy. Connect other \
-                       devices with `solx token connect-code`.";
+        // without TLS the bearer token travels in cleartext.
+        let warning = "solx-server is reachable from the network over unencrypted HTTP, so \
+                       bearer tokens travel in cleartext. Turn on TLS: create certificates \
+                       with `solx-certs init` and set server_tls to \"auto\", or keep the \
+                       server on a private network such as Tailscale/WireGuard. Connect \
+                       other devices with `solx token connect-code`.";
         tracing::warn!("{warning}");
         eprintln!("WARNING: {warning}");
     }
 
-    axum::serve(
-        listener,
-        router.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await
-    .context("serve")?;
+    solx_server::serve_listener(listener, router, tls, std::future::pending())
+        .await
+        .context("serve")?;
     Ok(())
 }

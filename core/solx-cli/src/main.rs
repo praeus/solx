@@ -228,6 +228,7 @@ async fn run_auth_builtin(name: &str, params: Value) -> Result<Value> {
 /// and point this machine's solx at the server, or with `--print` only
 /// print the token.
 async fn run_connect(target: String, credential: Option<String>, print: bool) -> Result<Value> {
+    let config = Arc::new(solx_config::ConfigService::open().context("open config")?);
     let (server, input) = if target.contains("#code=") {
         if credential.is_some() {
             bail!("a connect link already carries its code; pass the link alone");
@@ -247,7 +248,8 @@ async fn run_connect(target: String, credential: Option<String>, print: bool) ->
 
     let (token, client_id, expires_at) = match parsed.credential {
         ConnectCredential::Code(code) => {
-            let exchanged = solx_client::exchange_connect_code(&server_url, &code)
+            let http = solx_client::http_client_for(config.server_ca_file().as_deref())?;
+            let exchanged = solx_client::exchange_connect_code(&http, &server_url, &code)
                 .await
                 .context("redeem the connect code")?;
             if let Some(url) = exchanged.server_url.filter(|u| !u.trim().is_empty()) {
@@ -265,7 +267,6 @@ async fn run_connect(target: String, credential: Option<String>, print: bool) ->
         return Ok(Value::String(token));
     }
 
-    let config = Arc::new(solx_config::ConfigService::open().context("open config")?);
     let app = App::remote(config.clone(), server_url.clone(), token.clone())?;
     if let Err(e) = app
         .docs()

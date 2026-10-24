@@ -22,6 +22,8 @@ pub mod auth;
 pub mod error;
 pub mod routes;
 pub mod state;
+#[cfg(feature = "tls")]
+pub mod tls;
 
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -132,7 +134,15 @@ pub fn cors_layer(ip: IpAddr, origins: &[String]) -> CorsLayer {
 /// `solx-server` — see `solx-cli`'s `build_app` for the caller.
 pub async fn spawn_embedded(state: AppState, port: u16) -> std::io::Result<SocketAddr> {
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
-    serve(state, addr, CorsLayer::permissive(), std::future::pending()).await
+    // Loopback only, so plain HTTP whatever `server_tls` says.
+    serve_with_tls(
+        state,
+        addr,
+        CorsLayer::permissive(),
+        None,
+        std::future::pending(),
+    )
+    .await
 }
 
 /// Bind `addr` and serve in the background with the given CORS policy until
@@ -141,34 +151,102 @@ pub async fn spawn_embedded(state: AppState, port: u16) -> std::io::Result<Socke
 /// use of the same `Arc<App>` — e.g. the solx desktop app's server build —
 /// and need a configurable bind and a clean stop, which `spawn_embedded`
 /// doesn't offer.
+///
+/// Serves TLS as the app's `server_tls` config asks (see [`tls_config`]);
+/// a `server_tls` that can't be served fails here, before binding.
 pub async fn serve(
     state: AppState,
     addr: SocketAddr,
     cors: CorsLayer,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<SocketAddr> {
+    let tls = tls_config(&state.app.config).map_err(|e| std::io::Error::other(format!("{e:#}")))?;
+    serve_with_tls(state, addr, cors, tls, shutdown).await
+}
+
+/// [`serve`] with an explicit TLS configuration instead of the one
+/// `server_tls` names. `None` serves plain HTTP.
+pub async fn serve_with_tls(
+    state: AppState,
+    addr: SocketAddr,
+    cors: CorsLayer,
+    tls: Option<TlsConfig>,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> std::io::Result<SocketAddr> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?;
-    announce_bound(&state, bound);
+    announce_bound(&state, bound, tls.is_some());
     let router = build_router_with_cors(state, cors);
     tokio::spawn(async move {
-        if let Err(e) = axum::serve(
-            listener,
-            router.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(shutdown)
-        .await
-        {
+        if let Err(e) = serve_listener(listener, router, tls, shutdown).await {
             tracing::warn!("embedded solx-server on {bound} exited: {e}");
         }
     });
     Ok(bound)
 }
 
+/// A TLS configuration ready to serve.
+#[cfg(feature = "tls")]
+pub type TlsConfig = std::sync::Arc<rustls::ServerConfig>;
+
+/// Without the `tls` feature there is no TLS configuration to give, so an
+/// `Option<TlsConfig>` is always `None`.
+#[cfg(not(feature = "tls"))]
+#[derive(Debug, Clone)]
+pub enum TlsConfig {}
+
+/// The TLS configuration `config`'s `server_tls` asks for, or `None` when
+/// it is off. Fails when it names certificates that can't be loaded, or
+/// when this build has no `tls` feature.
+pub fn tls_config(config: &solx_config::ConfigService) -> anyhow::Result<Option<TlsConfig>> {
+    #[cfg(feature = "tls")]
+    {
+        tls::source_from_config(config)?
+            .map(|source| tls::server_config(&source))
+            .transpose()
+    }
+    #[cfg(not(feature = "tls"))]
+    {
+        if config.server_tls()?.is_on() {
+            anyhow::bail!("server_tls is set, but this solx-server was built without TLS support");
+        }
+        Ok(None)
+    }
+}
+
+/// Serve `router` on `listener` until `shutdown` resolves, then drain
+/// in-flight requests. Handlers see each peer as `ConnectInfo<SocketAddr>`.
+/// With `tls`, plain HTTP is still served to loopback peers on the same
+/// port (see [`tls::serve_listener`]); without it, this is `axum::serve`.
+pub async fn serve_listener(
+    listener: tokio::net::TcpListener,
+    router: Router,
+    tls: Option<TlsConfig>,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
+    #[cfg(feature = "tls")]
+    {
+        tls::serve_listener(listener, router, tls, shutdown).await
+    }
+    #[cfg(not(feature = "tls"))]
+    match tls {
+        None => {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown)
+            .await
+        }
+        Some(never) => match never {},
+    }
+}
+
 /// Tell the authority where this process now serves HTTP, and start the
 /// token registry's periodic sweep. For every host that binds a server,
-/// [`serve`] included.
-pub fn announce_bound(state: &AppState, bound: SocketAddr) {
+/// [`serve`] included. `https` says whether other machines reach it over
+/// TLS; this machine's own callers always get plain `http://` on loopback.
+pub fn announce_bound(state: &AppState, bound: SocketAddr, https: bool) {
     state.auth.set_server_url(server_url(bound));
     #[cfg(feature = "registry")]
     if let Some(registry) = &state.registry {
@@ -177,15 +255,18 @@ pub fn announce_bound(state: &AppState, bound: SocketAddr) {
         // address for links (the CLI's embedded server binds loopback even
         // when the host it stands in for is on the network).
         if !bound.ip().is_loopback() {
-            registry.set_advertised_url(solx_registry::advertised_url(bound));
+            registry.set_advertised_url(solx_registry::advertised_url(bound, https));
         }
         registry.spawn_sweeper();
     }
+    #[cfg(not(feature = "registry"))]
+    let _ = https;
 }
 
 /// The URL a spawned Command action uses to reach a server bound on
 /// `bound`. An unspecified bind (`0.0.0.0`/`::`) is reached over loopback,
-/// since the action runs on this same machine.
+/// since the action runs on this same machine. Always `http://`, even with
+/// TLS on: plain HTTP stays open to loopback peers, so packages need no CA.
 pub fn server_url(bound: SocketAddr) -> String {
     let mut addr = bound;
     if addr.ip().is_unspecified() {

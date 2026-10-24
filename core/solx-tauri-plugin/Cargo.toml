@@ -12,7 +12,7 @@ links = "tauri-plugin-solx"
 [features]
 # In-process managers (and their heavy deps). Off for a thin client, which
 # can only proxy to a remote `solx-server`.
-local = ["solx-manager/local", "dep:solx-cli", "dep:solx-packages"]
+local = ["solx-manager/local", "dep:solx-cli", "dep:solx-packages", "dep:solx-certs"]
 
 [dependencies]
 solx-surface = { workspace = true }
@@ -22,6 +22,8 @@ solx-manager = { path = "../solx-manager", default-features = false }
 # runner, so only a build that owns the managers (`local`) has them.
 solx-cli = { workspace = true, optional = true, default-features = false }
 solx-packages = { workspace = true, optional = true }
+# The "Secure connections" commands: the TLS CA in `<appdata>/certs`.
+solx-certs = { workspace = true, optional = true }
 tauri = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }

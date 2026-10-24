@@ -185,6 +185,11 @@ export async function restartApp(): Promise<void> {
   await invoke("restart_app");
 }
 
+/** Desktop server build: show the TLS certificates folder, with the root certificate selected. */
+export async function revealCertsFolder(): Promise<void> {
+  await invoke("reveal_certs_folder");
+}
+
 /** Subscribe to connection changes (e.g. to invalidate cached queries). Returns an unsubscribe function. */
 export function onConnectionChange(cb: Listener): () => void {
   listeners.add(cb);

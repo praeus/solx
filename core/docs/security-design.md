@@ -151,7 +151,27 @@ grants them per window:
 
 - **Bind.** `127.0.0.1` by default. The `server_host` config setting or
   `--host` can bind a LAN interface or `0.0.0.0`. Off loopback, the bearer
-  check is the only gate and there is no TLS.
+  check is the only gate.
+- **TLS** (`server_tls`, `solx-server/src/tls.rs`; see
+  [tls-plan.md](tls-plan.md)). Sources: `"auto"` (the `solx-certs`
+  directory `<appdata>/certs`), PEM files, or on Windows a `CurrentUser\My`
+  certificate whose CNG key signs each handshake without leaving the key
+  store. One port serves both protocols: each connection's first byte is
+  peeked, a TLS handshake is served over TLS, and anything else is plain
+  HTTP from a loopback peer or a 400 for any other. `SOLX_SERVER_URL` for
+  Command children stays `http://127.0.0.1:…`. A `server_tls` that can't be
+  served stops the server from starting rather than falling back to plain
+  HTTP. The desktop app writes `"auto"` for a network bind on Windows when
+  `server_tls` is unset, and provisions the certificates at startup.
+- **Key providers.** The CA key and the server key are non-exportable CNG
+  keys on Windows: the CA's on the TPM (Microsoft Platform Crypto Provider)
+  when there is one, the server's in the software key storage provider,
+  since it signs every handshake. A TPM key can't leave the chip, though
+  code running as the user can sign with it while it runs. A software KSP
+  key's non-exportability is policy, which an administrator or malware
+  running as the user can defeat. The file backend (all other platforms)
+  keeps PEM keys readable by any process running as the user; the CA key is
+  wrapped under a credential-manager key when there is one.
 - **Auth.** `require_bearer` is a route layer over every data route,
   including `/mcp`. On success it stores the resulting `Principal` in the
   request extensions. On failure it returns a 401 with a JSON
@@ -568,8 +588,8 @@ plan's "Follow-on" section uses them for two more things:
   (gap 7);
 - scoping `get-env`/`set-env` (gap 6).
 
-TLS for off-loopback serving, and pinning the server's root during the
-exchange, are planned separately in [tls-plan.md](tls-plan.md).
+TLS serving is in place (§3.2). Pinning the server's root during the
+exchange is planned separately, in [tls-plan.md](tls-plan.md) phase 4.
 
 ## 9. Known gaps
 
@@ -602,9 +622,11 @@ These are accepted for now. Each one is a candidate for future hardening.
    the token registry plan's "Follow-on" section.
 8. **Command children inherit solx's environment**, and timeouts don't kill
    process trees (§4.1).
-9. **Off-loopback serving has no TLS**, and the bearer token is the only
-   gate (§3.2). Planned in [tls-plan.md](tls-plan.md): a local root CA
-   with a non-exportable key, TLS serving, and client pinning.
+9. **Off-loopback TLS is opt-in** (automatic in the desktop app on
+   Windows); plain HTTP is accepted only from loopback peers (§3.2). solx
+   clients don't pin the server's root yet ([tls-plan.md](tls-plan.md)
+   phase 4): they trust the built-in roots, the OS trust store and
+   `server_ca_file`/`SOLX_CA_FILE`.
 10. **Bearer-style loopback ids** for streams, consoles and OAuth (§6).
 11. **No general rate limiting or audit log** on `solx-server`. Only
     `/auth/exchange` is throttled. Root-token rotation exists but only takes
@@ -614,7 +636,16 @@ These are accepted for now. Each one is a candidate for future hardening.
     isn't held to tooling exclusions. Exclude any such action that reads
     sensitive entities on a model's behalf.
 13. **A same-machine reverse proxy defeats root-from-loopback-only** (§3.2):
-    every request reaches the server from loopback.
+    every request reaches the server from loopback. Reverse proxies aren't
+    supported; solx-server terminates TLS itself.
+14. **Clients that can't pin rely on the OS trust store.** Browsers and
+    third-party MCP clients need the solx root imported, and the root has
+    no name constraints, so it is then trusted for every host name on that
+    machine.
+15. **No certificate revocation.** The certificates name no CRL or OCSP
+    endpoint. A problem is handled by reissuing the server certificate or
+    resetting the CA. Windows Schannel clients that insist on a revocation
+    check (curl on Windows) need `--ssl-no-revoke`.
 
 ## 10. Rules for changing this code
 

@@ -17,7 +17,7 @@ default = ["cng"]
 cng = ["dep:windows-sys", "dep:schannel"]
 
 [dependencies]
-# `appdata_dir()` only, for the CLI's default `--dir`.
+# The CLI's default `--dir`, and `provision` (what a configured server needs).
 solx-config = { workspace = true }
 rcgen = { workspace = true }
 rustls-pki-types = { workspace = true }
@@ -32,6 +32,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
+# `provision`: the names a configured server needs.
+if-addrs = { workspace = true }
+url = { workspace = true }
 # Wraps the file backend's CA key under a key kept in the OS credential
 # manager. Same backends as solx-config.
 keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent"] }

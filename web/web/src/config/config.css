@@ -234,3 +234,13 @@
   max-width: 100%;
   overflow-wrap: anywhere;
 }
+
+/* ── Secure connections ─────────────────────────────────────────────── */
+
+.config-tls-fingerprint {
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  user-select: all;
+}

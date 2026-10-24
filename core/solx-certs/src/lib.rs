@@ -24,6 +24,7 @@ mod backend;
 #[cfg(all(windows, feature = "cng"))]
 mod cng;
 mod file;
+mod provision;
 pub mod state;
 
 #[cfg(test)]
@@ -48,6 +49,7 @@ use sha2::{Digest, Sha256};
 pub use backend::KeyReport;
 use backend::{CaKey, KeyBackend, KeyRole};
 pub use file::FileProtection;
+pub use provision::{certs_dir, provision, wanted_sans};
 pub use state::{BackendKind, CertInfo, KeyRef, TlsState};
 
 /// Root certificates are valid for ten years.

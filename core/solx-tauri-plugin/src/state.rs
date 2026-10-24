@@ -24,6 +24,9 @@ pub(crate) enum Backend {
 #[serde(rename_all = "camelCase")]
 pub struct EmbeddedServer {
     pub url: String,
+    /// Whether it serves TLS to other machines (`server_tls`). This
+    /// machine's own clients can still use plain `http://`.
+    pub https: bool,
 }
 
 /// Managed Tauri state behind every command.
@@ -31,6 +34,9 @@ pub struct SolxState {
     app: RwLock<Option<Arc<App>>>,
     pub(crate) backend: Backend,
     embedded: RwLock<Option<EmbeddedServer>>,
+    /// Why the host didn't start its embedded server, for Settings (for
+    /// example, certificates `server_tls` needed but couldn't get).
+    server_error: RwLock<Option<String>>,
 }
 
 impl SolxState {
@@ -39,6 +45,7 @@ impl SolxState {
             app: RwLock::new(app),
             backend,
             embedded: RwLock::new(None),
+            server_error: RwLock::new(None),
         }
     }
 
@@ -66,5 +73,15 @@ impl SolxState {
 
     pub(crate) fn embedded(&self) -> Option<EmbeddedServer> {
         self.embedded.read().unwrap().clone()
+    }
+
+    /// Record (or clear) why the embedded server isn't running.
+    pub fn set_server_error(&self, error: Option<String>) {
+        *self.server_error.write().unwrap() = error;
+    }
+
+    #[cfg_attr(not(feature = "local"), allow(dead_code))]
+    pub(crate) fn server_error(&self) -> Option<String> {
+        self.server_error.read().unwrap().clone()
     }
 }
