@@ -17,6 +17,23 @@ pub struct Exchanged {
     /// Where the server says clients should reach it. Can differ from the
     /// URL the code was redeemed at (`server_public_url`).
     pub server_url: Option<String>,
+    /// The server's root pin, when it serves solx-certs certificates. Only
+    /// as trustworthy as the connection it came over: worth keeping when
+    /// that was already verified (a pin, `server_ca_file`, the OS store).
+    #[serde(default)]
+    pub tls_pin: Option<String>,
+}
+
+impl Exchanged {
+    /// The pin to keep for `server_url` after this exchange, when the
+    /// client had none: the one the server reported, for an `https://`
+    /// server. The exchange went over a connection this machine already
+    /// trusted, so from then on it trusts only that root.
+    pub fn adopted_pin(&self, server_url: &str) -> Option<String> {
+        self.tls_pin
+            .clone()
+            .filter(|pin| server_url.starts_with("https://") && crate::tls::looks_like_pin(pin))
+    }
 }
 
 impl std::fmt::Debug for Exchanged {
@@ -26,6 +43,7 @@ impl std::fmt::Debug for Exchanged {
             .field("client_id", &self.client_id)
             .field("expires_at", &self.expires_at)
             .field("server_url", &self.server_url)
+            .field("tls_pin", &self.tls_pin)
             .finish()
     }
 }

@@ -22,6 +22,8 @@ struct Host {
     app: Arc<solx_manager::App>,
     root_token: String,
     root_pem: Vec<u8>,
+    /// What clients pin for this CA.
+    pin: String,
 }
 
 /// An app whose appdata holds a file-backend CA and a server certificate
@@ -42,6 +44,7 @@ async fn host() -> Host {
         .collect();
     ca.issue_server(&sans, 30).unwrap();
     let root_pem = std::fs::read(ca.root_cert_path()).unwrap();
+    let pin = ca.pin().to_string();
 
     let app = solx_manager::App::build_local_in(dir.path()).await.unwrap();
     let root_token = solx_config::credentials::root_token(&app.config).unwrap();
@@ -50,6 +53,7 @@ async fn host() -> Host {
         app,
         root_token,
         root_pem,
+        pin,
     }
 }
 
@@ -313,4 +317,102 @@ async fn a_remote_app_trusts_its_server_ca_file() {
         .unwrap();
     let trusting = solx_manager::App::remote(config, url, host.root_token.clone()).unwrap();
     list(trusting).await.unwrap();
+}
+
+// ── pinning ──────────────────────────────────────────────────────────────────
+
+/// List one document through a remote `App` for `url` (which may carry a
+/// `#pin=`), from a fresh client appdata dir with no `server_ca_file`.
+async fn remote_list(url: &str, token: &str) -> Result<(), solx_surface::error::SolxError> {
+    use solx_surface::managers::Solx;
+    use solx_surface::query::ListOptions;
+
+    let client_dir = tempfile::tempdir().unwrap();
+    let config = Arc::new(solx_config::ConfigService::open_in(client_dir.path()).unwrap());
+    let app = solx_manager::App::remote(config, url.to_string(), token.to_string()).unwrap();
+    app.docs()
+        .list(ListOptions {
+            limit: Some(1),
+            ..Default::default()
+        })
+        .await
+        .map(|_| ())
+}
+
+#[tokio::test]
+async fn the_client_computes_the_pin_solx_certs_records() {
+    use rustls_pki_types::pem::PemObject;
+
+    let host = host().await;
+    let root = rustls_pki_types::CertificateDer::from_pem_slice(&host.root_pem).unwrap();
+    assert_eq!(
+        solx_client::pin_of_cert(&root).as_deref(),
+        Some(host.pin.as_str())
+    );
+}
+
+/// The right pin is all a client needs; any other root, even one the
+/// client would otherwise trust, gives the mismatch error.
+#[tokio::test]
+async fn a_pinned_client_trusts_only_its_pin() {
+    let host = host().await;
+    host.app.config.set("server_tls", "auto".into()).unwrap();
+    let (bound, _stop) = serve(&host).await.unwrap();
+    let url = format!("https://127.0.0.1:{}", bound.port());
+
+    remote_list(&format!("{url}#pin={}", host.pin), &host.root_token)
+        .await
+        .unwrap();
+
+    let wrong = format!("{url}#pin={}", "A".repeat(43));
+    let err = remote_list(&wrong, &host.root_token).await.unwrap_err();
+    assert!(
+        err.to_string().contains("certificate authority changed"),
+        "{err}"
+    );
+
+    // Unpinned and untrusted: refused, saying what to do.
+    let err = remote_list(&url, &host.root_token).await.unwrap_err();
+    assert!(err.to_string().contains("connect link"), "{err}");
+}
+
+/// Connect codes carry the pin; with the wrong pin the code never reaches
+/// the server, so it still works with the right one, and the exchange
+/// reports the pin.
+#[tokio::test]
+async fn a_wrong_pin_never_sends_the_code() {
+    let host = host().await;
+    host.app.config.set("server_tls", "auto".into()).unwrap();
+    let (bound, _stop) = serve(&host).await.unwrap();
+    let url = format!("https://127.0.0.1:{}", bound.port());
+
+    let registry = host.app.registry().unwrap();
+    let code = registry
+        .create_connect_code(None, None, None, Some(&url))
+        .await
+        .unwrap();
+    assert_eq!(code.tls_pin.as_deref(), Some(host.pin.as_str()));
+    let link = code.url.unwrap();
+    assert!(link.ends_with(&format!("&pin={}", host.pin)), "{link}");
+
+    let parsed = solx_config::credentials::parse_connect_input(None, &link).unwrap();
+    assert_eq!(parsed.pin.as_deref(), Some(host.pin.as_str()));
+
+    let wrong = solx_client::http_client_for(None, Some(&"A".repeat(43))).unwrap();
+    assert!(solx_client::exchange_connect_code(&wrong, &url, &code.code)
+        .await
+        .is_err());
+
+    let right = solx_client::http_client_for(None, parsed.pin.as_deref()).unwrap();
+    let exchanged = solx_client::exchange_connect_code(&right, &url, &code.code)
+        .await
+        .unwrap();
+    assert_eq!(exchanged.tls_pin.as_deref(), Some(host.pin.as_str()));
+    assert_eq!(
+        exchanged.adopted_pin(&url).as_deref(),
+        Some(host.pin.as_str())
+    );
+    remote_list(&format!("{url}#pin={}", host.pin), &exchanged.token)
+        .await
+        .unwrap();
 }

@@ -3,7 +3,8 @@
 Status: **Phases 1–3 done** (`solx-certs`: file and CNG backends, CLI;
 `solx-server` serves TLS from `server_tls`; the desktop app provisions
 certificates and has a "Secure connections" section; solx clients share one
-rustls client). Phase 4 (pinning) is not started.
+rustls client). Phase 4 (pinning) is done, in the reduced scope recorded
+under "Pinning". Phase 5 (more key backends) is for later.
 It builds on the token registry
 ([token-registry-plan.md](token-registry-plan.md)), whose server routes
 (`ConnectInfo`, `/connect`) phase 2 builds on.
@@ -29,7 +30,7 @@ This plan adds:
   `solx-certs` themselves, or supplies their own (for example
   OpenSSL-made) certificates.
 - **Pinning**, in a separate phase. A client learns the server's root during
-  connect (from the link, the exchange, or a pin given with a token) and
+  connect (from the link, a pinned server address, or the exchange) and
   refuses any other root from then on.
 
 ## Decisions
@@ -44,7 +45,7 @@ This plan adds:
 | Linux and macOS? | Designed for now, built later: a `pkcs11` backend (TPM, YubiKey or HSM) and a macOS `keychain` backend. Until then, the portable `file` backend. |
 | An OpenSSL mode? | No. See "Why not OpenSSL". OpenSSL-made PEMs work through the file mode. |
 | TLS library | rustls 0.23 with the `ring` provider, which is what reqwest 0.12's `rustls-tls` already uses. Avoids aws-lc's cmake/NASM build on Windows. |
-| What is pinned? | The root's SubjectPublicKeyInfo, as SHA-256 base64url. The client stores the root certificate itself, so the full chain can be verified. |
+| What is pinned? | The root's SubjectPublicKeyInfo, as SHA-256 base64url. The client stores only the pin, carried on its server URL as `#pin=`; the server sends the root in its chain, so the full chain can still be verified. |
 
 ## Where things stand
 
@@ -351,79 +352,74 @@ Added to `[workspace.dependencies]`:
 The goal is that a client learns the root once, from a source it can trust,
 and from then on accepts only chains that end in it.
 
+Decided 2026-10-24: a reduced scope (below) replaced the original design,
+which had a recording first-contact verifier, a separate pin entry in the
+credential manager, `tls_root_cert` in the exchange, five pin sources in a
+fixed order, and interactive trust on first use. The reduced design keeps
+the benefits that matter (connect links work on a fresh device with no
+certificate setup; trust is scoped to one server instead of the whole OS
+store; a changed CA is detected) at about a third of the work. Deferred:
+trust on first use for a typed code, and showing the fingerprint on the
+web `/connect` page.
+
+#### One verifier, used for every connection
+
+- A pin is `base64url(SHA-256(root SPKI))`, unpadded, as `solx-certs`
+  records it in `tls.json`.
+- A pinned client (`solx_client::ClientTls::with_pin`) builds reqwest with
+  `use_preconfigured_tls` and one custom `ServerCertVerifier`. It looks
+  through the certificates the server sends after its own for the one whose
+  public key matches the pin, then verifies the chain (signatures, host
+  name, validity, usage) with that certificate as the only root. Every
+  other root, built-in, OS or `server_ca_file`, is ignored.
+- Both solx-certs backends serve the root as part of the chain (the file
+  backend writes it into `solx-server.crt`; the store adds it through
+  `extra_chain`), so the verifier needs nothing stored but the pin.
+- The same check runs on first contact and afterwards, so no secret can go
+  to the wrong server: a handshake that fails the pin fails before any
+  request, the connect code and the `Authorization` header included. There
+  is no recording verifier and no root certificate to store.
+- **Mismatch** is a distinct error: "the server's certificate authority
+  changed: this machine pinned …, but the server presented …". It never
+  falls back to other roots.
+- **Untrusted and unpinned** (`UnknownIssuer`): the error says to connect
+  with a connect link, or set `server_ca_file`.
+
 #### Where the pin comes from
 
-- **Connect link:** `<public url>/connect#code=12345678&pin=<b64url>`.
-  - `create_connect_code` adds `pin` to `url`. `ConnectCode` and
-    `create-connect-code` gain `tls_pin`.
-  - `parse_connect_input` and the TypeScript twin extract `pin`.
-  - The pin is checked **before** the code is sent. This is the strong path,
-    because the pin arrives out of band with the code.
-- **Typed code** (address plus `1234-5678`, no pin): trust on first use.
-  - The client shows the root fingerprint, and the person compares it with
-    the host's "Connect another device" panel.
-  - An 8-digit code can't authenticate the channel. A man in the middle that
-    sees the code can brute-force any proof derived from it offline, and
-    fixing that would take a PAKE. Prefer the link; the doc says so.
-- **Token given directly** (`issue-client`, `solx token issue`, a pasted
-  token, `SOLX_SERVER_TOKEN`). There is no exchange, so the client resolves
-  trust in this order:
-  1. **A pin given with the token.**
-     - `issue-client` returns `tls_pin` next to `token`, and
-       `solx token issue` prints both.
-     - The server-address field accepts `https://host:8766#pin=<b64url>`.
-     - The CLI takes `solx connect URL TOKEN --pin <b64url>`.
-     - Non-interactive clients (Node bindings, MCP configs) read
-       `SOLX_SERVER_PIN`.
-  2. **`server_ca_file` / `SOLX_CA_FILE`.** An explicitly configured root
-     counts as the pin and is stored as one.
-  3. **The OS trust store.** Accepted, but not stored as a pin.
-  4. **Interactive trust on first use**, in the CLI and desktop client only.
-  5. **Otherwise, fail closed** with an error that includes the server's
-     fingerprint and suggests `--pin`.
+The pin always travels as a URL fragment, `#pin=<b64url>`, which a client
+never sends to the server.
 
-#### Never send a secret before the pin is settled
+- **Connect link:** `<public url>/connect#code=12345678&pin=<b64url>`. The
+  registry adds the pin whenever the server has one
+  (`ConfigService::server_tls_pin`: `server_tls: "auto"` and a `tls.json`).
+  `create-connect-code` returns `tls_pin` too, and Settings copies the
+  server address with it.
+- **Server address:** `https://host:8766#pin=<b64url>`, wherever a server
+  URL goes: the CLI's `solx connect URL`, the desktop client's address
+  field, `server_url` in solx-config.json, and `SOLX_SERVER_URL` (so Node
+  bindings and MCP configs are pinned the same way). `issue-client` (and
+  so `solx token issue`) returns the pinned `server_url` next to the token.
+- **The exchange:** `/auth/exchange` returns `tls_pin`. A client that had
+  no pin keeps it for an `https://` server (`Exchanged::adopted_pin`). The
+  exchange went over a connection it already trusted (OS store or
+  `server_ca_file`), so this narrows trust to that one root from then on.
+- **Typed code without a pin:** works only if the root is already trusted;
+  otherwise the untrusted error above. Links are the recommended path, since
+  an 8-digit code can't authenticate the channel.
+- `parse_connect_input` and its TypeScript twin return the pin; a pin in
+  both the address and the link must agree, and a malformed pin is an
+  error, never ignored.
 
-- First contact is an unauthenticated `GET /health` through a recording
-  verifier. It is a custom `rustls::client::danger::ServerCertVerifier`,
-  passed to reqwest with `use_preconfigured_tls`.
-- That verifier checks that the chain is internally valid for the host name
-  and records the root.
-- Only once the root matches a given pin, or the person confirms it, does
-  the client send the code to `/auth/exchange` or the token in
-  `Authorization`.
-- This applies to codes and tokens alike. Otherwise a man in the middle
-  would collect the credential during the very handshake being judged.
+#### Storage
 
-#### The exchange
-
-- `/auth/exchange` returns `tls_root_cert` (PEM) as well.
-- The client checks that its SPKI hash equals the root it saw in the
-  handshake, then stores it. This catches a confused deployment, such as a
-  proxy terminating TLS with a different CA. It is not a defence against an
-  active attacker; the pin source above is.
-
-#### Storage and enforcement
-
-- **Storage.**
-  - A credential-manager entry `pin:<appdata>:<server url>`, holding the
-    root DER as base64. It sits next to `client:…` in `credentials.rs`.
-  - Helpers `server_pin`, `set_server_pin`, `forget_server_pin`.
-    `forget_client_token` also forgets the pin.
-  - The value isn't secret, but keeping it next to the token gives both the
-    same lifetime and the same protection.
-- **Enforcement.** With a stored pin, `http_client` builds reqwest with
-  `tls_built_in_root_certs(false)` and
-  `add_root_certificate(<pinned root>)`. Host names and validity are still
-  checked, and no custom verifier is needed after first contact.
-- **Mismatch.** A distinct error: "the server's certificate authority
-  changed; reconnect with a new connect link (or `--pin`)". It never falls
-  back to other roots.
-- **Wiring:**
-  - the CLI's `solx connect`
-  - the desktop client build's `connect(server_url, credential)`
-  - the web `/connect` page, which can only display the fingerprint, since
-    the browser enforces trust itself
+- The pin is kept as part of the saved server URL: `server_url` in the
+  client's solx-config.json becomes `https://host:8766#pin=…`. Disconnecting
+  removes it with the URL. It isn't secret; anyone who can edit that file can
+  already point the client at another server.
+- `App::remote` splits the pin off (`credentials::split_server_pin`); the
+  managers use the bare URL. Client tokens are keyed by the URL without its
+  fragment, so adding or changing a pin doesn't lose the token.
 
 ### Security notes for SECURITY.md and security-design.md
 
@@ -519,13 +515,18 @@ and from then on accepts only chains that end in it.
    - Still to check by hand: whether curl on Windows accepts the server once
      the root is trusted through "Trust on this machine" (or still needs
      `--ssl-no-revoke`). It needs someone to answer Windows' dialog.
-4. **Pinning.**
-   - `pin=` in links and server URLs; `tls_pin` from `create-connect-code`
-     and `issue-client`.
-   - The recording first-contact verifier and the fingerprint prompt.
-   - `tls_root_cert` from the exchange.
-   - Credential-store pins and their enforcement.
-   - The CLI, desktop and web flows.
+4. **Pinning.** Done, in the reduced scope (see "Pinning").
+   - `pin=` in links and `#pin=` on server URLs (`credentials::
+     split_server_pin`, `with_server_pin`, `parse_connect_input` and its TS
+     twin); `tls_pin` from `create-connect-code`, `issue-client` (with a
+     pinned `server_url`) and `/auth/exchange`.
+   - The pinned verifier in `solx-client/src/tls.rs`, the mismatch and
+     untrusted errors (`describe_transport_error`).
+   - `App::remote` takes the pin from its URL; `solx connect` and the
+     desktop client's `connect` pin the exchange and save the pinned URL.
+   - Settings copies the server address with its pin.
+   - Deferred: trust on first use for a typed code, and the fingerprint on
+     the web `/connect` page.
 5. **Later:** the `pkcs11` and `keychain` backends, and `"auto"`
    provisioning on Linux and macOS.
 
@@ -555,17 +556,17 @@ credentials call `credentials::use_memory_store_for_tests()`.
     of the predicate
   - `ConnectInfo` reaches `require_bearer`
   - graceful shutdown drains requests
-- **Pinning:**
-  - a link with the right pin connects and stores the pin
-  - a wrong pin is refused before the code is sent: `failed_exchanges` is
-    unchanged and the code is still pending
-  - a token with `--pin`, `#pin=` or `SOLX_SERVER_PIN` connects
-  - a wrong pin is refused before `Authorization` is sent, checked against
-    a server that records request headers
-  - with no pin and no trusted root, a non-interactive client fails, and the
-    error carries the fingerprint
-  - a CA swap after pinning gives the mismatch error
-  - the classifier extracts `pin` (Rust and TS share the cases)
+- **Pinning** (`solx-server/tests/tls.rs`, `credentials.rs`,
+  `connectInput.test.ts`):
+  - the client's pin of the served root equals the one solx-certs records
+  - a remote `App` whose URL carries the right pin connects with no
+    `server_ca_file`; a wrong pin (as after a CA swap) gives the mismatch
+    error; unpinned and untrusted gives the error that suggests a link
+  - a connect link carries the pin; with a wrong pin the exchange fails
+    and the code still redeems with the right one (it never reached the
+    server); the exchange reports the pin and the client adopts it
+  - the classifier extracts `pin` from links and addresses, refuses
+    malformed or conflicting pins (Rust and TS share the cases)
 - **Manual (Windows):**
   - solx-browser with `server_host: 0.0.0.0`: `certmgr.msc` shows both
     certificates under Personal with keys, `certutil -user -store My` reports

@@ -82,10 +82,14 @@ pub struct ConnectCode {
     pub code: String,
     /// The code as shown to a person: `1234-5678`.
     pub display_code: String,
-    /// `<public url>/connect#code=12345678`, when this host knows its URL.
+    /// `<public url>/connect#code=12345678`, when this host knows its URL,
+    /// with `&pin=<tls_pin>` when it has one.
     pub url: Option<String>,
     /// The address to type next to the code on the other device.
     pub server_url: Option<String>,
+    /// The root pin clients should hold for this server (see
+    /// [`Registry::tls_pin`]).
+    pub tls_pin: Option<String>,
     pub expires_at: DateTime<Utc>,
 }
 
@@ -197,6 +201,14 @@ impl Registry {
             .or_else(|| self.server_url.get())
     }
 
+    /// The pin of the root this host's server presents, for clients to
+    /// hold: `server_tls: "auto"`'s, once its certificates exist (see
+    /// [`ConfigService::server_tls_pin`]). Handed out with connect codes
+    /// and issued tokens; never secret.
+    pub fn tls_pin(&self) -> Option<String> {
+        self.config.server_tls_pin()
+    }
+
     /// Record the address a host's server is reachable on from other
     /// machines, once bound. See [`advertised_url`].
     pub fn set_advertised_url(&self, url: String) {
@@ -287,14 +299,17 @@ impl Registry {
                 .map_err(map_db)?;
             if inserted == 1 {
                 tracing::info!(label = ?label, "token registry: created a connect code");
-                let url = base
-                    .as_ref()
-                    .map(|base| format!("{base}/connect#code={code}"));
+                let tls_pin = self.tls_pin();
+                let url = base.as_ref().map(|base| match &tls_pin {
+                    Some(pin) => format!("{base}/connect#code={code}&pin={pin}"),
+                    None => format!("{base}/connect#code={code}"),
+                });
                 return Ok(ConnectCode {
                     display_code: format!("{}-{}", &code[..4], &code[4..]),
                     code,
                     url,
                     server_url: base,
+                    tls_pin,
                     expires_at: to_datetime(expires_at),
                 });
             }

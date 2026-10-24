@@ -64,7 +64,7 @@ struct ExchangeRequest {
 }
 
 /// `POST /auth/exchange` `{ "code": "1234-5678" }` →
-/// `{ "token", "client_id", "expires_at", "server_url" }`.
+/// `{ "token", "client_id", "expires_at", "server_url", "tls_pin" }`.
 async fn exchange(
     State(state): State<AppState>,
     peer: Option<ConnectInfo<SocketAddr>>,
@@ -95,6 +95,7 @@ async fn exchange(
                 "client_id": issued.client_id,
                 "expires_at": issued.expires_at,
                 "server_url": server_url,
+                "tls_pin": state.app.config.server_tls_pin(),
             }))
             .into_response())
         }

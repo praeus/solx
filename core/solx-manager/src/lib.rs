@@ -216,15 +216,20 @@ impl App {
     /// Public so a host can choose remote mode explicitly, with a URL/token
     /// kept outside `config` (e.g. a desktop client's own settings, so it
     /// doesn't flip every other solx tool sharing the appdata dir to remote).
+    ///
+    /// A `#pin=` on `server_url` (see `solx_config::credentials`) makes the
+    /// connection trust only that root.
     pub fn remote(
         config: Arc<ConfigService>,
         server_url: String,
         token: String,
     ) -> Result<Arc<Self>> {
+        let (server_url, pin) = solx_config::credentials::split_server_pin(&server_url)?;
         let remote_url = Some(server_url.clone());
         // One client for all four, trusting `server_ca_file`/`SOLX_CA_FILE`
-        // besides the built-in and OS roots.
-        let http = solx_client::http_client_for(config.server_ca_file().as_deref())?;
+        // besides the built-in and OS roots, or only the pinned root.
+        let http =
+            solx_client::http_client_for(config.server_ca_file().as_deref(), pin.as_deref())?;
         let types: Arc<dyn TypeManager> = Arc::new(solx_client::RemoteTypeManager::with_client(
             server_url.clone(),
             token.clone(),

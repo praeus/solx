@@ -538,18 +538,25 @@ pub(crate) async fn connect(
             "enter the server's address, or paste a connect link".into(),
         ));
     };
+    let mut pin = parsed.pin;
     let token = match parsed.credential {
         ConnectCredential::Code(code) => {
-            let http = solx_client::http_client_for(config.server_ca_file().as_deref())?;
+            // Pinned before the code is sent: a server without the pinned
+            // root never sees it.
+            let http =
+                solx_client::http_client_for(config.server_ca_file().as_deref(), pin.as_deref())?;
             let exchanged = solx_client::exchange_connect_code(&http, &server_url, &code).await?;
-            if let Some(url) = exchanged.server_url.filter(|u| !u.trim().is_empty()) {
+            if let Some(url) = exchanged.server_url.as_ref().filter(|u| !u.trim().is_empty()) {
                 server_url = url.trim().trim_end_matches('/').to_string();
             }
+            pin = pin.or_else(|| exchanged.adopted_pin(&server_url));
             exchanged.token
         }
         ConnectCredential::Token(token) => token,
     };
-    let app = solx_manager::App::remote(config.clone(), server_url.clone(), token.clone())
+    // Saved with the URL, so the client keeps trusting only that root.
+    let pinned_url = solx_config::credentials::with_server_pin(&server_url, pin.as_deref());
+    let app = solx_manager::App::remote(config.clone(), pinned_url.clone(), token.clone())
         .map_err(|e| SolxError::Config(format!("{e:#}")))?;
     app.docs()
         .list(ListOptions {
@@ -560,7 +567,7 @@ pub(crate) async fn connect(
 
     // The token goes to the OS credential manager, not the config file.
     solx_config::credentials::set_client_token(config, &server_url, &token)?;
-    config.patch(json!({ "server_url": server_url }))?;
+    config.patch(json!({ "server_url": pinned_url }))?;
     state.replace(Some(app));
     Ok(())
 }

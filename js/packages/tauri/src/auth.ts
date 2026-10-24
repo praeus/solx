@@ -13,10 +13,15 @@ import type { TauriTransport } from './invoke.js';
 export interface ConnectCode {
   /** The code as shown to a person: `1234-5678`. */
   display_code: string;
-  /** `<public url>/connect#code=12345678`, when the host knows its address. */
+  /**
+   * `<public url>/connect#code=12345678`, when the host knows its address,
+   * with `&pin=<tls_pin>` when it has one.
+   */
   url: string | null;
   /** The address to type next to the code on the other device. */
   server_url: string | null;
+  /** The pin of the root the server presents, for clients to hold; `null` without `server_tls: "auto"`. */
+  tls_pin: string | null;
   /** RFC 3339. */
   expires_at: string;
 }
@@ -35,6 +40,9 @@ export interface IssuedClient {
   token: string;
   client_id: string;
   expires_at: string | null;
+  /** The address to give the client, with `#pin=` when the server has a pin. */
+  server_url: string | null;
+  tls_pin: string | null;
 }
 
 export interface CreateConnectCodeOptions {
@@ -47,7 +55,7 @@ export interface CreateConnectCodeOptions {
   /**
    * Address to put in the link instead of `server_public_url` or the bound
    * address, e.g. a Tailscale IP. A URL, or an IP or host name (which gets
-   * `http://` and the server's port).
+   * `http://`, or `https://` with TLS on, and the server's port).
    */
   publicUrl?: string;
 }

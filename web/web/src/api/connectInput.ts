@@ -4,9 +4,13 @@
  * TypeScript twin of `solx_config::credentials::parse_connect_input`, with
  * the same test cases (`connectInput.test.ts`):
  * - a link containing `#code=` is a code, and its origin becomes the server
- *   URL when none was given;
+ *   URL when none was given. Its `&pin=`, if any, is the server's root pin;
  * - exactly 8 digits once spaces and dashes are removed is a code;
  * - anything else non-empty is a token, trimmed.
+ *
+ * The server URL may carry a pin too (`https://host:8766#pin=…`). A pin in
+ * both places must be the same pin. A browser can't enforce a pin (it
+ * decides trust itself), so here it is only parsed and checked.
  *
  * Tokens are 44-character base64, never exactly 8 digits, so this can't be
  * ambiguous. A malformed code (7 digits, say) comes back as a token and
@@ -17,8 +21,30 @@ export type ConnectCredential = { kind: "code"; code: string } | { kind: "token"
 
 export interface ConnectInput {
   credential: ConnectCredential;
-  /** The server to use, without a trailing slash; `null` when unknown. */
+  /** The server to use, without a trailing slash or `#pin=`; `null` when unknown. */
   serverUrl: string | null;
+  /** The server's root pin, from the link or the server URL. */
+  pin: string | null;
+}
+
+/** 43 base64url characters: 32 bytes, unpadded. */
+const PIN = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
+
+/** The `pin` among `&`-separated `key=value` fragment parameters. Throws on a malformed one. */
+function pinParam(fragment: string): string | null {
+  const param = fragment.split("&").find((p) => p.startsWith("pin="));
+  if (param === undefined) return null;
+  const pin = param.slice("pin=".length).trim();
+  if (!PIN.test(pin)) throw new Error("That is not a server pin (43 base64url characters).");
+  return pin;
+}
+
+/** `serverUrl` without its fragment and trailing slash, and the pin in its fragment. */
+export function splitServerPin(serverUrl: string): { serverUrl: string; pin: string | null } {
+  const text = serverUrl.trim();
+  const at = text.indexOf("#");
+  const base = at >= 0 ? text.slice(0, at) : text;
+  return { serverUrl: base.replace(/\/+$/, ""), pin: at >= 0 ? pinParam(text.slice(at + 1)) : null };
 }
 
 /** The 8 digits of `12345678`, `1234-5678` or `1234 5678`, else `null`. */
@@ -48,20 +74,32 @@ function connectLinkBase(link: string): string | null {
 
 /** Classify the field. Throws on empty input or a link whose code isn't 8 digits. */
 export function parseConnectInput(serverUrl: string | null | undefined, input: string): ConnectInput {
-  const given = (serverUrl ?? "").trim().replace(/\/+$/, "") || null;
+  const split = splitServerPin(serverUrl ?? "");
+  const given = split.serverUrl || null;
   const text = input.trim();
   if (!text) throw new Error("Enter a connect code, a connect link or a token.");
 
   const at = text.indexOf("#code=");
   if (at >= 0) {
-    const code = connectCodeDigits(text.slice(at + "#code=".length));
+    const fragment = text.slice(at + "#code=".length);
+    const amp = fragment.indexOf("&");
+    const code = connectCodeDigits(amp >= 0 ? fragment.slice(0, amp) : fragment);
     if (!code) throw new Error("The connect link's code is not 8 digits.");
-    return { credential: { kind: "code", code }, serverUrl: given ?? connectLinkBase(text.slice(0, at)) };
+    const linkPin = amp >= 0 ? pinParam(fragment.slice(amp + 1)) : null;
+    if (split.pin && linkPin && split.pin !== linkPin) {
+      throw new Error("The server address and the connect link carry different pins.");
+    }
+    return {
+      credential: { kind: "code", code },
+      serverUrl: given ?? connectLinkBase(text.slice(0, at)),
+      pin: split.pin ?? linkPin,
+    };
   }
 
   const code = connectCodeDigits(text);
   return {
     credential: code ? { kind: "code", code } : { kind: "token", token: text },
     serverUrl: given,
+    pin: split.pin,
   };
 }

@@ -203,10 +203,13 @@ everything running through solx today is trusted by construction.
 - **Off-loopback TLS is opt-in outside the desktop app on Windows.** A
   standalone `solx-server`, or the desktop app elsewhere, serves plain HTTP
   to the network until `server_tls` is set.
-- **solx clients don't pin the server's certificate authority yet.** They
-  trust whatever their OS trust store and `server_ca_file`/`SOLX_CA_FILE`
-  trust. Browsers and other HTTPS clients can only ever do that, so
-  importing the solx root on a machine trusts it for every host name there.
+- **Only a pinned solx client is held to one root.** solx clients pin the
+  server's root when they connect through a link or a pinned address
+  (`#pin=`), or when an exchange over an already trusted connection reports
+  it. A client given a bare `https://` address and a token trusts whatever
+  its OS trust store and `server_ca_file`/`SOLX_CA_FILE` trust. Browsers and
+  other HTTPS clients can only ever do that, so importing the solx root on a
+  machine trusts it for every host name there.
 - **Certificates can't be revoked.** Reissue the server certificate, or
   reset the certificate authority and set every device up again.
 - **The in-process env store is global.** Any caller can read and write
@@ -267,7 +270,7 @@ is implemented, the full list of known gaps, and the intended direction.
   origins you use.
 - **Import the solx root only where you need it.** A browser or HTTPS
   client on another device needs `solx-root.crt` in that device's trust
-  store, and then trusts it for every site. solx's own clients can use
-  `server_ca_file` or `SOLX_CA_FILE` instead, which affects only solx.
+  store, and then trusts it for every site. solx's own clients don't need
+  it: connect them with a connect link, which pins the server's root.
 - **Prefer WASM for third-party logic.** The `custom-action` world is the
   only genuinely sandboxed dispatch kind.

@@ -16,6 +16,11 @@ async-trait = { workspace = true }
 url = { workspace = true }
 serde_html_form = { workspace = true }
 tracing = { workspace = true }
+# A pinned server's certificate verifier (`tls.rs`), on the same rustls
+# reqwest uses; the pin is a base64url SHA-256.
+rustls = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }

@@ -499,6 +499,21 @@ impl ConfigService {
         })
     }
 
+    /// The pin clients should hold for this server: with `server_tls:
+    /// "auto"`, the `pin` solx-certs records in `<appdata>/certs/tls.json`
+    /// for the root it serves. `None` for any other `server_tls`, or before
+    /// the certificates exist; clients of such a server rely on the OS trust
+    /// store or `server_ca_file` instead.
+    pub fn server_tls_pin(&self) -> Option<String> {
+        if !matches!(self.server_tls(), Ok(ServerTls::Auto)) {
+            return None;
+        }
+        let path = self.appdata.join("certs").join("tls.json");
+        let state: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+        let pin = state.get("pin")?.as_str()?;
+        credentials::is_pin(pin).then(|| pin.to_string())
+    }
+
     /// TTL (in days) before a terminal invocation row is swept away.
     /// Defaults to 7 when unset or non-positive.
     pub fn invocation_ttl_days(&self) -> i64 {

@@ -92,6 +92,7 @@ impl InternalActionHandler for AuthHandler {
                     "display_code": code.display_code,
                     "url": code.url,
                     "server_url": code.server_url,
+                    "tls_pin": code.tls_pin,
                     "expires_at": code.expires_at,
                 })
             }
@@ -111,10 +112,18 @@ impl InternalActionHandler for AuthHandler {
                     )
                     .await
                     .map_err(|e| e.to_string())?;
+                // The address to give the client, with the pin it should
+                // hold, so a token handed over by hand is pinned too.
+                let tls_pin = r.tls_pin();
+                let server_url = r.public_url().map(|url| {
+                    solx_config::credentials::with_server_pin(&url, tls_pin.as_deref())
+                });
                 json!({
                     "token": issued.token,
                     "client_id": issued.client_id,
                     "expires_at": issued.expires_at,
+                    "server_url": server_url,
+                    "tls_pin": tls_pin,
                 })
             }
         };

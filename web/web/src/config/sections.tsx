@@ -1479,7 +1479,14 @@ function DevicesView({ view }: SectionEditorProps<null>) {
           {code.server_url && (
             <span className="dialog__hint">
               with the server address <code>{code.server_url}</code>{" "}
-              <button type="button" className="dialog__btn" onClick={() => void copy("address", code.server_url!)}>
+              <button
+                type="button"
+                className="dialog__btn"
+                // With the pin, so a pasted address is pinned like the link.
+                onClick={() =>
+                  void copy("address", code.tls_pin ? `${code.server_url}#pin=${code.tls_pin}` : code.server_url!)
+                }
+              >
                 {copied === "address" ? "Copied" : "Copy"}
               </button>
             </span>

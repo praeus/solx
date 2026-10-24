@@ -63,7 +63,7 @@ fn wire_error(status: reqwest::StatusCode, bytes: &[u8]) -> SolxError {
 }
 
 /// Map a transport-level failure (couldn't even reach the server) to a
-/// `SolxError`.
+/// `SolxError`. A TLS failure says why (see `tls.rs`).
 pub fn transport_err(e: reqwest::Error) -> SolxError {
-    SolxError::Io(format!("solx-server request failed: {e}"))
+    crate::tls::describe_transport_error(&e)
 }
