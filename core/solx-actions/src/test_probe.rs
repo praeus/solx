@@ -4,20 +4,23 @@
 //! (REST, `/mcp`, nested frames, detached `action-start` runs) delivers them.
 //!
 //! Compiled only under `cfg(test)` or the `test-probe` feature, which
-//! dependents enable from `[dev-dependencies]` alone. The handler is
-//! registered but never seeded: a test saves its own `Internal` row with
-//! `fn_name` [`FN_NAME`] to reach it, so it never shows up in the catalogue.
+//! dependents enable from `[dev-dependencies]` alone, and seeded at
+//! [`PATH`]/[`NAME`] only then. It has to be seeded: `save` refuses to
+//! create an `Internal` row, and dispatch runs only seeded ones.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use solx_surface::internal_actions::{
-    InternalActionHandler, InternalActionRegistry, InternalCallCtx,
+    InternalActionHandler, InternalActionRegistry, InternalCallCtx, SeedAction,
 };
 use solx_surface::Principal;
 
 pub const FN_NAME: &str = "test-principal-probe";
+/// Where the probe is seeded.
+pub const PATH: &str = "/builtin/test";
+pub const NAME: &str = "probe";
 
 /// Stable string form of a principal, for assertions.
 pub fn describe(principal: &Principal) -> String {
@@ -46,6 +49,16 @@ impl InternalActionHandler for Probe {
     }
 }
 
+pub(crate) fn seeds() -> Vec<SeedAction> {
+    vec![SeedAction {
+        path: PATH,
+        name: NAME,
+        fn_name: FN_NAME,
+        description: "Test only: report the principal, caller and exclusion mode.",
+        param_type: None,
+    }]
+}
+
 pub(crate) fn plugin() -> InternalActionRegistry {
     let mut registry = InternalActionRegistry::new();
     registry.register(&[FN_NAME], Arc::new(Probe));
@@ -60,32 +73,22 @@ mod tests {
     use solx_surface::managers::ActionManager;
     use solx_surface::{ExecContext, Principal};
 
-    use super::FN_NAME;
+    use super::{NAME, PATH};
     use crate::caller::Caller;
     use crate::set_long_lived_host;
     use crate::test_support::setup_wired;
     use crate::LocalActionManager;
 
-    async fn save_probe(m: &LocalActionManager) {
-        save_probe_as(m, "probe", vec![]).await;
-    }
-
-    async fn save_probe_as(m: &LocalActionManager, name: &str, capabilities: Vec<String>) {
-        m.save(
-            "/t",
-            name,
-            ActionInput {
-                action_type: Some(ActionType::Internal),
-                fn_name: Some(FN_NAME.into()),
-                capabilities,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-    }
-
     async fn save_script(m: &LocalActionManager, name: &str, source: &str) {
+        save_script_as(m, name, source, vec![]).await;
+    }
+
+    async fn save_script_as(
+        m: &LocalActionManager,
+        name: &str,
+        source: &str,
+        capabilities: Vec<String>,
+    ) {
         let bin = format!("{name}.solx");
         m.files
             .put(
@@ -100,6 +103,7 @@ mod tests {
             ActionInput {
                 action_type: Some(ActionType::Script),
                 bin_name: Some(bin),
+                capabilities,
                 ..Default::default()
             },
         )
@@ -110,10 +114,9 @@ mod tests {
     #[tokio::test]
     async fn exec_for_delivers_the_principal_and_exec_delivers_none() {
         let (_d, _cfg, m) = setup_wired().await;
-        save_probe(&m).await;
 
         let authed = m
-            .exec_for(&Principal::Root, "/t", "probe", json!({}))
+            .exec_for(&Principal::Root, PATH, NAME, json!({}))
             .await
             .unwrap();
         assert_eq!(
@@ -121,7 +124,7 @@ mod tests {
             json!({"principal": "root", "caller": null, "external": "root", "excludeMode": "none"})
         );
 
-        let local = m.exec("/t", "probe", json!({})).await.unwrap();
+        let local = m.exec(PATH, NAME, json!({})).await.unwrap();
         assert_eq!(
             local.result,
             json!({"principal": null, "caller": null, "external": null, "excludeMode": "none"})
@@ -133,8 +136,7 @@ mod tests {
     #[tokio::test]
     async fn nested_script_exec_inherits_the_principal_but_is_not_external() {
         let (_d, _cfg, m) = setup_wired().await;
-        save_probe(&m).await;
-        save_script(&m, "outer", "exec /t/probe").await;
+        save_script(&m, "outer", "exec /builtin/test/probe").await;
 
         let ran = m
             .exec_for(&Principal::Root, "/t", "outer", json!({}))
@@ -154,7 +156,6 @@ mod tests {
     async fn detached_runs_keep_principal_and_caller() {
         set_long_lived_host(true);
         let (_d, _cfg, m) = setup_wired().await;
-        save_probe(&m).await;
 
         let poll_result = |started: serde_json::Value| {
             let m = m.clone();
@@ -168,8 +169,8 @@ mod tests {
 
         let direct = m
             .start_invocation(
-                "/t",
-                "probe",
+                PATH,
+                NAME,
                 json!({}),
                 ExecContext::for_principal(Principal::Root).info(),
             )
@@ -182,8 +183,8 @@ mod tests {
 
         let from_action = m
             .start_invocation(
-                "/t",
-                "probe",
+                PATH,
+                NAME,
                 json!({}),
                 ExecContext::for_principal(Principal::Root)
                     .enter(Caller::from_action("/t/outer", None))
@@ -200,7 +201,7 @@ mod tests {
         save_script(
             &m,
             "starter",
-            r#"exec /builtin/action/start --json '{"path": "/t", "name": "probe"}'"#,
+            r#"exec /builtin/action/start --json '{"path": "/builtin/test", "name": "probe"}'"#,
         )
         .await;
         let ran = m
@@ -229,8 +230,7 @@ mod tests {
     #[tokio::test]
     async fn the_tooling_scope_reaches_nested_frames() {
         let (_d, _cfg, m) = setup_wired().await;
-        save_probe(&m).await;
-        save_script(&m, "outer", "exec /t/probe").await;
+        save_script(&m, "outer", "exec /builtin/test/probe").await;
 
         let ran = m
             .exec_tooling(Some(&Principal::Root), "/t", "outer", json!({}))
@@ -248,7 +248,13 @@ mod tests {
     #[serial]
     async fn excluded_actions_are_refused_at_every_hop_in_the_tooling_scope() {
         let (_d, _cfg, m) = setup_wired().await;
-        save_probe_as(&m, "hidden", vec![solx_config::CAP_HIDDEN.into()]).await;
+        save_script_as(
+            &m,
+            "hidden",
+            "exec /builtin/test/probe",
+            vec![solx_config::CAP_HIDDEN.into()],
+        )
+        .await;
         save_script(&m, "outer", "exec /t/hidden").await;
 
         let direct = m
@@ -279,6 +285,6 @@ mod tests {
 
         // Outside the tooling scope the same chain runs.
         let ran = m.exec("/t", "outer", json!({})).await.unwrap();
-        assert_eq!(ran.result["result"]["caller"], json!("/t/outer"));
+        assert_eq!(ran.result["result"]["result"]["caller"], json!("/t/hidden"));
     }
 }

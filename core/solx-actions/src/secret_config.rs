@@ -13,36 +13,34 @@
 //! * **Credentials** (`auth.token`, `auth.client_secret`, …) are refused
 //!   inline. They are resolved at call time from a `<field>_secret` pointer
 //!   into the scoped secret store, or a keyring reference — see
-//!   [`crate::auth::secret_field`].
+//!   [`crate::auth::secret_field`]. A keyring reference may not name one of
+//!   solx's own credential-manager services (see
+//!   [`crate::secrets::check_keyring_service`]).
 
 use serde_json::Value;
-use solx_surface::entities::{Action, ActionInput};
+use solx_surface::entities::ActionInput;
 
-/// Refuse a save that would create or change an action with secrets — one
-/// whose stored or incoming config declares `secrets` — for a caller that
-/// isn't root.
+/// Refuse a save of a keyed action (see [`solx_surface::is_keyed`]) for a
+/// caller that isn't root.
 ///
-/// Root is any in-process host (the CLI, a package install, Tauri) or an
-/// HTTP request with the root token; those call `ActionManager::save`
-/// directly. Everyone else — an MCP tool call, a WASM guest, a script, an
-/// HTTP client token — must pass this check first.
+/// Root is any in-process operator host (the CLI, a package install, the
+/// desktop app's Settings window) or an HTTP request with the root token;
+/// those call `ActionManager::save` directly. Everyone else — an MCP tool
+/// call, a WASM guest, a script, an HTTP client or action token, the desktop
+/// app's main window — must pass this check first. Declaring secrets is
+/// refused because the key comes from the action's scope, so a name declared
+/// under `/packages/<pkg>/` would read that package's secret. A keyring
+/// reference is refused because it reads whatever entry it names.
 ///
-/// It covers the whole row, not just the names. The key comes from the
-/// action's scope, so declaring a name under `/packages/<pkg>/` would read
-/// that package's secret, and repointing `bin_name` or `files` of an action
-/// that has secrets would run new code with them.
-pub fn guard_keyed_action(
-    existing: Option<&Action>,
-    incoming: &ActionInput,
-    reference: &str,
-) -> Result<(), String> {
-    let declares_secrets = |cfg: Option<&Value>| cfg.is_some_and(|c| c.get("secrets").is_some());
-    if declares_secrets(existing.and_then(|a| a.action_config.as_ref()))
-        || declares_secrets(incoming.action_config.as_ref())
-    {
+/// Only the incoming config needs checking: a keyed action is always locked
+/// (see `crate::lock`), so [`crate::lock::guard_locked_action`] refuses any
+/// change to it, including repointing the code that runs with its key.
+pub fn guard_keyed_action(incoming: &ActionInput, reference: &str) -> Result<(), String> {
+    let cfg = incoming.action_config.as_ref();
+    if cfg.is_some_and(|c| c.get("secrets").is_some()) || solx_surface::uses_keyring(cfg) {
         return Err(format!(
-            "{reference} has scoped secrets; only root (the solx CLI, a package install, \
-             or the root token) can create or modify it"
+            "{reference} has scoped secrets or a keyring reference; only root (the solx \
+             CLI, a package install, or the root token) can create or modify it"
         ));
     }
     Ok(())
@@ -142,7 +140,8 @@ pub(crate) fn scrub_legacy(cfg: &mut Value) -> Scrubbed {
 }
 
 /// A string at any of [`crate::auth::CREDENTIAL_FIELDS`] is an inline
-/// credential. A keyring reference (an object) is a pointer and is fine.
+/// credential. A keyring reference (an object) is a pointer and is fine,
+/// unless it names one of solx's own services.
 fn reject_inline_credentials(cfg: &Value) -> Result<(), String> {
     let Some(auth) = cfg.get("auth").and_then(Value::as_object) else {
         return Ok(());
@@ -154,6 +153,12 @@ fn reject_inline_credentials(cfg: &Value) -> Result<(), String> {
                  store; point '{field}_secret' at a scoped secret, or give a keyring \
                  reference ({{\"keyring_service\": …, \"keyring_account\": …}})"
             ));
+        }
+    }
+    for (field, value) in auth {
+        if let Some(service) = value.get("keyring_service").and_then(Value::as_str) {
+            crate::secrets::check_keyring_service(service)
+                .map_err(|e| format!("action_config.auth.{field}: {e}"))?;
         }
     }
     Ok(())
@@ -220,6 +225,36 @@ mod tests {
             }
         });
         assert!(normalize(&mut cfg).is_ok());
+    }
+
+    /// solx's own entries (the root token, client tokens, the scoped secret
+    /// store) are never a keyring reference's to read or overwrite.
+    #[test]
+    fn keyring_references_to_solx_services_are_refused() {
+        for service in ["solx", "SOLX", "sol-secrets", "x.solx"] {
+            let mut cfg = json!({
+                "auth": {
+                    "type": "bearer",
+                    "token": { "keyring_service": service, "keyring_account": "a" }
+                }
+            });
+            let err = normalize(&mut cfg).unwrap_err();
+            assert!(err.contains("auth.token"), "{service}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_keyring_reference_is_root_only() {
+        let input = |cfg: Value| ActionInput {
+            action_config: Some(cfg),
+            ..Default::default()
+        };
+        let keyring = json!({
+            "auth": { "type": "bearer", "token": { "keyring_service": "s", "keyring_account": "a" } }
+        });
+        let err = guard_keyed_action(&input(keyring), "/p/w").unwrap_err();
+        assert!(err.contains("keyring reference"), "{err}");
+        assert!(guard_keyed_action(&input(json!({ "auth": { "type": "bearer" } })), "/p/w").is_ok());
     }
 
     #[test]

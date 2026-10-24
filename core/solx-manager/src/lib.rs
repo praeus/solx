@@ -319,10 +319,11 @@ impl App {
 
     /// Refuse, for content, a save (`incoming`) or delete (`None`) of the
     /// action at `path`/`name` that only an operator may make: any change
-    /// to a locked action, locking or unlocking, and a save of an action
-    /// with scoped secrets. See `solx_actions::guard_locked_action` and
-    /// `solx_actions::guard_keyed_action`. A no-op for a remote app, whose
-    /// server applies both to anything but the root token.
+    /// to a locked action, locking or unlocking, a save of a keyed action,
+    /// and anything under `/packages/`. See
+    /// `solx_actions::guard_content_action_change`. A no-op for a remote
+    /// app, whose server applies the same checks to anything but the root
+    /// token.
     pub async fn guard_content_action_change(
         &self,
         path: &str,
@@ -337,13 +338,14 @@ impl App {
                 Err(SolxError::NotFound(_)) => None,
                 Err(e) => return Err(e),
             };
-            let reference = format!("{path}/{name}");
-            if let Some(input) = incoming {
-                solx_actions::guard_keyed_action(existing.as_ref(), input, &reference)
-                    .map_err(SolxError::Unauthorized)?;
-            }
-            solx_actions::guard_locked_action(existing.as_ref(), incoming, &reference)
-                .map_err(SolxError::Unauthorized)?;
+            solx_actions::guard_content_action_change(
+                existing.as_ref(),
+                incoming,
+                path,
+                name,
+                None,
+            )
+            .map_err(SolxError::Unauthorized)?;
         }
         let _ = (path, name, incoming);
         Ok(())

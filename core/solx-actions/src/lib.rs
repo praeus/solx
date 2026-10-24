@@ -11,6 +11,7 @@
 
 pub mod auth;
 pub mod caller;
+mod content;
 mod db;
 mod dispatch;
 mod exec;
@@ -32,6 +33,7 @@ mod test_support;
 pub mod test_probe;
 pub mod wasm;
 
+pub use content::{guard_content_action_change, guard_package_namespace, principal_action};
 pub use invocation::set_long_lived_host;
 pub use lock::guard_locked_action;
 pub use secret_config::guard_keyed_action;
@@ -102,6 +104,10 @@ pub struct LocalActionManager {
     /// `solx-registry`'s `/builtin/auth/*`), merged into
     /// [`Self::internal_registry`] by [`Self::set_self_ref`].
     extra_plugins: Mutex<Vec<InternalActionRegistry>>,
+    /// `"<path>/<name>" -> fn_name` of every seeded built-in: the only
+    /// `Internal` rows dispatch runs. See [`Self::is_catalogued`] and
+    /// `crate::seed`.
+    catalogue: Mutex<HashMap<String, String>>,
 }
 
 #[async_trait]
@@ -145,11 +151,20 @@ impl LocalActionManager {
         let db = Db::open(db_path).await?;
         let conn = db.connect().await?;
         schema::migrate(&conn).await?;
+        lock::lock_keyed_actions(&conn, &files).await?;
         // Console/invocation entries are contributed by `solx-console` as
         // plain data here — seeding them doesn't need that crate's stores
         // or an `Arc<Self>` (unlike the full plugin registry, built later
         // in `set_self_ref` once one exists).
-        seed::seed_builtins(&conn, &solx_console::actions::seed_actions()).await?;
+        #[allow(unused_mut)]
+        let mut seeds = solx_console::actions::seed_actions();
+        #[cfg(any(test, feature = "test-probe"))]
+        seeds.extend(test_probe::seeds());
+        seed::seed_builtins(&conn, &seeds).await?;
+        seed::retire_internal_aliases(&conn).await?;
+        let catalogue = seed::catalogue(&seed::builtin_actions())
+            .chain(seed::catalogue(&seeds))
+            .collect();
 
         // Separate physical database file from `actions` (no DB-level FKs
         // link them, only the app-level `action_ref` string) — see
@@ -183,6 +198,7 @@ impl LocalActionManager {
             self_ref: OnceLock::new(),
             token_authority: OnceLock::new(),
             extra_plugins: Mutex::new(Vec::new()),
+            catalogue: Mutex::new(catalogue),
         })
     }
 
@@ -245,8 +261,24 @@ impl LocalActionManager {
     pub async fn add_plugin(&self, plugin: InternalActionRegistry) -> Result<()> {
         let conn = self.db.connect().await?;
         seed::seed_builtins(&conn, plugin.seed_actions()).await?;
+        self.catalogue
+            .lock()
+            .unwrap()
+            .extend(seed::catalogue(plugin.seed_actions()));
         self.extra_plugins.lock().unwrap().push(plugin);
         Ok(())
+    }
+
+    /// Whether `path`/`name` is a seeded built-in that dispatches to
+    /// `fn_name`. Dispatch runs no other `Internal` row: `save` refuses to
+    /// create one, but a row saved before it did could alias a built-in's
+    /// handler under a path that tooling exclusions don't cover.
+    pub(crate) fn is_catalogued(&self, path: &str, name: &str, fn_name: &str) -> bool {
+        self.catalogue
+            .lock()
+            .unwrap()
+            .get(&format!("{path}/{name}"))
+            .is_some_and(|f| f == fn_name)
     }
 
     /// Provide the authority that credentials spawned Command actions to

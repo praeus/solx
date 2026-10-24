@@ -324,9 +324,7 @@ pub async fn run_webhook(
     )
     .await;
 
-    let redirects = crate::net::redirect_policy(cfg);
-    let result =
-        run_webhook_inner(path, name, url, action_config, secrets, params, redirects).await;
+    let result = run_webhook_inner(cfg, path, name, url, action_config, secrets, params).await;
 
     let elapsed_ms = started.elapsed().as_millis();
     match &result {
@@ -428,14 +426,16 @@ async fn log_webhook(
         .await;
 }
 
+/// `config` holds the outbound allowlist: every redirect hop, and an OAuth
+/// `token_uri`, is held to it (the URL itself was checked by the caller).
 async fn run_webhook_inner(
+    config: &ConfigService,
     path: &str,
     name: &str,
     url: &str,
     action_config: &Option<Value>,
     secrets: &ActionSecrets,
     params: &Value,
-    redirects: reqwest::redirect::Policy,
 ) -> Result<Value> {
     // `action_config.timeout_secs` was previously read only by `run_command`
     // -- a webhook call had no timeout at all, so a stalled connection or an
@@ -450,7 +450,7 @@ async fn run_webhook_inner(
         .unwrap_or(DEFAULT_TIMEOUT_SECS);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
-        .redirect(redirects)
+        .redirect(crate::net::redirect_policy(config))
         .build()
         .map_err(|e| SolxError::Exec(format!("failed to build HTTP client: {e}")))?;
 
@@ -489,7 +489,7 @@ async fn run_webhook_inner(
 
     if let Some(cfg) = action_config {
         // Resolve auth via the full pipeline (bearer/oauth_refresh/oauth_service_account).
-        if let Some(auth_header) = crate::auth::resolve_auth(path, name, cfg, secrets)
+        if let Some(auth_header) = crate::auth::resolve_auth(path, name, config, cfg, secrets)
             .await
             .map_err(|e| SolxError::Exec(e))?
         {
@@ -872,6 +872,12 @@ mod tests {
         (base, handle)
     }
 
+    fn open_config() -> (tempfile::TempDir, ConfigService) {
+        let dir = tempfile::tempdir().unwrap();
+        let config = ConfigService::open_in(dir.path()).unwrap();
+        (dir, config)
+    }
+
     /// `action_config.method: "GET"` must send params as a query string with
     /// no body -- the whole point being REST endpoints (Drive's `files.list`
     /// vs. `files.create` at the same URL, etc.) that dispatch on HTTP method,
@@ -882,14 +888,15 @@ mod tests {
         let action_config = Some(json!({ "method": "GET" }));
         let params = json!({ "q": "trashed=false", "pageSize": 5 });
 
+        let (_dir, config) = open_config();
         let result = run_webhook_inner(
+            &config,
             "/p",
             "n",
             &url,
             &action_config,
             &ActionSecrets::default(),
             &params,
-            reqwest::redirect::Policy::default(),
         )
         .await;
         assert!(result.is_ok(), "{:?}", result.err());
@@ -917,14 +924,15 @@ mod tests {
         let (url, handle) = start_capturing_endpoint().await;
         let params = json!({ "name": "a-file" });
 
+        let (_dir, config) = open_config();
         let result = run_webhook_inner(
+            &config,
             "/p",
             "n",
             &url,
             &None,
             &ActionSecrets::default(),
             &params,
-            reqwest::redirect::Policy::default(),
         )
         .await;
         assert!(result.is_ok(), "{:?}", result.err());
@@ -972,15 +980,16 @@ mod tests {
         let url = start_stalling_endpoint().await;
         let action_config = Some(json!({ "timeout_secs": 1 }));
 
+        let (_dir, config) = open_config();
         let started = std::time::Instant::now();
         let result = run_webhook_inner(
+            &config,
             "/p",
             "n",
             &url,
             &action_config,
             &ActionSecrets::default(),
             &json!({}),
-            reqwest::redirect::Policy::default(),
         )
         .await;
         let elapsed = started.elapsed();

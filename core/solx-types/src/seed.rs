@@ -230,7 +230,6 @@ fn builtin_action_param_types() -> Vec<SeedType> {
                     "fnName": { "type": "string", "description": "Command string / URL / internal op name / WASM export, depending on actionType." },
                     "binName": { "type": "string", "description": "Artifact file name (wasm: component; script: .solx source)." },
                     "actionConfig": {},
-                    "trusted": { "type": "boolean" },
                 }
             }),
             groups: vec!["builtin-params"],

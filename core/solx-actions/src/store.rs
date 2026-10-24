@@ -205,6 +205,21 @@ impl ActionManager for LocalActionManager {
         let action_type = input
             .action_type
             .or_else(|| existing.as_ref().and_then(|a| a.action_type));
+        // Built-ins come only from the seeded catalogue (see `crate::seed`):
+        // nobody, operator included, creates, changes or retypes one. An
+        // `Internal` row elsewhere would alias a built-in's handler under a
+        // path that tooling exclusions don't cover.
+        if action_type == Some(ActionType::Internal)
+            || existing
+                .as_ref()
+                .is_some_and(|a| a.action_type == Some(ActionType::Internal))
+        {
+            return Err(SolxError::Invalid(format!(
+                "cannot save {}: internal actions are solx's built-ins, which come only \
+                 from its own catalogue",
+                full_ref(&path, &name)?
+            )));
+        }
         // `secrets` is stored as a list of names (whatever an older install
         // script put in its values is dropped), and inline credentials are
         // refused, so the stored config holds no secret material — see
@@ -219,12 +234,13 @@ impl ActionManager for LocalActionManager {
         if !secret_names(action_config.as_ref()).is_empty() {
             ensure_scope_key(&conn, &secret_scope(&path, &name)).await?;
         }
+        let keyed = solx_surface::is_keyed(action_config.as_ref());
         let capabilities = merge_vec!(capabilities);
         let phrases = merge_vec!(phrases);
         let files = merge_vec!(files);
-        let trusted = input
-            .trusted
-            .unwrap_or_else(|| existing.as_ref().map(|a| a.trusted).unwrap_or(false));
+        // Only seeding marks a built-in, and `save` refuses `Internal` rows,
+        // so nothing saved here is one.
+        let trusted = false;
 
         let now = Utc::now();
         let now_s = now.to_rfc3339();
@@ -233,10 +249,20 @@ impl ActionManager for LocalActionManager {
         // This method is the operator path: whoever reaches it may lock and
         // unlock, and content is stopped earlier, by `guard_locked_action`.
         // Every save of a locked Script/WASM action pins (or re-pins) its
-        // artifact; see `crate::lock`.
-        let locked = input
-            .locked
-            .unwrap_or_else(|| existing.as_ref().is_some_and(|a| a.locked));
+        // artifact; see `crate::lock`. A keyed action (scoped secrets or a
+        // keyring reference) is always locked, so what runs with its
+        // credential is pinned.
+        if keyed && input.locked == Some(false) {
+            return Err(SolxError::Invalid(format!(
+                "cannot unlock {}: it has scoped secrets or a keyring reference, which keep \
+                 it locked",
+                full_ref(&path, &name)?
+            )));
+        }
+        let locked = keyed
+            || input
+                .locked
+                .unwrap_or_else(|| existing.as_ref().is_some_and(|a| a.locked));
         let pin = match (locked, action_type) {
             (true, Some(ActionType::Script | ActionType::Wasm)) => Some(
                 lock::pin_artifact(

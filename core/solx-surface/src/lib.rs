@@ -25,7 +25,7 @@ pub use entities::{
     LinkKind, TypeEntity, TypeInput,
 };
 pub use internal_actions::{
-    secret_names, secret_scope, ActionExecutor, ActionSecrets, Caller, CallerInfo,
+    is_keyed, secret_names, secret_scope, uses_keyring, ActionExecutor, ActionSecrets, Caller, CallerInfo,
     InternalActionHandler, InternalActionRegistry, InternalCallCtx, SecretHandle, SeedAction,
 };
 pub use managers::{ActionManager, DocManager, FileStore, Solx, TypeManager};

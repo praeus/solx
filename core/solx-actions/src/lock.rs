@@ -24,6 +24,12 @@
 //!
 //! Every operator save of a locked action re-pins it, which is how a
 //! reinstall (or `solx action lock`) picks up a new artifact.
+//!
+//! A keyed action (scoped secrets, or an `auth` keyring reference — see
+//! [`solx_surface::is_keyed`]) is always locked: `save` locks it and
+//! refuses to unlock it while it is keyed, and [`lock_keyed_actions`]
+//! locks rows saved before that rule. Unlocked, its artifact or URL would
+//! be content's to rewrite, and the rewrite would run with its credential.
 
 use std::sync::Arc;
 
@@ -114,6 +120,15 @@ pub(crate) async fn load_artifact(
     kind: &str,
 ) -> Result<Vec<u8>> {
     let Some(pin) = &action.artifact_pin else {
+        // Only a row locked before its artifact existed (see
+        // [`lock_keyed_actions`]): running whatever resolves would defeat
+        // the lock.
+        if action.locked {
+            return Err(SolxError::Exec(format!(
+                "locked action {reference} has no pinned {kind} artifact; lock it again with \
+                 `solx action lock` (or reinstall its package) once '{bin_name}' is in place"
+            )));
+        }
         return resolve_artifact(files, &action.id.to_string(), bin_name, kind)
             .await
             .map(|(_, bytes)| bytes);
@@ -132,6 +147,68 @@ pub(crate) async fn load_artifact(
         )));
     }
     Ok(bytes)
+}
+
+/// Lock every keyed action that isn't locked yet, pinning a Script/WASM
+/// action's artifact. `save` keeps that true from now on; this catches rows
+/// saved before it did. Runs at every open, but finds nothing once they are
+/// locked.
+///
+/// A Script/WASM action whose artifact is missing is still locked, unpinned,
+/// which [`load_artifact`] refuses to run until an operator locks it again.
+pub(crate) async fn lock_keyed_actions(
+    conn: &libsql::Connection,
+    files: &Arc<dyn FileStore>,
+) -> Result<()> {
+    use solx_surface::entities::ActionType;
+
+    let mut rows = conn
+        .query(
+            &format!(
+                "{} WHERE locked=0 AND (action_config LIKE '%\"secrets\"%' \
+                 OR action_config LIKE '%\"keyring_service\"%')",
+                crate::row::SELECT
+            ),
+            (),
+        )
+        .await
+        .map_err(crate::db::map_db)?;
+    let mut keyed = Vec::new();
+    while let Some(row) = rows.next().await.map_err(crate::db::map_db)? {
+        let action = crate::row::row_to_action(&row)?;
+        if solx_surface::is_keyed(action.action_config.as_ref()) {
+            keyed.push(action);
+        }
+    }
+    for action in keyed {
+        let reference = solx_surface::path::full_ref(&action.path, &action.name)?;
+        let pin = match action.action_type {
+            Some(ActionType::Script | ActionType::Wasm) => {
+                match pin_artifact(files, &action.id.to_string(), action.bin_name.as_deref(), &reference)
+                    .await
+                {
+                    Ok(pin) => Some(pin),
+                    Err(e) => {
+                        tracing::warn!("{e}; locked without a pin, so it won't run until re-locked");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+        tracing::info!("locked {reference}: it has scoped secrets or a keyring reference");
+        conn.execute(
+            "UPDATE actions SET locked=1, pin_path=?2, pin_sha256=?3 WHERE id=?1",
+            libsql::params![
+                action.id.to_string(),
+                pin.as_ref().map(|p| p.rel_path.clone()).unwrap_or_default(),
+                pin.map(|p| p.sha256).unwrap_or_default()
+            ],
+        )
+        .await
+        .map_err(crate::db::map_db)?;
+    }
+    Ok(())
 }
 
 /// One path in a form for comparing: what Windows would open is the same
@@ -389,8 +466,8 @@ mod lifecycle_tests {
             "/p",
             "open",
             ActionInput {
-                action_type: Some(ActionType::Internal),
-                fn_name: Some("get-env".into()),
+                action_type: Some(ActionType::Script),
+                bin_name: Some(BIN.into()),
                 ..Default::default()
             },
         )
@@ -416,6 +493,100 @@ mod lifecycle_tests {
                 .result,
             json!(42)
         );
+    }
+
+    fn keyed_script() -> ActionInput {
+        ActionInput {
+            action_type: Some(ActionType::Script),
+            bin_name: Some(BIN.into()),
+            action_config: Some(json!({ "secrets": ["TOKEN"] })),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn an_action_with_secrets_is_always_locked_and_pinned() {
+        let (_d, _cfg, m) = setup_wired().await;
+        put(&m, &shared(), "json 42").await;
+        // Saved without asking for a lock.
+        let action = m.save("/p", "s", keyed_script()).await.unwrap();
+        assert!(action.locked);
+        assert_eq!(action.artifact_pin.expect("pinned").rel_path, shared());
+
+        let err = m
+            .save("/p", "s", ActionInput { locked: Some(false), ..Default::default() })
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("cannot unlock"), "{err}");
+
+        // So content can neither swap its code nor delete it (and its key).
+        let err = builtin(
+            &m,
+            FILE_PATH,
+            "file-put",
+            json!({"rel_path": shared(), "content": "json 666"}),
+        )
+        .await;
+        assert!(err.contains("artifact of a locked action"), "{err}");
+        let err = builtin(&m, ACTION_PATH, "entity-delete-action", json!({"path": "/p", "name": "s"}))
+            .await;
+        assert!(err.contains("is locked"), "{err}");
+
+        // Dropping its secrets is what lets an operator unlock it.
+        let action = m
+            .save(
+                "/p",
+                "s",
+                ActionInput {
+                    action_config: Some(json!({})),
+                    locked: Some(false),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(!action.locked);
+    }
+
+    #[tokio::test]
+    async fn an_action_with_secrets_needs_its_artifact_to_save() {
+        let (_d, _cfg, m) = setup_wired().await;
+        let err = m.save("/p", "s", keyed_script()).await.unwrap_err();
+        assert!(err.to_string().contains("cannot lock"), "{err}");
+    }
+
+    /// A row saved before secrets implied a lock is locked when the store
+    /// opens; one whose artifact is missing is locked unpinned and won't run.
+    #[tokio::test]
+    async fn opening_locks_keyed_rows_left_unlocked() {
+        let (_d, _cfg, m) = setup_wired().await;
+        put(&m, &shared(), "json 42").await;
+        m.save("/p", "s", keyed_script()).await.unwrap();
+        m.save("/p", "gone", keyed_script()).await.unwrap();
+        let conn = m.db.connect().await.unwrap();
+        conn.execute(
+            "UPDATE actions SET locked=0, pin_path='', pin_sha256='' WHERE path='/p'",
+            (),
+        )
+        .await
+        .unwrap();
+        conn.execute("UPDATE actions SET bin_name='nope.solx' WHERE name='gone'", ())
+            .await
+            .unwrap();
+
+        super::lock_keyed_actions(&conn, &m.files).await.unwrap();
+
+        let action = m.get("/p", "s").await.unwrap();
+        assert!(action.locked);
+        assert_eq!(action.artifact_pin.expect("pinned").sha256, super::sha256_hex(b"json 42"));
+        assert_eq!(run(&m).await.unwrap(), json!(42));
+
+        let gone = m.get("/p", "gone").await.unwrap();
+        assert!(gone.locked && gone.artifact_pin.is_none());
+        // Even with a file now at the name it would have resolved.
+        put(&m, "files/actions/shared/nope.solx", "json 666").await;
+        let err = m.exec("/p", "gone", json!({})).await.unwrap_err();
+        assert!(err.to_string().contains("no pinned"), "{err}");
     }
 
     #[tokio::test]

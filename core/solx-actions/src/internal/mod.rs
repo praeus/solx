@@ -149,9 +149,9 @@ pub async fn run_internal(
         "entity-list-types" => entity::type_list(params, &ctx.types, &ctx.config).await,
         "entity-list-type-paths" => entity::type_paths(params, &ctx.types, &ctx.config).await,
 
-        "entity-save-action" => entity::action_save(params, &ctx.actions).await,
+        "entity-save-action" => entity::action_save(params, &ctx.actions, &ctx.exec).await,
         "entity-get-action" => entity::action_get(params, &ctx.actions).await,
-        "entity-delete-action" => entity::action_delete(params, &ctx.actions).await,
+        "entity-delete-action" => entity::action_delete(params, &ctx.actions, &ctx.exec).await,
         "entity-list-actions" => entity::action_list(params, &ctx.actions, &ctx.config).await,
         "entity-list-action-paths" => entity::action_paths(params, &ctx.actions, &ctx.config).await,
 

@@ -171,6 +171,26 @@ pub fn secret_names(action_config: Option<&Value>) -> BTreeSet<String> {
     }
 }
 
+/// Whether `action_config.auth` reads a credential out of the OS credential
+/// manager: any field holding a `{keyring_service, keyring_account}`
+/// reference.
+pub fn uses_keyring(action_config: Option<&Value>) -> bool {
+    action_config
+        .and_then(|c| c.get("auth"))
+        .and_then(Value::as_object)
+        .is_some_and(|auth| {
+            auth.values()
+                .any(|v| v.as_object().is_some_and(|o| o.contains_key("keyring_service")))
+        })
+}
+
+/// Whether an action holds a credential: it declares scoped secrets, or its
+/// auth reads a keyring entry. A keyed action is root-only to create or
+/// change, and always locked, so content can't repoint what runs with it.
+pub fn is_keyed(action_config: Option<&Value>) -> bool {
+    !secret_names(action_config).is_empty() || uses_keyring(action_config)
+}
+
 /// The scoped-secret access of one action: the secret names it declares in
 /// `action_config.secrets`, its [`secret_scope`], and that scope's AES key,
 /// which solx keeps in the actions database, never in a config.

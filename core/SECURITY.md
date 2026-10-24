@@ -55,6 +55,10 @@ or `https://api.example.com@evil.net`, and `..` cannot climb out of an
 allowed path. Redirects are checked hop by hop against the same list, so an
 open redirect on an allowed host is not a way out to an unlisted one.
 
+A Webhook's OAuth `token_uri` is held to the same list, and is checked
+before any credential is read, so a client secret, refresh token or signed
+assertion is never sent to an unlisted host.
+
 The `/builtin/web/*` built-ins were ungated until this check was extracted
 and shared; before that, anything able to exec an action — a WASM guest, an
 MCP client, a widget with a bearer token — could use `http-request` as an
@@ -73,10 +77,24 @@ incoming payload, because `save` is a merge-upsert — otherwise a payload
 carrying only `fn_name` could silently repoint an existing command action.
 
 The CLI reaches `ActionManager::save` directly and is unaffected; package
-installs depend on that. The HTTP `/actions/save` route is also unrestricted,
-deliberately: anyone holding the server token can already execute command
-actions, so gating it there would buy nothing and would break the CLI in
-remote mode.
+installs depend on that. The HTTP `/actions/save` route does not apply this
+particular check, deliberately: anyone holding the server token can already
+execute command actions, so gating it there would buy nothing and would
+break the CLI in remote mode. The checks below on `/packages/`, keyed and
+locked actions do apply there.
+
+**Built-ins can't be added, aliased or edited.** Built-in actions come only
+from solx's own catalogue. No one, operators included, can save a built-in
+(`internal`) action, and one that isn't in the catalogue doesn't run. So no
+action can run a built-in's handler under another path, where a tooling
+exclusion on the built-in wouldn't apply. Every built-in is locked, and
+restored from the catalogue whenever solx starts.
+
+**Content can't write under `/packages/`.** An MCP client, a WASM guest, a
+script, a client or action token over REST, and the desktop app's main
+window can't save or delete an action under `/packages/`. The one exception
+is a package's own action, within its own package. Otherwise content could
+plant a row that a later install would adopt and lock as the package's own.
 
 **Packages declare their grants.** A package's `solx-package.json` lists the
 `command_actions` and `allowed_base_urls` it needs. Install grants
@@ -117,13 +135,21 @@ they use the same name.
 **Action config never holds a secret.** `action_config.secrets` lists only
 secret names, so no read (`get`/`list`/`search`, HTTP, MCP) can return a
 key. Inline credentials in `action_config.auth` are refused — they come
-from a `<field>_secret` pointer or a keyring reference.
+from a `<field>_secret` pointer or a keyring reference. A keyring reference
+can't name solx's own credential-manager entries (the root and client
+tokens, the local CA, the scoped secret store), either to read one or to
+write a rotated refresh token over one.
 
-**Only root can create or change an action with secrets.** That is the CLI,
-a package install, the desktop app, or HTTP with the root token. A client
-token, an MCP tool call, a WASM guest or a script cannot, so none of them can
-declare a name in a package's scope or swap the code that runs with its
-key.
+**Only root can create or change an action with credentials.** That covers
+an action that declares secrets or whose `auth` has a keyring reference.
+Root is the CLI, a package install, the desktop app's Settings window, or
+HTTP with the root token. A client token, an MCP tool call, a WASM guest, a
+script or the desktop app's main window cannot, so none of them can declare
+a name in a package's scope, read a credential-manager entry, or swap the
+code that runs with a key. Such an action is always locked, and a Script or
+WASM one pinned: saving it locks it, it can't be unlocked while it holds
+credentials, and a package reinstall leaves it locked. Rows from before this
+rule are locked when solx starts.
 
 **WASM guests are sandboxed by construction.** The `custom-action` world
 imports only action dispatch, artifact reads, and logging.

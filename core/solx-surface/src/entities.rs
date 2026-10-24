@@ -194,15 +194,17 @@ pub struct Action {
     pub action_config: Option<Value>,
     #[serde(default)]
     pub files: Vec<FileRef>,
-    /// Inert legacy field — has no effect on execution.
+    /// Marks a seeded built-in; it has no effect on execution. Only seeding
+    /// sets it: `save` always writes `false`, and it isn't on
+    /// [`ActionInput`], so content can't dress its own row up as a built-in
+    /// (the web UI badges these and won't offer to delete them).
     ///
     /// This once selected between the trusted `backend-action` world (direct
     /// entity/file/secret host access) and the restricted `custom-action`
     /// world. That trusted world was retired: everything it provided is now a
     /// native `Internal` action, so every WASM guest is equally sandboxed by
     /// construction and reaches built-ins the same way anyone else does — via
-    /// `action-exec`. See `solx-actions/src/wasm/mod.rs`. Kept on the entity
-    /// only to avoid a DB migration.
+    /// `action-exec`. See `solx-actions/src/wasm/mod.rs`.
     #[serde(default)]
     pub trusted: bool,
     /// A locked action, and the artifact it was locked against, change only
@@ -250,10 +252,6 @@ pub struct ActionInput {
     pub action_config: Option<Value>,
     #[serde(default)]
     pub files: Vec<FileRef>,
-    /// Inert legacy field — see [`Action::trusted`]. `None` means "leave
-    /// unchanged" on update / defaults to `false` on create.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trusted: Option<bool>,
     /// See [`Action::locked`]. `None` means "leave unchanged" on update /
     /// `false` on create. Honored only on operator paths; content that sets
     /// it at all is refused.

@@ -428,6 +428,12 @@ async fn only_the_root_token_can_save_a_keyed_action() {
                 .status()
         }
     };
+    // An action with secrets is locked, so its artifact must exist to pin.
+    s.app
+        .files()
+        .put("files/actions/shared/good.wasm", b"\0asm".to_vec())
+        .await
+        .unwrap();
     let keyed = json!({
         "actionType": "wasm",
         "binName": "good.wasm",

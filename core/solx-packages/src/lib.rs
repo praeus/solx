@@ -65,8 +65,25 @@
 //! may rebuild an artifact through an action that writes it back over
 //! HTTP with its own token (as `solx-quickjs`'s builds do), which a pin
 //! would refuse. Everything is locked again once the script has run, or,
-//! if it fails, what the previous install had locked. An action with scoped
-//! secrets is locked even when `unlocked_actions` lists it.
+//! if it fails, what the previous install had locked.
+//!
+//! A keyed action (scoped secrets, or an `auth` keyring reference) is
+//! always locked: it is not unlocked for a reinstall, and is locked even
+//! when `unlocked_actions` lists it. Its
+//! artifact must therefore be written by the script itself (`save file`,
+//! the operator path), not rebuilt over HTTP with an action token.
+//!
+//! ## A package's scripts reach only its own actions
+//!
+//! `install.solx` and `uninstall.solx` run as the operator, which may save
+//! an action that declares secrets. The key is chosen by path (everything
+//! under `/packages/<name>/` shares `package:<name>`), so a script saving
+//! `/packages/<other>/steal` would read the other package's secrets. While
+//! a script runs, [`guard_package_script_action`] refuses any action save
+//! or delete outside the package's own `/packages/<name>/`, and a script
+//! may not install or uninstall a package (a nested install would run
+//! under another name). A package name must be a single path segment for
+//! the same reason: `a/b` would install under `/packages/a/`.
 //!
 //! ## Installing from a zip
 //!
@@ -111,10 +128,12 @@ pub trait PackageActions: Send + Sync {
     /// only those at `base` or below it.
     async fn actions_under(&self, base: &str) -> Result<Vec<(String, String)>>;
     async fn set_locked(&self, path: &str, name: &str, locked: bool) -> Result<()>;
-    /// Whether the action has scoped secrets. Such an action is locked even
-    /// when the manifest lists it under `unlocked_actions`: unpinned, its
-    /// artifact could be replaced by content and run with its key.
-    async fn has_secrets(&self, path: &str, name: &str) -> Result<bool>;
+    /// Whether the action is keyed: it has scoped secrets or an `auth`
+    /// keyring reference (see [`solx_surface::is_keyed`]). Such an action is
+    /// locked even when the manifest lists it under `unlocked_actions`:
+    /// unlocked, its artifact could be replaced by content and run with its
+    /// credential.
+    async fn is_keyed(&self, path: &str, name: &str) -> Result<bool>;
 }
 
 #[async_trait]
@@ -153,12 +172,9 @@ impl PackageActions for Arc<dyn ActionManager> {
         .map(|_| ())
     }
 
-    async fn has_secrets(&self, path: &str, name: &str) -> Result<bool> {
+    async fn is_keyed(&self, path: &str, name: &str) -> Result<bool> {
         let action = self.get(path, name).await?;
-        Ok(action
-            .action_config
-            .as_ref()
-            .is_some_and(|c| c.get("secrets").is_some()))
+        Ok(solx_surface::is_keyed(action.action_config.as_ref()))
     }
 }
 
@@ -208,6 +224,41 @@ async fn relock_after_failure(
 /// Where a package's actions live.
 fn package_actions_base(name: &str) -> String {
     format!("/packages/{name}")
+}
+
+tokio::task_local! {
+    /// The package whose `install.solx` or `uninstall.solx` is running.
+    static RUNNING_PACKAGE: String;
+}
+
+/// Refuse, while a package's script runs, a save or delete of an action at
+/// `path` outside that package's `/packages/<name>/`. A no-op outside a
+/// package script. Every operator path a script can reach calls this (the
+/// `save action` and `delete action` commands); the `/builtin/entity/*`
+/// actions are content paths and already refuse scoped secrets. See the
+/// module doc.
+pub fn guard_package_script_action(path: &str) -> Result<()> {
+    let Ok(package) = RUNNING_PACKAGE.try_with(String::clone) else {
+        return Ok(());
+    };
+    let base = package_actions_base(&package);
+    let path = solx_surface::path::normalize_path(path)?;
+    if path == base || path.starts_with(&format!("{base}/")) {
+        return Ok(());
+    }
+    Err(SolxError::Unauthorized(format!(
+        "package '{package}' may only save or delete actions under {base}/, not in {path}"
+    )))
+}
+
+/// Refuse to install or uninstall a package from inside a package script.
+fn refuse_in_package_script(verb: &str) -> Result<()> {
+    match RUNNING_PACKAGE.try_with(String::clone) {
+        Ok(package) => Err(SolxError::Unauthorized(format!(
+            "package '{package}' can't {verb} a package from its scripts"
+        ))),
+        Err(_) => Ok(()),
+    }
 }
 
 /// The actions at `base` or below it. `actions_under` matches a string
@@ -286,6 +337,7 @@ pub async fn install_package(
     config: &ConfigService,
     dir: &Path,
 ) -> Result<InstallOutcome> {
+    refuse_in_package_script("install")?;
     let (meta_path, meta_file, legacy_manifest) = manifest_path(dir);
     let install_path = dir.join("install.solx");
 
@@ -298,6 +350,14 @@ pub async fn install_package(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| SolxError::Invalid(format!("{meta_file} missing 'name'")))?
         .to_string();
+    // The name is one segment of its actions' path, and so of its secret
+    // scope — see the module doc.
+    if !is_dir_safe(&name) {
+        return Err(SolxError::Invalid(format!(
+            "package name '{name}' must be letters, digits, '-', '_' and '.' only, \
+             and not start with '.'"
+        )));
+    }
     let version = meta
         .get("version")
         .and_then(|v| v.as_str())
@@ -370,35 +430,46 @@ pub async fn install_package(
         .map_err(|e| SolxError::Io(format!("read {}: {e}", install_path.display())))?;
 
     // Unlock what a previous install locked, so this one can replace it —
-    // see the module doc.
+    // see the module doc. A keyed action stays locked: the
+    // script replaces its artifact as the operator (`save file`) and its
+    // `save action` re-pins it, so content never gets a window to swap in
+    // code that would run with the package's key.
     let base = package_actions_base(&name);
     for (path, action) in own_actions(actions, &base).await? {
-        actions.set_locked(&path, &action, false).await?;
+        if !actions.is_keyed(&path, &action).await? {
+            actions.set_locked(&path, &action, false).await?;
+        }
     }
 
-    if let Err(e) = run_in_dir(runner, dir, &script).await {
+    if let Err(e) = run_in_dir(runner, dir, &name, &script).await {
         return Err(relock_after_failure(actions, config, &name, e).await);
     }
 
+    // Lock everything, even past a failure, so one missing artifact doesn't
+    // leave the rest open to content.
     let mut locked_actions = Vec::new();
+    let mut failed = Vec::new();
     for (path, action) in own_actions(actions, &base).await? {
         let full = format!("{path}/{action}");
         let relative = full.strip_prefix(&format!("{base}/")).unwrap_or(&full);
         if unlocked.iter().any(|u| u.trim_matches('/') == relative) {
-            if !actions.has_secrets(&path, &action).await? {
+            if !actions.is_keyed(&path, &action).await? {
                 continue;
             }
             let msg = format!(
-                "{full} is listed in unlocked_actions but has scoped secrets; locked anyway"
+                "{full} is listed in unlocked_actions but has scoped secrets or a keyring \
+                 reference; locked anyway"
             );
             tracing::warn!("{msg}");
             warnings.push(msg);
         }
-        actions
-            .set_locked(&path, &action, true)
-            .await
-            .map_err(|e| SolxError::Other(format!("locking {full}: {e}")))?;
-        locked_actions.push(full);
+        match actions.set_locked(&path, &action, true).await {
+            Ok(()) => locked_actions.push(full),
+            Err(e) => failed.push(format!("locking {full}: {e}")),
+        }
+    }
+    if !failed.is_empty() {
+        return Err(SolxError::Other(failed.join("; ")));
     }
 
     let pkg = InstalledPackage {
@@ -425,6 +496,7 @@ pub async fn uninstall_package(
     config: &ConfigService,
     name: &str,
 ) -> Result<()> {
+    refuse_in_package_script("uninstall")?;
     let pkg = config
         .list_packages()
         .into_iter()
@@ -436,7 +508,7 @@ pub async fn uninstall_package(
     if uninstall_path.exists() {
         let script = std::fs::read_to_string(&uninstall_path)
             .map_err(|e| SolxError::Io(format!("read {}: {e}", uninstall_path.display())))?;
-        run_in_dir(runner, dir, &script).await?;
+        run_in_dir(runner, dir, &pkg.name, &script).await?;
     }
 
     // Revoke after the script ran (symmetric with granting before install.solx
@@ -497,6 +569,8 @@ pub async fn install_package_zip_bytes(
     config: &ConfigService,
     bytes: Vec<u8>,
 ) -> Result<InstallOutcome> {
+    // Before unpacking, which replaces the target package's directory.
+    refuse_in_package_script("install")?;
     let packages = config.packages_dir();
     std::fs::create_dir_all(&packages)
         .map_err(|e| SolxError::Io(format!("create {}: {e}", packages.display())))?;
@@ -709,11 +783,20 @@ fn resolve_cwd(def: &CommandDef, pkg_dir: &Path) -> CommandDef {
 
 /// Run a package script with the process CWD temporarily set to the package
 /// directory (so relative paths in the script resolve), restoring it after.
-async fn run_in_dir(runner: &dyn CommandRunner, dir: &Path, script: &str) -> Result<()> {
+/// Run `package`'s `script` in `dir`, confined to that package's actions
+/// (see [`guard_package_script_action`]).
+async fn run_in_dir(
+    runner: &dyn CommandRunner,
+    dir: &Path,
+    package: &str,
+    script: &str,
+) -> Result<()> {
     let original = std::env::current_dir().map_err(|e| SolxError::Io(format!("read cwd: {e}")))?;
     std::env::set_current_dir(dir)
         .map_err(|e| SolxError::Io(format!("set cwd to {}: {e}", dir.display())))?;
-    let result = execute_script(runner, script).await;
+    let result = RUNNING_PACKAGE
+        .scope(package.to_string(), execute_script(runner, script))
+        .await;
     let restore = std::env::set_current_dir(&original)
         .map_err(|e| SolxError::Io(format!("restore cwd: {e}")));
     result?;

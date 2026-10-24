@@ -50,6 +50,7 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use solx_config::ConfigService;
 use solx_surface::{ActionSecrets, SecretHandle};
 
 /// The `auth` fields that hold credentials. Each is resolved through
@@ -113,16 +114,28 @@ fn cache_put(key: &str, token: String, expires_in_secs: u64) {
     }
 }
 
-// ── HTTP client (shared) ─────────────────────────────────────────────────────
+// ── Token endpoint ───────────────────────────────────────────────────────────
 
-fn http_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .expect("failed to build auth http client")
-    })
+/// `auth.token_uri`, checked against the outbound allowlist, and a client
+/// whose redirects are held to the same list.
+///
+/// Called before any credential is resolved: the request carries the
+/// action's client secret, refresh token or signed assertion, so an
+/// unlisted endpoint must be refused while there is still nothing to leak.
+fn token_endpoint(
+    config: &ConfigService,
+    auth: &Value,
+    auth_type_label: &str,
+) -> Result<(String, reqwest::Client), String> {
+    let token_uri = require_inline_string(auth, "token_uri", auth_type_label)?;
+    crate::net::check_outbound_url(config, &token_uri)
+        .map_err(|e| format!("auth.type='{auth_type_label}': token_uri: {e}"))?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .redirect(crate::net::redirect_policy(config))
+        .build()
+        .map_err(|e| format!("failed to build auth http client: {e}"))?;
+    Ok((token_uri, client))
 }
 
 // ── Public entry point ───────────────────────────────────────────────────────
@@ -156,10 +169,12 @@ struct RefreshOutcome {
 /// **not** fail the auth resolution.
 ///
 /// `secrets` are the executing action's own, for `<field>_secret`
-/// pointers.
+/// pointers. `config` holds the outbound allowlist that a `token_uri` must
+/// match, like every other URL solx sends a request to.
 pub async fn resolve_auth(
     path: &str,
     name: &str,
+    config: &ConfigService,
     action_config: &Value,
     secrets: &ActionSecrets,
 ) -> Result<Option<String>, String> {
@@ -191,7 +206,7 @@ pub async fn resolve_auth(
             Ok(Some(format!("Bearer {token}")))
         }
         "oauth_refresh" => {
-            let outcome = exchange_refresh_token(name, secrets, auth).await?;
+            let outcome = exchange_refresh_token(name, config, secrets, auth).await?;
             // Touch the rotated_refresh_token field so the compiler
             // doesn't flag it as unused — the persistence side-effect
             // inside `exchange_refresh_token` already wrote the new
@@ -204,7 +219,7 @@ pub async fn resolve_auth(
             Ok(Some(format!("Bearer {}", outcome.access_token)))
         }
         "oauth_service_account" => {
-            let token = exchange_service_account_token(secrets, auth).await?;
+            let token = exchange_service_account_token(config, secrets, auth).await?;
             let ttl = auth.get("ttl_secs").and_then(Value::as_u64).unwrap_or(3600);
             cache_put(&key, token.clone(), ttl);
             Ok(Some(format!("Bearer {token}")))
@@ -237,13 +252,13 @@ pub async fn resolve_auth(
 /// reference or a pointer into the scoped secret store
 /// (`client_id_secret`, `client_secret_secret`, `refresh_token_secret` —
 /// see [`secret_field`]).  `token_uri` and `scope` remain in
-/// `action_config.auth` since they are not secrets.
+/// `action_config.auth` since they are not secrets; `token_uri` is read and
+/// checked first, by [`token_endpoint`].
 #[derive(Debug)]
 struct RefreshRequest {
     client_id: String,
     client_secret: String,
     refresh_token: String,
-    token_uri: String,
 }
 
 impl RefreshRequest {
@@ -273,7 +288,6 @@ impl RefreshRequest {
                 "oauth_refresh",
             )
             .await?,
-            token_uri: require_inline_string(auth, "token_uri", "oauth_refresh")?,
         })
     }
 }
@@ -447,9 +461,11 @@ impl RefreshStorage {
 
 async fn exchange_refresh_token(
     name: &str,
+    config: &ConfigService,
     secrets: &ActionSecrets,
     auth: &Value,
 ) -> Result<RefreshOutcome, String> {
+    let (token_uri, client) = token_endpoint(config, auth, "oauth_refresh")?;
     let req = RefreshRequest::from_value(secrets, auth).await?;
 
     let body = json!({
@@ -458,8 +474,8 @@ async fn exchange_refresh_token(
         "client_secret": req.client_secret,
         "refresh_token": req.refresh_token,
     });
-    let resp = http_client()
-        .post(req.token_uri)
+    let resp = client
+        .post(token_uri)
         .form(&body)
         .send()
         .await
@@ -525,6 +541,10 @@ async fn persist_rotated_refresh_token(
             );
         }
         Some(RefreshStorage::Keyring { service, account }) => {
+            if let Err(e) = crate::secrets::check_keyring_service(&service) {
+                tracing::warn!("rotated refresh_token not persisted: {e}");
+                return;
+            }
             let entry = match keyring::Entry::new(&service, &account) {
                 Ok(e) => e,
                 Err(e) => {
@@ -565,7 +585,6 @@ async fn persist_rotated_refresh_token(
 struct ServiceAccountRequest {
     client_email: String,
     private_key: String,
-    token_uri: String,
 }
 
 impl ServiceAccountRequest {
@@ -580,15 +599,16 @@ impl ServiceAccountRequest {
                 "oauth_service_account",
             )
             .await?,
-            token_uri: require_inline_string(auth, "token_uri", "oauth_service_account")?,
         })
     }
 }
 
 async fn exchange_service_account_token(
+    config: &ConfigService,
     secrets: &ActionSecrets,
     auth: &Value,
 ) -> Result<String, String> {
+    let (token_uri, client) = token_endpoint(config, auth, "oauth_service_account")?;
     let req = ServiceAccountRequest::from_value(secrets, auth).await?;
 
     let now = chrono::Utc::now().timestamp();
@@ -597,7 +617,7 @@ async fn exchange_service_account_token(
     let claims = json!({
         "iss": req.client_email,
         "scope": scope,
-        "aud": req.token_uri,
+        "aud": token_uri,
         "iat": now,
         "exp": exp,
     });
@@ -619,8 +639,8 @@ async fn exchange_service_account_token(
         "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion={}",
         urlencoding(&assertion)
     );
-    let resp = http_client()
-        .post(req.token_uri)
+    let resp = client
+        .post(token_uri)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(body)
         .send()
@@ -687,8 +707,19 @@ mod tests {
         Guard
     }
 
+    /// A config whose allowlist admits only `https://allowed.example`.
+    fn config() -> (tempfile::TempDir, ConfigService) {
+        let dir = tempfile::tempdir().unwrap();
+        let config = ConfigService::open_in(dir.path()).unwrap();
+        config
+            .set_allowed_base_urls(vec!["https://allowed.example".into()])
+            .unwrap();
+        (dir, config)
+    }
+
     async fn resolve(path: &str, name: &str, cfg: &Value) -> Result<Option<String>, String> {
-        resolve_auth(path, name, cfg, &no_secrets()).await
+        let (_dir, config) = config();
+        resolve_auth(path, name, &config, cfg, &no_secrets()).await
     }
 
     #[serial(auth_cache, secrets_loader)]
@@ -845,6 +876,53 @@ mod tests {
         );
     }
 
+    /// The token endpoint is held to the outbound allowlist, and refused
+    /// before any credential is read: the loader below fails the test if
+    /// it's reached.
+    #[serial(auth_cache, secrets_loader)]
+    #[tokio::test]
+    async fn an_unlisted_token_uri_is_refused_before_credentials_are_read() {
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                crate::secrets::set_secret_loader_for_tests(None);
+            }
+        }
+        crate::secrets::set_secret_loader_for_tests(Some(|r| {
+            panic!("read {} before checking token_uri", r.keyring_account)
+        }));
+        let _g = Guard;
+        for auth_type in ["oauth_refresh", "oauth_service_account"] {
+            clear();
+            let cfg = json!({ "auth": {
+                "type": auth_type,
+                "client_email": "sa@example.com",
+                "client_id": kr("id"),
+                "client_secret": kr("secret"),
+                "refresh_token": kr("refresh"),
+                "private_key": kr("pem"),
+                "token_uri": "https://attacker.example/token"
+            } });
+            let err = resolve("/test", auth_type, &cfg).await.unwrap_err();
+            assert!(err.contains("allowed_base_urls"), "{auth_type}: {err}");
+        }
+    }
+
+    /// Even an existing row can't reach solx's own entries: the root token
+    /// lives under the `solx` service.
+    #[serial(auth_cache, secrets_loader)]
+    #[tokio::test]
+    async fn a_keyring_reference_cant_read_solx_credentials() {
+        clear();
+        let _g = install_echo_loader();
+        let cfg = json!({ "auth": {
+            "type": "bearer",
+            "token": { "keyring_service": "solx", "keyring_account": "root:x" }
+        } });
+        let err = resolve("/test", "root", &cfg).await.unwrap_err();
+        assert!(err.contains("solx's own"), "{err}");
+    }
+
     #[test]
     fn urlencoding_leaves_safe_chars_alone() {
         assert_eq!(urlencoding("abc.123-XYZ_ok~bar"), "abc.123-XYZ_ok~bar");
@@ -919,7 +997,8 @@ mod tests {
         crate::secrets::set_secret(&secrets.resolve("BEARER").unwrap(), "from-store")
             .await
             .unwrap();
-        let out = resolve_auth("/test", "pointer", &cfg, &secrets).await;
+        let (_dir, config) = config();
+        let out = resolve_auth("/test", "pointer", &config, &cfg, &secrets).await;
         crate::secrets::set_secret_backend_for_tests(None);
         assert_eq!(out.unwrap().unwrap(), "Bearer from-store");
     }
@@ -939,7 +1018,8 @@ mod tests {
             Some(&cfg),
             Some(crate::test_support::TEST_KEY.to_string()),
         );
-        let err = resolve_auth("/test", "outside", &cfg, &secrets)
+        let (_dir, config) = config();
+        let err = resolve_auth("/test", "outside", &config, &cfg, &secrets)
             .await
             .unwrap_err();
         assert!(err.contains("isn't listed in action_config.secrets"), "{err}");

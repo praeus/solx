@@ -28,13 +28,17 @@ async fn spawn_server() -> Server {
     solx_config::credentials::use_memory_store_for_tests();
     let app = solx_manager::App::build_local_in(dir.path()).await.unwrap();
     let root = solx_config::credentials::root_token(&app.config).unwrap();
+    // A Script row: content may save scripts, so over MCP the refusal is the
+    // lock's, not the built-in's ban on Command/Webhook rows.
+    let rel = solx_files::shared_action_file_path("fixture.solx");
+    app.files().put(&rel, b"json 1".to_vec()).await.unwrap();
     app.actions()
         .save(
             "/p",
             "locked",
             ActionInput {
-                action_type: Some(ActionType::Internal),
-                fn_name: Some("get-env".into()),
+                action_type: Some(ActionType::Script),
+                bin_name: Some("fixture.solx".into()),
                 caption: Some("original".into()),
                 locked: Some(true),
                 ..Default::default()

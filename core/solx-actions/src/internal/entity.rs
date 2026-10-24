@@ -12,6 +12,7 @@ use solx_config::{ConfigService, EntityKind};
 use solx_surface::entities::{ActionInput, TypeInput};
 use solx_surface::error::SolxError;
 use solx_surface::managers::{ActionManager, DocManager, TypeManager};
+use solx_surface::ExecContext;
 use solx_surface::query::{ActionSearchQuery, ListOptions, SearchQuery};
 
 use solx_surface::entities::DocumentInput;
@@ -153,22 +154,22 @@ pub(super) async fn type_paths(
 // composes actions, and an MCP client calls action rows. Everything they can
 // do arrives through this function.
 //
-// The CLI and the HTTP surface deliberately do **not** go through it, and so
-// are not guarded. Both call `ActionManager::save` directly, which is what
-// lets `solx save action` register a Command, and equally what lets
-// solx-web's action editor and solx-quickjs write rows over
-// `PUT /actions/{ref}`. That is the intended posture, not an oversight:
-// holding the server token already makes a caller a CLI-equivalent admin, so
-// there is nothing left for a guard on that route to protect. See
-// SECURITY.md — "Treat a solx instance as running with your own privileges."
+// The CLI and the HTTP surface deliberately do **not** apply that one
+// guard. Both call `ActionManager::save` directly, which is what lets
+// `solx save action` register a Command, and equally what lets solx-web's
+// action editor and solx-quickjs write rows over `PUT /actions/{ref}` (known
+// gap 7 in docs/security-design.md).
 //
-// The one exception is an action with scoped secrets: HTTP applies
-// `guard_keyed_action` to anyone but the root token, and this built-in
-// applies it always — see `crate::secret_config::guard_keyed_action`.
+// Every content guard besides it is shared with HTTP (for anyone but the
+// root token) and the desktop app's main window, and this built-in applies
+// it always, whatever principal the chain carries: no write under another
+// package's `/packages/<name>/`, no keyed action, no change to a locked
+// one. See `crate::guard_content_action_change`.
 
 pub(super) async fn action_save(
     params: &Value,
     actions: &Arc<dyn ActionManager>,
+    exec: &ExecContext,
 ) -> Result<Value, String> {
     let name = require_str(params, "name")?;
     let input: ActionInput = parse_input(params)?;
@@ -189,12 +190,13 @@ pub(super) async fn action_save(
         name,
         "create or modify",
     )?;
-    crate::secret_config::guard_keyed_action(
+    crate::guard_content_action_change(
         existing.as_ref(),
-        &input,
-        &format!("{path}/{name}"),
+        Some(&input),
+        path,
+        name,
+        crate::content::acting_action(exec),
     )?;
-    crate::lock::guard_locked_action(existing.as_ref(), Some(&input), &format!("{path}/{name}"))?;
 
     let a = actions
         .save(path, name, input)
@@ -220,6 +222,7 @@ pub(super) async fn action_get(
 pub(super) async fn action_delete(
     params: &Value,
     actions: &Arc<dyn ActionManager>,
+    exec: &ExecContext,
 ) -> Result<Value, String> {
     let name = require_str(params, "name")?;
     let path = path_or_root(params);
@@ -238,7 +241,13 @@ pub(super) async fn action_delete(
         name,
         "delete",
     )?;
-    crate::lock::guard_locked_action(existing.as_ref(), None, &format!("{path}/{name}"))?;
+    crate::guard_content_action_change(
+        existing.as_ref(),
+        None,
+        path,
+        name,
+        crate::content::acting_action(exec),
+    )?;
     actions
         .delete(path, name)
         .await

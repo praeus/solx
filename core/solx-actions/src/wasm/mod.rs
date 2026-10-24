@@ -13,8 +13,7 @@
 //! is now a native `Internal` action, reachable from custom WASM guests the
 //! same way anyone else reaches it — via `action-exec`. Every WASM action
 //! is therefore equally sandboxed by construction now; `Action.trusted` no
-//! longer affects WASM execution (kept on the entity as an inert legacy
-//! field to avoid a DB migration).
+//! longer affects WASM execution (it now only marks a seeded built-in).
 //!
 //! Split into two units:
 //!

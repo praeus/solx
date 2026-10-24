@@ -127,6 +127,7 @@ pub fn load_keyring(r: &KeyringRef) -> Result<String, String> {
             r.keyring_service, r.keyring_account
         ));
     }
+    check_keyring_service(&r.keyring_service)?;
     let entry = keyring::Entry::new(&r.keyring_service, &r.keyring_account).map_err(|e| {
         format!(
             "keyring entry '{}/{}' open failed: {e}",
@@ -147,6 +148,28 @@ pub fn load_keyring(r: &KeyringRef) -> Result<String, String> {
 }
 
 // ── Test seam ────────────────────────────────────────────────────────────────
+
+/// Refuse a keyring reference into one of solx's own credential-manager
+/// services: `solx` (the root token, client tokens, the local CA) and the
+/// scoped secret store. A reference reads its entry, and an
+/// `oauth_refresh` rotation writes it, so one naming the root token would
+/// hand it to the token endpoint, or replace it.
+///
+/// Compared case-insensitively, and as a `.`-separated suffix too, because
+/// Windows Credential Manager matches target names case-insensitively and
+/// the `keyring` crate builds a target as `<account>.<service>`.
+pub fn check_keyring_service(service: &str) -> Result<(), String> {
+    let service = service.to_ascii_lowercase();
+    for reserved in [solx_config::credentials::KEYRING_SERVICE, SECRETS_KEYRING_SERVICE] {
+        if service == reserved || service.ends_with(&format!(".{reserved}")) {
+            return Err(format!(
+                "keyring service '{service}' is solx's own; a keyring reference can't read \
+                 or write solx's credentials"
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// Type of the test-only secret loader. Receives the same `KeyringRef`
 /// the real loader would receive, returns whatever the test wants.
@@ -176,6 +199,7 @@ pub fn set_secret_loader_for_tests(loader: Option<SecretLoaderFn>) {
 /// The test seam stays synchronous so the existing `fn`-pointer fakes work
 /// unchanged.
 pub async fn load_keyring_with_test_override(r: &KeyringRef) -> Result<String, String> {
+    check_keyring_service(&r.keyring_service)?;
     if let Ok(g) = test_loader_slot().lock() {
         if let Some(loader) = *g {
             return loader(r);

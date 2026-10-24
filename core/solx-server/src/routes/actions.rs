@@ -45,9 +45,10 @@ pub fn router() -> Router<AppState> {
         .route("/actions-search", get(search_actions))
 }
 
-/// Only the root token may create or change an action with scoped secrets,
-/// change a locked action, or lock or unlock one — see
-/// `solx_actions::guard_keyed_action` and `solx_actions::guard_locked_action`.
+/// Only the root token may create or change a keyed action, change a locked
+/// action, lock or unlock one, or write under `/packages/` (a package's own
+/// action token may write within its package) — see
+/// `solx_actions::guard_content_action_change`.
 async fn save_action(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -63,11 +64,14 @@ async fn save_action(
             Err(SolxError::NotFound(_)) => None,
             Err(e) => return Err(e.into()),
         };
-        let reference = format!("{path}/{name}");
-        solx_actions::guard_keyed_action(existing.as_ref(), &input, &reference)
-            .map_err(SolxError::Unauthorized)?;
-        solx_actions::guard_locked_action(existing.as_ref(), Some(&input), &reference)
-            .map_err(SolxError::Unauthorized)?;
+        solx_actions::guard_content_action_change(
+            existing.as_ref(),
+            Some(&input),
+            &path,
+            &name,
+            solx_actions::principal_action(Some(&principal)),
+        )
+        .map_err(SolxError::Unauthorized)?;
     }
     let action = state.app.actions().save(&path, &name, input).await?;
     Ok(Json(action))
@@ -84,7 +88,8 @@ async fn get_action(
     Ok(Json(action))
 }
 
-/// Only the root token may delete a locked action.
+/// Only the root token may delete a locked action, or one under
+/// `/packages/` (a package's own action token may, within its package).
 async fn delete_action(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -99,8 +104,14 @@ async fn delete_action(
             Err(SolxError::NotFound(_)) => None,
             Err(e) => return Err(e.into()),
         };
-        solx_actions::guard_locked_action(existing.as_ref(), None, &format!("{path}/{name}"))
-            .map_err(SolxError::Unauthorized)?;
+        solx_actions::guard_content_action_change(
+            existing.as_ref(),
+            None,
+            &path,
+            &name,
+            solx_actions::principal_action(Some(&principal)),
+        )
+        .map_err(SolxError::Unauthorized)?;
     }
     state.app.actions().delete(&path, &name).await?;
     Ok(StatusCode::NO_CONTENT)

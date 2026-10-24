@@ -21,7 +21,7 @@ impl solx_packages::PackageActions for NoActions {
     async fn set_locked(&self, _p: &str, _n: &str, _l: bool) -> solx_surface::error::Result<()> {
         Ok(())
     }
-    async fn has_secrets(&self, _p: &str, _n: &str) -> solx_surface::error::Result<bool> {
+    async fn is_keyed(&self, _p: &str, _n: &str) -> solx_surface::error::Result<bool> {
         Ok(false)
     }
 }

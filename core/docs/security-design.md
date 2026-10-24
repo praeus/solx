@@ -273,6 +273,7 @@ action's key. Nothing that leaves the host can reach the key (§5.2).
 All of these share a single check, `check_outbound_url`:
 
 - a Webhook action's resolved URL;
+- a Webhook's OAuth `auth.token_uri` (refresh-token and service-account);
 - `/builtin/web/http-request`;
 - `/builtin/web/stream/start`;
 - `/builtin/web/open-url`.
@@ -297,7 +298,11 @@ side effect. The rules:
 - **Auth.** Webhook auth (bearer, OAuth refresh-token, service-account JWT,
   authorization-code) is resolved in `auth.rs` from `action_config.auth`,
   which may point to keyring entries or environment variables instead of
-  holding values inline (§5.3).
+  holding values inline (§5.3). `auth::token_endpoint` checks `token_uri`
+  and builds its client with `redirect_policy` *before* any credential is
+  resolved, since the request carries the client secret, refresh token or
+  signed assertion. The authorization-code exchange posts to the Webhook's
+  own URL, which is already checked.
 
 ### 4.3 WASM: capability sandbox (`solx-actions/src/wasm/`, `solx-wasm/wit/custom-action.wit`)
 
@@ -342,9 +347,35 @@ Routes that bypass this guard on purpose:
 - Tauri `actions-save`, which is in the `default` permission set (§9).
 
 These routes can only *point* at registered `command_actions` keys and
-allowed URL prefixes. They cannot create new grants. HTTP and Tauri
-`actions-save` do apply the keyed-action and locked-action guards (§4.5a)
-to everything but the root token and the Settings window.
+allowed URL prefixes. They cannot create new grants.
+
+Every other content check is shared. `guard_content_action_change`
+(`content.rs`) runs on the built-ins always, and on HTTP and Tauri
+`actions-save`/`actions-delete` for everything but the root token and the
+Settings window. It refuses:
+
+- a save or delete under `/packages/`, except by one of that package's own
+  actions within its own `/packages/<name>/` (§4.6);
+- a keyed action (§5.2);
+- any change to a locked one (§4.5a).
+
+### 4.5b Built-ins come only from the catalogue (`seed.rs`)
+
+`Internal` rows run a native handler by `fn_name`. An `Internal` row saved
+at another path would run a built-in under a path that tooling exclusions
+(§7) don't list, and an editable built-in could be repointed or
+redescribed for later MCP sessions. So:
+
+- `LocalActionManager::save` refuses any `Internal` row, incoming or
+  stored, from every caller, operators included.
+- Seeding writes every built-in **locked**, and restores its catalogue
+  fields over whatever the row holds, on every open.
+- Dispatch runs an `Internal` row only if its path, name and `fn_name` are
+  in the catalogue (`is_catalogued`).
+- At open, `retire_internal_aliases` deletes `Internal` rows outside
+  `/builtin`, and clears `trusted` on every row that isn't a built-in.
+  `trusted` only marks a seeded built-in for the UI. It isn't on
+  `ActionInput`, and `save` always writes `false`.
 
 ### 4.5a Locked actions (`lock.rs`)
 
@@ -358,15 +389,25 @@ with its scoped secrets. Locking fixes both the row and the code.
 - **Pinning.** Every save of a locked `script`/`wasm` row resolves its
   artifact (shared, then owned, as dispatch does), refuses if it's missing,
   and stores its path and SHA-256. Re-saving re-pins; unlocking clears it.
-  Locked `internal`/`command`/`webhook` rows freeze the row only.
+  Locked `internal`/`command`/`webhook` rows freeze the row only. Every
+  built-in is locked (§4.5b).
+- **Keyed implies a lock.** `save` locks any keyed row (one that declares
+  `secrets` or whose `auth` has a keyring reference,
+  `solx_surface::is_keyed`), and refuses `locked: false` while it is keyed.
+  Otherwise an unlocked keyed Script/WASM row would run whatever content
+  wrote to its artifact, with its key. At open,
+  `lock::lock_keyed_actions` locks and pins keyed rows saved before this
+  rule; one whose artifact is missing is locked unpinned.
 - **Verification.** `lock::load_artifact` reads a pinned row's artifact from
   `pin_path` only — a same-named shared file can't shadow an owned one — and
-  refuses bytes whose hash differs.
+  refuses bytes whose hash differs. A locked Script/WASM row with no pin
+  doesn't run.
 - **Operator paths** may save, delete, lock and unlock a locked row:
   `ActionManager::save`/`delete` called directly (the CLI, package installs,
   REST with `Principal::Root`, Tauri `config_actions_save`/`_delete` in the
-  `config` set). Everything else applies `guard_locked_action`, which
-  refuses any change to a locked row and any input that sets `locked`:
+  `config` set). Everything else applies `guard_locked_action` (as part of
+  `guard_content_action_change`, §4.5), which refuses any change to a
+  locked row and any input that sets `locked`:
   `entity-save-action`/`entity-delete-action` always (so an MCP call with
   the root token is refused), REST for any other principal, and Tauri
   `actions_save`/`actions_delete` (the main window). This keys on the entry
@@ -380,15 +421,18 @@ with its scoped secrets. Locking fixes both the row and the code.
   any is touched), REST `PUT`/`DELETE /files` for any principal but root,
   and Tauri `files_put`/`files_delete`. It only prevents a denial of
   service: the hash check is what stops new code from running.
-- **Packages.** An install unlocks the package's own actions before running
-  `install.solx` (a rebuild may write an artifact back over HTTP with an
-  action token, which a pin would refuse), then locks everything under
-  `/packages/<name>/` except `unlocked_actions` and records the refs on
-  `InstalledPackage.locked_actions`. Failing to lock fails the install. An
-  action with scoped secrets is locked even if `unlocked_actions` lists it
-  (with a warning), since an unpinned artifact could be swapped and run
-  with its key. If `install.solx` fails, what the previous install locked
-  is locked again before the error is returned.
+- **Packages.** An install unlocks the package's own unkeyed actions
+  before running `install.solx` (a rebuild may write an artifact
+  back over HTTP with an action token, which a pin would refuse), then locks
+  everything under `/packages/<name>/` except `unlocked_actions` and records
+  the refs on `InstalledPackage.locked_actions`. A failure to lock one
+  action doesn't stop the rest from being locked, and then fails the
+  install. A keyed action is never unlocked, and is locked
+  even if `unlocked_actions` lists it (with a warning). Its artifact must be
+  written by the script (`save file`, an operator path) and is re-pinned by
+  the script's `save action`, so content gets no window to swap code that
+  runs with the key. If `install.solx` fails, what the previous install
+  locked is locked again before the error is returned.
 
 ### 4.6 Packages (`solx-packages`)
 
@@ -402,11 +446,24 @@ with its scoped secrets. Locking fixes both the row and the code.
   whatever the manifest declares is granted. The manifest is the complete
   list of shell commands and hosts a package can reach, so read it first.
 - **`install.solx`.** It runs with the full CLI command set: it can save any
-  action type, write files, and install other packages. That includes
-  overwriting another package's locked actions and artifacts, since it runs
-  on an operator path (§4.5a, gap 4).
+  action type and write files. While it (or `uninstall.solx`) runs,
+  `guard_package_script_action` refuses `save action` and `delete action`
+  outside the package's own `/packages/<name>/`, and the script may not
+  install or uninstall a package. A package name must be one path segment.
+  Together these keep a script from saving an action in another package's
+  secret scope (§5.2). Files are not confined: a script can still overwrite
+  another package's pinned artifact, which stops that action running but
+  never runs new code as it (§4.5a, gap 4).
 - **Lock by default.** What an install leaves under `/packages/<name>/` is
   locked (§4.5a).
+- **Content can't write under `/packages/`.** `guard_package_namespace`
+  (§4.5) refuses content's saves and deletes there. Otherwise content could
+  save a row ahead of an install, and the install's merge-upsert `save
+  action` would keep the fields it doesn't set, lock the row and record it
+  as the package's own. A package's own action, identified by the calling
+  action or the action token's `action_ref`, may still manage its own
+  `/packages/<name>/` at run time (`solx-mcp-actions` imports tools there).
+  The first segment is matched case-insensitively.
 - **Official catalog** (`catalog.rs`). Packages are installed by name from a
   curated list, never from a caller-supplied URL. Zips come from the latest
   `praeus/solx-packages` GitHub release, or from a local folder when
@@ -477,21 +534,32 @@ with its scoped secrets. Locking fixes both the row and the code.
 - So reads need no redaction: `get`, `list`, `search` and `save`'s own
   response return `action_config` as stored. `Action` has no key field, and
   only the exec path reads `secret_keys` (`get_with_secrets`).
-- **Root-only.** `secret_config::guard_keyed_action` refuses to create or
-  change any action whose stored or incoming config has `secrets`. It
-  always applies to `entity-save-action` (MCP, WASM guests, scripts), and to
-  `PUT /actions/{ref}` for any principal but `Root`. The CLI, package
-  installs and Tauri call `ActionManager::save` in process and are root. The
-  guard covers the whole row: the key comes from the path, so declaring a
-  name under `/packages/<pkg>/` would read that package's secret, and
-  repointing `bin_name`/`files` would run new code with the key. A
-  root-saved action under another package's path gets that package's key;
-  that is gap 4 (an `install.solx` is an operator path).
+- **Root-only.** `secret_config::guard_keyed_action` refuses a save whose
+  incoming config has `secrets` or an `auth` keyring reference. It always
+  applies to `entity-save-action` (MCP, WASM guests, scripts), to
+  `PUT /actions/{ref}` for any principal but `Root`, and to Tauri
+  `actions_save` (the main window, which hosts widgets). The CLI, package
+  installs and the Settings window call `ActionManager::save` in process
+  and are root. The key comes from the path, so declaring a name under
+  `/packages/<pkg>/` would read that package's secret. A keyring reference
+  reads (and an OAuth rotation writes) whatever entry it names. A keyed
+  action is locked (§4.5a), so `guard_locked_action` refuses
+  any change to it or its deletion, including repointing `bin_name`/`files`
+  to run new code with the key. A root-saved action under another package's
+  path would get that package's key, so a package's scripts may save and
+  delete actions only under their own `/packages/<name>/` (§4.6,
+  `install.solx`). The CLI run directly by the operator is not confined.
 
 ### 5.3 Other credential sources
 
 - **`auth` credentials** are keyring references
   `{keyring_service, keyring_account}` or `<field>_secret` pointers (§5.2).
+  A keyring reference may not name solx's own services, `solx` (the root
+  and client tokens, the local CA) or `sol-secrets` (the scoped store).
+  `secrets::check_keyring_service` refuses them on save, on every read, and
+  before an OAuth rotation writes a new refresh token back. It compares
+  case-insensitively and as a `.`-suffix, as Windows Credential Manager
+  matches target names.
 - **The env store** (`internal/env.rs`, `get-env`/`set-env`) is a namespaced,
   in-memory map. At startup it is seeded from two sources: `env_mappings`,
   which copies selected variables out of the real system environment, and
@@ -536,9 +604,9 @@ These are bearer-style: holding the id or token is the only check.
     refuses an excluded action as `NotFound`, and forces every `Internal`
     action's params into `excludeMode: "tooling"`, replacing every spelling
     of the flag, so a model can't pass `exclude_mode: "none"`. This keys on
-    the action type, not a `/builtin` path, since an `Internal` row saved
-    elsewhere dispatches to the same handlers. Excluded documents and types
-    are hidden from built-in listings and searches, and direct
+    the action type, not a `/builtin` path. An exclusion on a built-in's
+    path holds because no other row can run its handler (§4.5b). Excluded
+    documents and types are hidden from built-in listings and searches, and direct
     get/save/delete of them is refused.
   - `call_tool` also refuses a hidden action up front, so its error reads
     the same as an unknown tool.
@@ -620,8 +688,13 @@ These are accepted for now. Each one is a candidate for future hardening.
 
 - Any new path that makes a network request on a caller's behalf calls
   `net::check_outbound_url` before connecting, and uses `redirect_policy`.
-- Any new path to `ActionManager::save` that content can reach goes through
-  `guard_executable_action`.
+- Any new path to `ActionManager::save`/`delete` that content can reach
+  goes through `guard_content_action_change`, and through
+  `guard_executable_action` too unless it is one of the gap-7 routes.
+- New built-ins are added to the catalogue (`seed.rs` or a plugin's seed
+  list), never saved as rows.
+- Any new request to an endpoint taken from `action_config` (like
+  `token_uri`) is checked before a credential is resolved for it.
 - Any new re-entrant execution path passes the chain's `ExecContext`
   whole, and starts a new frame only with `ExecContext::enter`, never by
   building a fresh context. Dropping the caller while keeping the

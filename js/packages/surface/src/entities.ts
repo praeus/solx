@@ -149,7 +149,6 @@ export interface ActionInput {
   binName?: string;
   actionConfig?: JsonObject;
   files?: FileRef[];
-  trusted?: boolean;
   /** Honored only on operator paths; content that sets it is refused. */
   locked?: boolean;
 }

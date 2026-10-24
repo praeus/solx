@@ -19,8 +19,9 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # Downloading catalog packages from a GitHub release (see src/catalog.rs).
 reqwest = { workspace = true }
 sha2 = "0.10"
+# Confining a package script to its own actions (`RUNNING_PACKAGE`).
+tokio = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
-tokio = { workspace = true }
 tempfile = "3"

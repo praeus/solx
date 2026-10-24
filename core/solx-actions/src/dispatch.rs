@@ -265,6 +265,12 @@ impl LocalActionManager {
                 let fn_name = action.fn_name.as_deref().ok_or_else(|| {
                     SolxError::Exec("internal action has no fn_name (operation)".into())
                 })?;
+                if !self.is_catalogued(&action.path, &action.name, fn_name) {
+                    return Err(SolxError::Exec(format!(
+                        "{action_ref} is not a built-in: internal actions come only from \
+                         solx's own catalogue"
+                    )));
+                }
                 let ctx = internal::InternalCtx {
                     docs: self.docs.clone(),
                     types: self.types.clone(),
@@ -382,23 +388,14 @@ mod tests {
         );
     }
 
-    /// An `Internal` row saved outside `/builtin` dispatches to the same
-    /// handlers, so the tooling scope can't key on the path.
+    /// The tooling scope keys on the action type, not a `/builtin` path.
     #[tokio::test]
-    async fn the_tooling_scope_forces_the_mode_on_internal_rows_anywhere() {
+    async fn the_tooling_scope_forces_the_mode_on_internal_rows() {
         let (_d, _cfg, m) = setup().await;
-        m.save(
-            "/t",
-            "list-docs",
-            ActionInput {
-                action_type: Some(ActionType::Internal),
-                fn_name: Some("entity-list-documents".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let (action, _) = m.get_with_secrets("/t", "list-docs").await.unwrap();
+        let (action, _) = m
+            .get_with_secrets(seed::DOCUMENT_PATH, "entity-list-documents")
+            .await
+            .unwrap();
         let params = m
             .enforce_scope(
                 ExcludeMode::Tooling,
@@ -771,6 +768,10 @@ mod tests {
     #[tokio::test]
     async fn entity_save_action_refuses_to_modify_a_keyed_action() {
         let (_d, _cfg, m) = setup_wired().await;
+        m.files
+            .put(&solx_files::shared_action_file_path("good.wasm"), b"\0asm".to_vec())
+            .await
+            .unwrap();
         m.save(
             "/pkg",
             "w",
@@ -797,7 +798,13 @@ mod tests {
             let err = exec_builtin(&m, "entity-save-action", params)
                 .await
                 .unwrap_err();
-            assert!(err.to_string().contains("only root"), "{change}: {err}");
+            // Declaring secrets needs root; any other change meets the lock
+            // that having secrets implies.
+            let err = err.to_string();
+            assert!(
+                err.contains("only root") || err.contains("is locked"),
+                "{change}: {err}"
+            );
         }
         let kept = m.get("/pkg", "w").await.unwrap();
         assert_eq!(kept.bin_name.as_deref(), Some("good.wasm"));

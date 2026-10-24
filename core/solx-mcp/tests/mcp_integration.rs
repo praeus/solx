@@ -262,18 +262,8 @@ async fn non_http_transport_runs_with_no_principal() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     // Never touch the real OS credential manager from a test.
     solx_config::credentials::use_memory_store_for_tests();
+    // The probe is seeded at /builtin/test/probe under `test-probe`.
     let app = solx_manager::App::build_local_in(dir.path()).await?;
-    app.actions()
-        .save(
-            "/t",
-            "probe",
-            ActionInput {
-                action_type: Some(ActionType::Internal),
-                fn_name: Some(solx_actions::test_probe::FN_NAME.into()),
-                ..Default::default()
-            },
-        )
-        .await?;
 
     let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
     let server_task = tokio::spawn(async move {
@@ -288,7 +278,7 @@ async fn non_http_transport_runs_with_no_principal() -> anyhow::Result<()> {
     let client = ().serve(client_transport).await?;
 
     let called = client
-        .call_tool(CallToolRequestParams::new("act__t__probe"))
+        .call_tool(CallToolRequestParams::new("act__builtin__test__probe"))
         .await?;
     assert_eq!(
         called.structured_content,

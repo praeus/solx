@@ -11,29 +11,15 @@ use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::ServiceExt;
 use serde_json::{json, Value};
 use solx_server::state::AppState;
-use solx_surface::entities::{ActionInput, ActionType};
-use solx_surface::managers::Solx;
 
-/// Server root URL and root token, with `/t/probe` saved.
+/// Server root URL and root token. The probe is seeded at
+/// `/builtin/test/probe` under `test-probe`.
 async fn spawn_server() -> (tempfile::TempDir, Arc<solx_manager::App>, String, String) {
     let dir = tempfile::tempdir().unwrap();
     // Never touch the real OS credential manager from a test.
     solx_config::credentials::use_memory_store_for_tests();
     let app = solx_manager::App::build_local_in(dir.path()).await.unwrap();
     let token = solx_config::credentials::root_token(&app.config).unwrap();
-
-    app.actions()
-        .save(
-            "/t",
-            "probe",
-            ActionInput {
-                action_type: Some(ActionType::Internal),
-                fn_name: Some(solx_actions::test_probe::FN_NAME.into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
 
     let state = AppState::new(app.clone()).unwrap();
     let router = solx_server::build_router(state);
@@ -60,7 +46,7 @@ async fn rest_exec_runs_as_the_authenticated_principal() {
     let (_dir, _app, base, token) = spawn_server().await;
 
     let res = reqwest::Client::new()
-        .post(format!("{base}/actions/t/probe"))
+        .post(format!("{base}/actions/builtin/test/probe"))
         .bearer_auth(&token)
         .send()
         .await
@@ -77,7 +63,7 @@ async fn rest_exec_honors_the_tooling_scope_header() {
     let (_dir, _app, base, token) = spawn_server().await;
 
     let res = reqwest::Client::new()
-        .post(format!("{base}/actions/t/probe"))
+        .post(format!("{base}/actions/builtin/test/probe"))
         .bearer_auth(&token)
         .header(solx_surface::auth::EXEC_SCOPE_HEADER, "tooling")
         .send()
@@ -102,7 +88,7 @@ async fn mcp_tool_call_runs_as_the_authenticated_principal() -> anyhow::Result<(
         .await?;
 
     let called = client
-        .call_tool(CallToolRequestParams::new("act__t__probe"))
+        .call_tool(CallToolRequestParams::new("act__builtin__test__probe"))
         .await?;
     assert_eq!(called.structured_content, Some(root_probe("tooling")));
 
