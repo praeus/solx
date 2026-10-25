@@ -458,13 +458,45 @@ impl ConfigService {
     }
 
     /// `server_public_url` as a full URL (see [`normalize_public_url`]: a bare
-    /// host gets `http://` and `server_port`); `None` when unset or invalid.
+    /// host gets `server_port`, and `https://` when `server_tls` is on, else
+    /// `http://`); `None` when unset or invalid.
     pub fn server_public_url(&self) -> Option<String> {
         let snap = self.snapshot();
         let port = snap.server_port.unwrap_or(DEFAULT_SERVER_PORT);
+        let https = self.server_tls().is_ok_and(|tls| tls.is_on());
         snap.server_public_url
             .filter(|u| !u.trim().is_empty())
-            .and_then(|u| normalize_public_url(&u, port).ok())
+            .and_then(|u| normalize_public_url(&u, port, https).ok())
+    }
+
+    /// `server_ca_file`, resolved against the appdata dir; `None` when unset.
+    pub fn server_ca_file(&self) -> Option<PathBuf> {
+        self.snapshot()
+            .server_ca_file
+            .map(|f| f.trim().to_string())
+            .filter(|f| !f.is_empty())
+            .map(|f| self.appdata.join(f))
+    }
+
+    /// `server_tls`, parsed (see [`ServerTls::parse`]). [`ServerTls::Off`]
+    /// when unset. Relative file paths come back resolved against the
+    /// appdata dir.
+    pub fn server_tls(&self) -> Result<ServerTls> {
+        let tls = match self.snapshot().server_tls {
+            Some(value) => ServerTls::parse(&value)
+                .map_err(|e| SolxError::Validation(format!("server_tls: {e}")))?,
+            None => ServerTls::Off,
+        };
+        Ok(match tls {
+            ServerTls::Files {
+                cert_file,
+                key_file,
+            } => ServerTls::Files {
+                cert_file: self.appdata.join(cert_file),
+                key_file: self.appdata.join(key_file),
+            },
+            other => other,
+        })
     }
 
     /// TTL (in days) before a terminal invocation row is swept away.
@@ -754,11 +786,13 @@ pub const RESTART_KEYS: &[&str] = &[
     "env_mappings",
     "env_vars",
     "server_url",
+    "server_ca_file",
     "server_token",
     "token_store",
     "server_port",
     "server_host",
     "server_cors_origins",
+    "server_tls",
     "server_embedded",
     "console_ttl_days",
     "invocation_ttl_days",
@@ -770,13 +804,100 @@ const LEGACY_KEYS: &[(&str, &str)] = &[
     ("tool_exclude", "mcp_exclude"),
 ];
 
+/// How `solx-server` serves TLS, from the `server_tls` config key. See
+/// `docs/tls-plan.md`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServerTls {
+    /// Plain HTTP only (the default).
+    Off,
+    /// The certificates in `<appdata>/certs`, as `tls.json` there records
+    /// them. Made by `solx-certs`, or provisioned by the desktop app.
+    Auto,
+    /// A PEM certificate chain and its PEM private key.
+    Files {
+        cert_file: PathBuf,
+        key_file: PathBuf,
+    },
+    /// Windows: the certificate in `CurrentUser\My` with this SHA-256
+    /// thumbprint (lowercase hex), served with its key from the store.
+    Store { sha256: String },
+}
+
+impl ServerTls {
+    /// Read a `server_tls` value: `"off"`, `"auto"`,
+    /// `{ "cert_file", "key_file" }` or `{ "store_thumbprint" }`. A
+    /// thumbprint may be written with spaces or colons, as `certmgr` and
+    /// `certutil` show it. File paths are returned as written.
+    pub fn parse(value: &Value) -> std::result::Result<Self, String> {
+        let expected =
+            r#"expected "off", "auto", { "cert_file", "key_file" } or { "store_thumbprint" }"#;
+        match value {
+            Value::String(mode) => match mode.trim().to_ascii_lowercase().as_str() {
+                "off" => Ok(ServerTls::Off),
+                "auto" => Ok(ServerTls::Auto),
+                other => Err(format!("unknown mode {other:?}; {expected}")),
+            },
+            Value::Object(map) => {
+                let field = |name: &str| -> std::result::Result<Option<String>, String> {
+                    match map.get(name) {
+                        None => Ok(None),
+                        Some(Value::String(s)) if !s.trim().is_empty() => {
+                            Ok(Some(s.trim().to_string()))
+                        }
+                        Some(_) => Err(format!("{name} must be a non-empty string")),
+                    }
+                };
+                if let Some(unknown) = map
+                    .keys()
+                    .find(|k| !matches!(k.as_str(), "cert_file" | "key_file" | "store_thumbprint"))
+                {
+                    return Err(format!("unknown field {unknown:?}; {expected}"));
+                }
+                match (
+                    field("cert_file")?,
+                    field("key_file")?,
+                    field("store_thumbprint")?,
+                ) {
+                    (Some(cert), Some(key), None) => Ok(ServerTls::Files {
+                        cert_file: PathBuf::from(cert),
+                        key_file: PathBuf::from(key),
+                    }),
+                    (None, None, Some(thumbprint)) => {
+                        let sha256: String = thumbprint
+                            .chars()
+                            .filter(|c| !matches!(c, ' ' | ':'))
+                            .collect::<String>()
+                            .to_ascii_lowercase();
+                        if sha256.len() != 64 || !sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+                            return Err(format!(
+                                "store_thumbprint {thumbprint:?} is not a SHA-256 thumbprint (64 hex digits)"
+                            ));
+                        }
+                        Ok(ServerTls::Store { sha256 })
+                    }
+                    (Some(_), None, None) | (None, Some(_), None) => {
+                        Err("cert_file and key_file go together".into())
+                    }
+                    _ => Err(format!("give either files or a thumbprint; {expected}")),
+                }
+            }
+            _ => Err(expected.to_string()),
+        }
+    }
+
+    pub fn is_on(&self) -> bool {
+        !matches!(self, ServerTls::Off)
+    }
+}
+
 /// The address other machines use to reach a solx-server, as a URL without a
 /// trailing slash. Takes either a full `http://`/`https://` URL (a path is
 /// kept, for a reverse proxy under a prefix) or a bare host, optionally with
 /// a port: an IP (`100.101.102.103`, `fd7a::1`) or a name
-/// (`my-laptop.tailnet.ts.net`). A bare host gets `http://` and, when it
-/// names no port, `default_port`.
-pub fn normalize_public_url(input: &str, default_port: u16) -> Result<String> {
+/// (`my-laptop.tailnet.ts.net`). A bare host gets `http://` (`https://`
+/// when `https`, for a server with TLS on) and, when it names no port,
+/// `default_port`. A full URL is kept as written.
+pub fn normalize_public_url(input: &str, default_port: u16, https: bool) -> Result<String> {
     let input = input.trim();
     let input = if input.contains("://") {
         input
@@ -817,6 +938,11 @@ pub fn normalize_public_url(input: &str, default_port: u16) -> Result<String> {
     if url.port().is_none() {
         let _ = url.set_port(Some(default_port));
     }
+    if https {
+        // http → https is always allowed; a port that is now the scheme's
+        // default (443) drops out.
+        let _ = url.set_scheme("https");
+    }
     Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
@@ -856,12 +982,17 @@ pub fn validate(value: &Value) -> Result<SolxConfig> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        if let Err(e) = normalize_public_url(url, DEFAULT_SERVER_PORT) {
+        if let Err(e) = normalize_public_url(url, DEFAULT_SERVER_PORT, false) {
             return invalid(format!("server_public_url: {e}"));
         }
     }
     if cfg.server_port == Some(0) {
         return invalid("server_port must be between 1 and 65535".into());
+    }
+    if let Some(tls) = &cfg.server_tls {
+        if let Err(e) = ServerTls::parse(tls) {
+            return invalid(format!("server_tls: {e}"));
+        }
     }
     for origin in cfg.server_cors_origins.iter().flatten() {
         if origin.trim().is_empty() || !origin.trim().chars().all(|c| c.is_ascii_graphic()) {
@@ -1371,7 +1502,7 @@ mod tests {
 
     #[test]
     fn public_urls_accept_full_urls_and_bare_hosts() {
-        let n = |s: &str| normalize_public_url(s, 8766);
+        let n = |s: &str| normalize_public_url(s, 8766, false);
         assert_eq!(n("100.101.102.103").unwrap(), "http://100.101.102.103:8766");
         assert_eq!(
             n(" 100.101.102.103:9000/ ").unwrap(),
@@ -1416,5 +1547,79 @@ mod tests {
         );
         let err = validate(&serde_json::json!({ "server_public_url": "ftp://x" })).unwrap_err();
         assert!(err.to_string().contains("server_public_url"), "{err}");
+    }
+
+    #[test]
+    fn server_tls_modes_parse_and_bad_ones_are_refused() {
+        use serde_json::json;
+        let p = |v: Value| ServerTls::parse(&v);
+        assert_eq!(p(json!("off")), Ok(ServerTls::Off));
+        assert_eq!(p(json!(" Auto ")), Ok(ServerTls::Auto));
+        assert_eq!(
+            p(json!({ "cert_file": "a.crt", "key_file": "a.key" })),
+            Ok(ServerTls::Files {
+                cert_file: "a.crt".into(),
+                key_file: "a.key".into()
+            })
+        );
+        let hex = "AB".repeat(32);
+        let spaced = hex
+            .as_bytes()
+            .chunks(2)
+            .map(|c| std::str::from_utf8(c).unwrap())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(
+            p(json!({ "store_thumbprint": spaced })),
+            Ok(ServerTls::Store {
+                sha256: "ab".repeat(32)
+            })
+        );
+        for bad in [
+            json!("on"),
+            json!(true),
+            json!({ "cert_file": "a.crt" }),
+            json!({ "cert_file": "a.crt", "key_file": "" }),
+            json!({ "store_thumbprint": "abc" }),
+            json!({ "store_thumbprint": hex, "cert_file": "a", "key_file": "b" }),
+            json!({ "cert_file": "a", "key_file": "b", "chain": "c" }),
+        ] {
+            assert!(p(bad.clone()).is_err(), "{bad}");
+        }
+        let err = validate(&json!({ "server_tls": "on" })).unwrap_err();
+        assert!(err.to_string().contains("server_tls"), "{err}");
+
+        // Relative files are under the appdata dir; unset is off.
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = ConfigService::open_in(dir.path()).unwrap();
+        assert_eq!(cfg.server_tls().unwrap(), ServerTls::Off);
+        cfg.set(
+            "server_tls",
+            json!({ "cert_file": "certs/s.crt", "key_file": "certs/s.key" }),
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.server_tls().unwrap(),
+            ServerTls::Files {
+                cert_file: dir.path().join("certs/s.crt"),
+                key_file: dir.path().join("certs/s.key"),
+            }
+        );
+
+        // With TLS on, a bare public host is reached over https; a full URL
+        // is kept as written.
+        cfg.set("server_public_url", "100.101.102.103".into())
+            .unwrap();
+        assert_eq!(
+            cfg.server_public_url().as_deref(),
+            Some("https://100.101.102.103:8766")
+        );
+        cfg.set("server_public_url", "http://proxy.lan:80".into())
+            .unwrap();
+        assert_eq!(cfg.server_public_url().as_deref(), Some("http://proxy.lan"));
+        assert_eq!(
+            normalize_public_url("host.lan:443", 8766, true).unwrap(),
+            "https://host.lan"
+        );
     }
 }

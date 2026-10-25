@@ -227,8 +227,9 @@ impl Registry {
     /// server address, e.g. a Tailscale IP when the other device isn't on
     /// the LAN. It takes a URL or a bare host (see
     /// [`solx_config::normalize_public_url`]); a bare host gets this
-    /// server's port. It only shapes what is shown: the code redeems at
-    /// any address the server answers on.
+    /// server's port, and `https://` when it serves TLS. It only shapes
+    /// what is shown: the code redeems at any address the server answers
+    /// on.
     pub async fn create_connect_code(
         &self,
         label: Option<&str>,
@@ -237,7 +238,14 @@ impl Registry {
         public_url: Option<&str>,
     ) -> Result<ConnectCode> {
         let base = match public_url.map(str::trim).filter(|u| !u.is_empty()) {
-            Some(u) => Some(solx_config::normalize_public_url(u, self.public_port())?),
+            Some(u) => {
+                let https = self.config.server_tls().is_ok_and(|tls| tls.is_on());
+                Some(solx_config::normalize_public_url(
+                    u,
+                    self.public_port(),
+                    https,
+                )?)
+            }
             None => self.public_url(),
         };
         let code_ttl = code_ttl.unwrap_or(DEFAULT_CODE_TTL);
@@ -718,15 +726,17 @@ async fn record_failure(conn: &Connection) -> Result<i64> {
     Ok(failures)
 }
 
-/// The URL other machines use to reach a server bound on `bound`. An
-/// unspecified bind (`0.0.0.0`/`::`) is advertised on this machine's
-/// primary LAN address, falling back to loopback.
-pub fn advertised_url(bound: SocketAddr) -> String {
+/// The URL other machines use to reach a server bound on `bound`, over
+/// `https://` when it serves TLS. An unspecified bind (`0.0.0.0`/`::`) is
+/// advertised on this machine's primary LAN address, falling back to
+/// loopback.
+pub fn advertised_url(bound: SocketAddr, https: bool) -> String {
     let mut addr = bound;
     if addr.ip().is_unspecified() {
         addr.set_ip(primary_ip().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)));
     }
-    format!("http://{addr}")
+    let scheme = if https { "https" } else { "http" };
+    format!("{scheme}://{addr}")
 }
 
 /// [`advertised_url`] for where this appdata dir's server is configured
@@ -739,7 +749,10 @@ fn configured_public_url(config: &ConfigService) -> String {
         .as_deref()
         .and_then(|h| h.trim().parse::<IpAddr>().ok())
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
-    advertised_url(SocketAddr::new(host, port))
+    // A `server_tls` that doesn't parse stops the server from starting, so
+    // whatever it would have said doesn't matter here.
+    let https = config.server_tls().is_ok_and(|tls| tls.is_on());
+    advertised_url(SocketAddr::new(host, port), https)
 }
 
 /// The local address of this machine's default route. Connecting a UDP

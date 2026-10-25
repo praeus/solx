@@ -134,9 +134,10 @@ Every surface is built on the same four traits in `solx-surface`
 | `solx-scripts`  | The solx shell pipeline language (`;`, `\|`, `$var`), decoupled from the CLI via a `CommandRunner` trait. |
 | `solx-packages` | Install/uninstall packages by running their `install.solx` and recording their allowlist grants. |
 | `solx-registry` | Token registry: per-device client tokens, per-invocation action tokens and connect codes (default-on `registry` feature). |
+| `solx-certs`    | Local certificate authority for TLS: a root CA and server certificates, with non-exportable keys on Windows (preferably on the TPM). Library and `solx-certs` CLI. |
 | `solx-manager`  | Wires the local implementations into the `Solx` facade. |
 | `solx-cli`      | The `solx` binary. |
-| `solx-server`   | Axum HTTP server + `/mcp` endpoint. |
+| `solx-server`   | Axum HTTP server + `/mcp` endpoint, with optional TLS (`server_tls`). |
 | `solx-mcp`      | MCP server over stdio. |
 | `solx-client`   | HTTP implementations of the manager traits (remote mode). |
 
@@ -173,16 +174,21 @@ manager, set `"token_store": "config"` to keep it in the config file. The
 root token is only accepted from the server's own machine.
 
 To use solx from another device, bind the server on the network
-(`server_host`), then give that device its own token:
+(`server_host`), turn on TLS (`server_tls`: the desktop app does both for
+you on Windows; for a standalone server, run `solx-certs init` and set it to
+`"auto"`), then give that device its own token:
 
 ```sh
-solx token connect-code --label laptop   # on the server: prints 1234-5678 and a link
-solx connect http://server:8766 1234-5678 # on the laptop (or open the link in a browser)
+solx token connect-code --label laptop    # on the server: prints 1234-5678 and a link
+solx connect https://server:8766 1234-5678 # on the laptop (or open the link in a browser)
 solx token clients                        # on the server: list devices
 solx token revoke <id>                    #   ...and cut one off
 ```
 
-See [docs/http-api.md](docs/http-api.md#serving-other-machines) for the
+The laptop has to trust the server's certificate authority: point
+`server_ca_file` (or `SOLX_CA_FILE`) at a copy of the server's
+`solx-root.crt`, or import it into the laptop's trust store. See
+[docs/http-api.md](docs/http-api.md#serving-other-machines) for the
 details. See [solx-cli/examples/](solx-cli/examples/) for runnable end-to-end
 scripts covering each action kind.
 

@@ -123,6 +123,12 @@ pub struct SolxConfig {
     /// — every existing user's exact current behavior, no server needed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_url: Option<String>,
+    /// A PEM file of extra root certificates a solx client trusts for an
+    /// `https://` server, besides the built-in and OS roots: for example a
+    /// copy of the server's `solx-root.crt`. Relative to the appdata dir.
+    /// `SOLX_CA_FILE` adds another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_ca_file: Option<String>,
     /// Legacy plaintext home of the bearer token. Normally empty: the token
     /// lives in the OS credential manager (see `solx_config::credentials`),
     /// and a value found here is moved there and removed on first use. Only
@@ -143,8 +149,7 @@ pub struct SolxConfig {
     /// Address `solx-server` binds on. Server-side only. Defaults to
     /// `127.0.0.1`; set to e.g. `"0.0.0.0"` (or a LAN/Tailscale IP) to serve
     /// other machines. Once it's off loopback, the bearer token is the only
-    /// gate and traffic is plaintext HTTP, so put it on a private network
-    /// or behind a TLS reverse proxy.
+    /// gate, and without `server_tls` traffic is plaintext HTTP.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_host: Option<String>,
     /// Browser origins allowed by CORS when `server_host` is not loopback
@@ -160,6 +165,15 @@ pub struct SolxConfig {
     /// Defaults to the bound address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_public_url: Option<String>,
+    /// TLS for `solx-server`: `"off"` (default), `"auto"` (the certificates
+    /// in `<appdata>/certs`, made by `solx-certs` or the desktop app),
+    /// `{ "cert_file": "...", "key_file": "..." }` (PEM files; relative paths
+    /// are under the appdata dir), or `{ "store_thumbprint": "<sha256 hex>" }`
+    /// (Windows: a certificate in `CurrentUser\My`). Kept as raw JSON so a
+    /// bad value fails at server startup instead of emptying the whole
+    /// snapshot; read it with [`crate::ConfigService::server_tls`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_tls: Option<serde_json::Value>,
     /// Lifetime of a client token issued by the token registry (connect
     /// codes, `solx token issue`), in days. Defaults to 90.
     #[serde(default, skip_serializing_if = "Option::is_none")]

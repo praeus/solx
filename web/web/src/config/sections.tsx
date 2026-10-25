@@ -14,11 +14,14 @@ import type {
   ExclusionLists,
   PackageResult,
   SolxConfigFile,
+  TlsCert,
+  TlsResult,
+  TlsStatus,
   ToolRule,
 } from "@solx/tauri";
 import { ChipTagInput } from "../components/ChipTagInput";
 import { JsonEditField } from "../components/JsonEditField";
-import { getTauri } from "../api/connection";
+import { getTauri, restartApp, revealCertsFolder } from "../api/connection";
 import { useActionPaths, useDocumentPaths, useTypePaths } from "../api/hooks";
 import {
   globMatches,
@@ -702,8 +705,16 @@ const environment: SectionDef<EnvDraft> = {
 
 // ── HTTP server ─────────────────────────────────────────────────────────
 
+/** `server_tls` as the form offers it; `custom` is a files or store value, kept as is. */
+type TlsChoice = "default" | "auto" | "off" | "custom";
+
+/** The desktop host turns TLS on for a network address on Windows when `server_tls` is unset. */
+const IS_WINDOWS = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+
 interface ServerDraft {
   embedded: boolean;
+  tls: TlsChoice;
+  tlsCustom: SolxConfigFile["server_tls"] | null;
   host: string;
   port: string;
   origins: string[];
@@ -746,22 +757,61 @@ function ServerEditor({ draft, setDraft, view }: SectionEditorProps<ServerDraft>
           />
         </Field>
       </div>
-      {!isLoopbackHost(draft.host) && (
+      <span className="dialog__label">
+        Encryption (HTTPS) <RestartTag view={view} keys={["server_tls"]} />
+      </span>
+      <div className="config-rows">
+        {(
+          [
+            [
+              "default",
+              "Default",
+              IS_WINDOWS
+                ? "On when the address above is a network address, with certificates this app makes; off on this machine only."
+                : "Off. Choose On to have this app make certificates.",
+            ],
+            ["auto", "On", "HTTPS for other devices, with certificates this app makes and renews (see \"Secure connections\")."],
+            ["off", "Off", "Plain HTTP only."],
+            ...(draft.tls === "custom"
+              ? ([["custom", "Your own certificate", "Set in Raw JSON as cert_file/key_file or store_thumbprint."]] as const)
+              : []),
+          ] as const
+        ).map(([value, label, hint]) => (
+          <label className="config-check" key={value}>
+            <input
+              type="radio"
+              name="server-tls"
+              checked={draft.tls === value}
+              onChange={() => setDraft({ ...draft, tls: value })}
+            />
+            <span>
+              {label} <span className="dialog__hint">{hint}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      {!isLoopbackHost(draft.host) && tlsOff(draft) && (
         <div className="config-warning">
-          Reachable from the network: bearer tokens are the only gate, and traffic is unencrypted HTTP. Use a
-          private network (e.g. Tailscale/WireGuard) or a TLS reverse proxy. Other devices connect with a code
+          Reachable from the network over unencrypted HTTP: bearer tokens travel in cleartext. Turn encryption on,
+          or keep this server on a private network (e.g. Tailscale/WireGuard). Other devices connect with a code
           from "Connect another device"; this machine's root token is refused from the network.
         </div>
+      )}
+      {!isLoopbackHost(draft.host) && !tlsOff(draft) && (
+        <span className="dialog__hint">
+          Other devices use https://. Programs on this machine can keep using http://127.0.0.1. Other devices
+          connect with a code from "Connect another device"; this machine's root token is refused from the network.
+        </span>
       )}
       <Field
         label="Public address"
         view={view}
         keys={["server_public_url"]}
-        hint="What other devices should use to reach this server, when it isn't the address above: a 0.0.0.0 bind, a reverse proxy, a Tailscale name or IP. Used in connect links. An IP or host name gets this server's port; a full URL is used as is."
+        hint="What other devices should use to reach this server, when it isn't the address above: a 0.0.0.0 bind, a Tailscale name or IP. Used in connect links, and added to the server certificate. An IP or host name gets this server's port (and https:// when encryption is on); a full URL is used as is."
       >
         <TextInput
           value={draft.publicUrl}
-          placeholder="http://my-laptop.tailnet.ts.net:8766"
+          placeholder="my-laptop.tailnet.ts.net"
           mono
           onChange={(publicUrl) => setDraft({ ...draft, publicUrl })}
         />
@@ -794,12 +844,25 @@ function ServerEditor({ draft, setDraft, view }: SectionEditorProps<ServerDraft>
   );
 }
 
+function tlsChoice(value: SolxConfigFile["server_tls"]): TlsChoice {
+  if (value == null) return "default";
+  if (typeof value === "object") return "custom";
+  return value === "auto" ? "auto" : "off";
+}
+
+/** Whether the draft serves plain HTTP to the network once the host restarts. */
+function tlsOff(draft: ServerDraft): boolean {
+  return draft.tls === "off" || (draft.tls === "default" && !IS_WINDOWS);
+}
+
 const server: SectionDef<ServerDraft> = {
   id: "server",
   title: "HTTP server",
   description: "The embedded solx-server that shares this app's data with other clients.",
   fromConfig: (raw) => ({
     embedded: raw.server_embedded ?? true,
+    tls: tlsChoice(raw.server_tls),
+    tlsCustom: typeof raw.server_tls === "object" ? raw.server_tls : null,
     host: raw.server_host ?? "",
     port: raw.server_port == null ? "" : String(raw.server_port),
     origins: raw.server_cors_origins ?? [],
@@ -809,6 +872,7 @@ const server: SectionDef<ServerDraft> = {
   toConfig: (draft) => ({
     // Stored only when off, so the default (on) stays implicit.
     server_embedded: draft.embedded ? undefined : false,
+    server_tls: draft.tls === "default" ? undefined : draft.tls === "custom" ? (draft.tlsCustom ?? undefined) : draft.tls,
     server_host: draft.host.trim() || undefined,
     server_port: parseNumberInput(draft.port),
     server_cors_origins: nonEmpty(draft.origins),
@@ -816,6 +880,228 @@ const server: SectionDef<ServerDraft> = {
     client_token_ttl_days: parseNumberInput(draft.tokenDays),
   }),
   Editor: ServerEditor,
+};
+
+// ── secure connections ──────────────────────────────────────────────────
+
+function formatExpiry(iso: string): string {
+  const days = Math.floor((Date.parse(iso) - Date.now()) / 86_400_000);
+  const when = new Date(iso).toLocaleDateString();
+  return days < 0 ? `expired ${when}` : `expires ${when} (in ${days} days)`;
+}
+
+function keyText(cert: TlsCert): string {
+  if (!cert.keyPresent) return "its key is missing";
+  const where = cert.keyHardware ? "key on the TPM" : `key in ${cert.keyLocation}`;
+  if (cert.keyExportable === false) return `${where}, can't be exported`;
+  if (cert.keyExportable === true) return `${where}, exportable`;
+  return where;
+}
+
+function SecureView({ view }: SectionEditorProps<null>) {
+  const [status, setStatus] = useState<TlsStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [restart, setRestart] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await getTauri().config.tlsStatus());
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }, []);
+
+  // Again whenever the config is saved: the mode may have changed.
+  useEffect(() => {
+    void refresh();
+  }, [refresh, view]);
+
+  const run = async (what: string, action: () => Promise<TlsResult>) => {
+    setBusy(what);
+    setError(null);
+    try {
+      const result = await action();
+      setStatus(result.status);
+      if (result.restartRequired) setRestart(true);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(null);
+      setConfirmReset(false);
+    }
+  };
+
+  const reveal = async () => {
+    try {
+      await revealCertsFolder();
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+
+  if (!status) {
+    return error ? <div className="dialog__error">{error}</div> : <span className="dialog__hint">Loading…</span>;
+  }
+  const { ca } = status;
+  const tlsOn = status.mode !== "off";
+
+  return (
+    <>
+      {status.serverError ? (
+        <div className="config-warning">The HTTP server didn't start: {status.serverError}</div>
+      ) : status.servingHttps === true ? (
+        <span className="dialog__hint">
+          The HTTP server serves https:// to other devices. Programs on this machine can also use http://127.0.0.1.
+        </span>
+      ) : status.servingHttps === false ? (
+        <span className="dialog__hint">
+          The HTTP server serves plain HTTP{tlsOn ? "; restart the app to turn encryption on" : ""}.
+        </span>
+      ) : (
+        <span className="dialog__hint">The HTTP server isn't running (see "HTTP server").</span>
+      )}
+      {status.modeError && <div className="config-warning">server_tls: {status.modeError}</div>}
+      {(status.mode === "files" || status.mode === "store") && (
+        <span className="dialog__hint">
+          The server uses your own certificate (<code>server_tls</code> in Raw JSON). The certificates below are only
+          served with encryption set to On.
+        </span>
+      )}
+      {status.caError && <div className="config-warning">{status.caError}</div>}
+
+      {!ca ? (
+        <span className="dialog__hint">
+          No certificates yet. With encryption on, the app creates them in <code>{status.dir}</code> when it starts.
+        </span>
+      ) : (
+        <div className="config-card">
+          <span className="dialog__label">Fingerprint</span>
+          <span className="config-tls-fingerprint">{ca.fingerprint}</span>
+          <span className="dialog__hint">
+            Identifies this server's certificate authority. Another device can compare it with what it sees when it
+            connects.
+          </span>
+          <span className="dialog__hint">
+            Certificate authority: {formatExpiry(ca.root.notAfter)}, {keyText(ca.root)}.
+          </span>
+          {ca.server ? (
+            <span className="dialog__hint">
+              Server certificate: {formatExpiry(ca.server.notAfter)}, {keyText(ca.server)}. Renewed automatically when
+              the app starts. Names:{" "}
+              {ca.server.sans.map((name) => (
+                <span className="config-tag config-tag--muted config-mono" key={name}>
+                  {name}
+                </span>
+              ))}
+            </span>
+          ) : (
+            <span className="dialog__hint">No server certificate yet; the app issues one when it starts.</span>
+          )}
+          <span className="dialog__hint">
+            This machine{" "}
+            {ca.trusted === true
+              ? "trusts this certificate authority, so browsers here accept the server."
+              : ca.trusted === false
+                ? "doesn't trust this certificate authority. Browsers here warn about the server until you trust it."
+                : "may or may not trust this certificate authority."}
+          </span>
+          <div className="dialog__input-row config-confirm">
+            <button type="button" className="dialog__btn" onClick={() => void reveal()}>
+              Open certificates folder
+            </button>
+            {ca.trusted === true ? (
+              <button
+                type="button"
+                className="dialog__btn"
+                disabled={busy !== null}
+                onClick={() => void run("untrust", () => getTauri().config.tlsUntrust())}
+              >
+                {busy === "untrust" ? "Waiting for Windows…" : "Stop trusting on this machine"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="dialog__btn"
+                disabled={busy !== null}
+                onClick={() => void run("trust", () => getTauri().config.tlsTrust())}
+              >
+                {busy === "trust" ? "Waiting for Windows…" : "Trust on this machine"}
+              </button>
+            )}
+            <button
+              type="button"
+              className="dialog__btn"
+              disabled={busy !== null}
+              onClick={() => void run("reissue", () => getTauri().config.tlsReissue())}
+            >
+              {busy === "reissue" ? "Reissuing…" : "Reissue server certificate"}
+            </button>
+            <button
+              type="button"
+              className="dialog__btn"
+              disabled={busy !== null}
+              onClick={() => setConfirmReset(true)}
+            >
+              Reset…
+            </button>
+          </div>
+          {confirmReset && (
+            <div className="config-warning">
+              Delete this certificate authority and its keys? Every device that trusts it, and every solx client
+              connected over https://, has to be set up again.
+              {tlsOn ? " The app creates a new one when it restarts." : ""}
+              <div className="dialog__input-row config-confirm">
+                <button type="button" className="dialog__btn" disabled={busy !== null} onClick={() => setConfirmReset(false)}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="dialog__btn dialog__btn--primary"
+                  disabled={busy !== null}
+                  onClick={() => void run("reset", () => getTauri().config.tlsReset())}
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {restart && (
+        <div className="config-warning">
+          Restart the app to serve the change. Until then the HTTP server keeps its current certificate.
+          <div className="dialog__input-row config-confirm">
+            <button type="button" className="dialog__btn dialog__btn--primary" onClick={() => void restartApp()}>
+              Restart now
+            </button>
+          </div>
+        </div>
+      )}
+      {error && <div className="dialog__error">{error}</div>}
+      <span className="dialog__hint">
+        To use this server from a browser on another device, import <code>solx-root.crt</code> from the certificates
+        folder into that device's trust store (Windows: <code>certutil -user -addstore Root solx-root.crt</code>).
+      </span>
+    </>
+  );
+}
+
+const secure: SectionDef<null> = {
+  id: "secure",
+  title: "Secure connections",
+  description: (
+    <>
+      The certificates behind HTTPS (encryption "On" in "HTTP server"): a certificate authority on this machine, and the
+      server certificate it signs. Other devices trust the authority, so the server certificate can be renewed without
+      them noticing.
+    </>
+  ),
+  fromConfig: () => null,
+  toConfig: () => ({}),
+  Editor: SecureView,
+  readOnly: true,
 };
 
 // ── storage ─────────────────────────────────────────────────────────────
@@ -1315,6 +1601,7 @@ export const SECTIONS: SectionDef<any>[] = [
   limits,
   environment,
   server,
+  secure,
   devices,
   storage,
   packages,

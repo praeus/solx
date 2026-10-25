@@ -2,7 +2,7 @@
 
 [[set]]
 identifier = "config"
-description = "Allows reading and editing solx-config.json, installing and uninstalling packages (which grant allowlist entries), including the command and outbound-URL allowlists, and saving or deleting actions as the operator (locked actions, locking and unlocking, actions with scoped secrets). Grant only to a window that never loads package widgets (the desktop app's Settings window) — never alongside widget-hosting content."
+description = "Allows reading and editing solx-config.json, installing and uninstalling packages (which grant allowlist entries), including the command and outbound-URL allowlists, and saving or deleting actions as the operator (locked actions, locking and unlocking, actions with scoped secrets), and managing the TLS certificate authority (trusting its root on this machine, reissuing the server certificate, resetting the CA). Grant only to a window that never loads package widgets (the desktop app's Settings window) — never alongside widget-hosting content."
 permissions = [
     "allow-config-get",
     "allow-config-update",
@@ -10,4 +10,9 @@ permissions = [
     "allow-config-uninstall-package",
     "allow-config-actions-save",
     "allow-config-actions-delete",
+    "allow-config-tls-status",
+    "allow-config-tls-trust",
+    "allow-config-tls-untrust",
+    "allow-config-tls-reissue",
+    "allow-config-tls-reset",
 ]

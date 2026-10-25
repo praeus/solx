@@ -57,6 +57,21 @@ fn restart_app(app: AppHandle) {
     restart(&app);
 }
 
+/// Show the TLS certificates folder (`<appdata>/certs`) in the file
+/// manager, with the root certificate selected, for importing on other
+/// devices. The path is fixed here, not taken from the caller.
+#[tauri::command]
+fn reveal_certs_folder(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    if cfg!(feature = "client") {
+        return Err("TLS certificates are managed on the solx-server host".into());
+    }
+    let dir = solx_config::appdata_dir().join("certs");
+    let root = dir.join("solx-root.crt");
+    let target = if root.exists() { root } else { dir };
+    app.opener().reveal_item_in_dir(target).map_err(|e| e.to_string())
+}
+
 /// `app.restart()` spawns the new process before this one exits, so release
 /// the single-instance lock first or the new process would defer to us and quit.
 pub(crate) fn restart(app: &AppHandle) {
@@ -92,7 +107,7 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![open_settings, restart_app])
+        .invoke_handler(tauri::generate_handler![open_settings, restart_app, reveal_certs_folder])
         // Closing the main window hides it to the tray; quit via the tray menu.
         .on_window_event(|window, event| {
             if window.label() == "main" {

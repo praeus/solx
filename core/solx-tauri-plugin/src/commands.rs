@@ -546,7 +546,8 @@ pub(crate) async fn connect(
     };
     let token = match parsed.credential {
         ConnectCredential::Code(code) => {
-            let exchanged = solx_client::exchange_connect_code(&server_url, &code).await?;
+            let http = solx_client::http_client_for(config.server_ca_file().as_deref())?;
+            let exchanged = solx_client::exchange_connect_code(&http, &server_url, &code).await?;
             if let Some(url) = exchanged.server_url.filter(|u| !u.trim().is_empty()) {
                 server_url = url.trim().trim_end_matches('/').to_string();
             }
@@ -936,6 +937,301 @@ pub(crate) fn restore_client(config: &Arc<ConfigService>) -> Option<Arc<solx_man
     }
     let token = solx_config::credentials::stored_client_token(config, &url)?;
     solx_manager::App::remote(config.clone(), url, token).ok()
+}
+
+// ── TLS ── (`solx:config` too: the "Secure connections" Settings section)
+//
+// The certificates `server_tls: "auto"` serves, in `<appdata>/certs` (see
+// solx-certs). Only a build that owns its managers has them; the host
+// provisions them at startup, so these commands report, trust, reissue and
+// reset. A new or removed certificate takes effect when the host restarts.
+
+/// One certificate, for display.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TlsCert {
+    sha256: String,
+    subject: String,
+    not_before: String,
+    not_after: String,
+    sans: Vec<String>,
+    /// Where its key is: a key storage provider or a file.
+    key_location: String,
+    /// Whether the key is in hardware (a TPM).
+    key_hardware: bool,
+    /// `false` when the platform enforces that the key can't be exported;
+    /// `null` when that can't be told.
+    key_exportable: Option<bool>,
+    key_present: bool,
+}
+
+/// The CA in the certificates directory.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TlsCa {
+    /// `cng` or `file`.
+    backend: &'static str,
+    /// What clients pin: `base64url(SHA-256(root SPKI))`.
+    pin: String,
+    /// The pin as people compare it, `3F7A-91C2-0B4E-D518`.
+    fingerprint: String,
+    root: TlsCert,
+    server: Option<TlsCert>,
+    /// Whether this machine trusts the root; `null` where that can't be told.
+    trusted: Option<bool>,
+    root_cert_path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TlsStatus {
+    /// `server_tls` as configured: `off`, `auto`, `files` or `store`.
+    mode: &'static str,
+    /// Why `server_tls` couldn't be read, if it couldn't.
+    mode_error: Option<String>,
+    /// Whether the running embedded server serves TLS; `null` when it isn't
+    /// running.
+    serving_https: Option<bool>,
+    /// Why the host didn't start its embedded server, if it didn't.
+    server_error: Option<String>,
+    /// The certificates directory.
+    dir: String,
+    ca: Option<TlsCa>,
+    /// Why the CA couldn't be read, if it couldn't.
+    ca_error: Option<String>,
+}
+
+/// What a TLS action leaves behind: the new status, and whether the host
+/// must restart before the embedded server serves the change.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TlsResult {
+    status: TlsStatus,
+    restart_required: bool,
+}
+
+#[cfg(feature = "local")]
+fn tls_cert(info: &solx_certs::CertInfo, key: solx_certs::KeyReport) -> TlsCert {
+    TlsCert {
+        sha256: info.sha256.clone(),
+        subject: info.subject.clone(),
+        not_before: info.not_before.to_rfc3339(),
+        not_after: info.not_after.to_rfc3339(),
+        sans: info.sans.clone(),
+        key_location: key.location,
+        key_hardware: key.hardware,
+        key_exportable: key.exportable,
+        key_present: key.present,
+    }
+}
+
+/// What the host's embedded server is doing, captured before going to a
+/// blocking thread.
+#[cfg(feature = "local")]
+struct Serving {
+    https: Option<bool>,
+    error: Option<String>,
+}
+
+#[cfg(feature = "local")]
+impl Serving {
+    fn of(state: &SolxState) -> Self {
+        Serving {
+            https: state.embedded().map(|e| e.https),
+            error: state.server_error(),
+        }
+    }
+}
+
+#[cfg(feature = "local")]
+fn tls_status(serving: Serving, config: &ConfigService) -> TlsStatus {
+    use solx_config::ServerTls;
+
+    let (mode, mode_error) = match config.server_tls() {
+        Ok(ServerTls::Off) => ("off", None),
+        Ok(ServerTls::Auto) => ("auto", None),
+        Ok(ServerTls::Files { .. }) => ("files", None),
+        Ok(ServerTls::Store { .. }) => ("store", None),
+        Err(e) => ("off", Some(e.to_string())),
+    };
+    let dir = solx_certs::certs_dir(config);
+    let (ca, ca_error) = match solx_certs::Authority::open(&dir) {
+        Ok(None) => (None, None),
+        Ok(Some(ca)) => {
+            let (root_key, server_key) = ca.key_reports();
+            let tls = ca.state();
+            let ca_status = TlsCa {
+                backend: tls.backend.as_str(),
+                pin: ca.pin().to_string(),
+                fingerprint: ca.fingerprint(),
+                root: tls_cert(&tls.root, root_key),
+                server: tls
+                    .server
+                    .as_ref()
+                    .zip(server_key)
+                    .map(|(s, k)| tls_cert(s, k)),
+                trusted: ca.trusted_on_this_machine(),
+                root_cert_path: ca.root_cert_path().display().to_string(),
+            };
+            (Some(ca_status), None)
+        }
+        Err(e) => (None, Some(e.to_string())),
+    };
+    TlsStatus {
+        mode,
+        mode_error,
+        serving_https: serving.https,
+        server_error: serving.error,
+        dir: dir.display().to_string(),
+        ca,
+        ca_error,
+    }
+}
+
+/// Run `f` on a blocking thread: key-store calls can be slow (a TPM), and
+/// trusting a root waits for the person to answer Windows' dialog.
+#[cfg(feature = "local")]
+async fn tls_blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| SolxError::Other(format!("TLS task failed: {e}")))?
+}
+
+#[cfg(feature = "local")]
+fn open_ca(config: &ConfigService) -> Result<solx_certs::Authority> {
+    let dir = solx_certs::certs_dir(config);
+    solx_certs::Authority::open(&dir)
+        .map_err(|e| SolxError::Other(e.to_string()))?
+        .ok_or_else(|| {
+            SolxError::NotFound(format!(
+                "{} has no certificate authority yet. Turn on TLS for the HTTP server and \
+                 restart, and the app creates one.",
+                dir.display()
+            ))
+        })
+}
+
+/// Run a CA action on a blocking thread, then report the new status.
+/// `restart` says whether a running TLS server must restart to serve it.
+#[cfg(feature = "local")]
+async fn tls_action(
+    state: &SolxState,
+    config: Arc<ConfigService>,
+    restart: bool,
+    action: impl FnOnce(&ConfigService) -> Result<()> + Send + 'static,
+) -> Result<TlsResult> {
+    let serving = Serving::of(state);
+    let restart_required = restart && serving.https == Some(true);
+    let status = tls_blocking(move || {
+        action(&config)?;
+        Ok(tls_status(serving, &config))
+    })
+    .await?;
+    Ok(TlsResult {
+        status,
+        restart_required,
+    })
+}
+
+#[cfg(not(feature = "local"))]
+fn no_tls<T>(_config: Arc<ConfigService>) -> Result<T> {
+    Err(SolxError::Invalid(
+        "TLS certificates are managed on the solx-server host".into(),
+    ))
+}
+
+/// The "Secure connections" status: `server_tls`, the running server, and
+/// the CA with where its keys are.
+#[command]
+pub(crate) async fn config_tls_status(state: State<'_, SolxState>) -> Result<TlsStatus> {
+    let config = host_config(&state)?;
+    #[cfg(feature = "local")]
+    {
+        let serving = Serving::of(&state);
+        tls_blocking(move || Ok(tls_status(serving, &config))).await
+    }
+    #[cfg(not(feature = "local"))]
+    no_tls(config)
+}
+
+/// Trust the root on this machine (`CurrentUser\Root` on Windows, after
+/// the person confirms in Windows' own dialog), so browsers here accept
+/// the server.
+#[command]
+pub(crate) async fn config_tls_trust(state: State<'_, SolxState>) -> Result<TlsResult> {
+    let config = host_config(&state)?;
+    #[cfg(feature = "local")]
+    {
+        tls_action(state.inner(), config, false, |c| {
+            open_ca(c)?
+                .trust_on_this_machine()
+                .map_err(|e| SolxError::Invalid(e.to_string()))
+        })
+        .await
+    }
+    #[cfg(not(feature = "local"))]
+    no_tls(config)
+}
+
+/// Undo [`config_tls_trust`].
+#[command]
+pub(crate) async fn config_tls_untrust(state: State<'_, SolxState>) -> Result<TlsResult> {
+    let config = host_config(&state)?;
+    #[cfg(feature = "local")]
+    {
+        tls_action(state.inner(), config, false, |c| {
+            open_ca(c)?
+                .untrust_on_this_machine()
+                .map_err(|e| SolxError::Invalid(e.to_string()))
+        })
+        .await
+    }
+    #[cfg(not(feature = "local"))]
+    no_tls(config)
+}
+
+/// Issue a new server certificate for the names the current config wants.
+/// Clients trust the root, so they don't notice. A running TLS server keeps
+/// serving the old one until the host restarts.
+#[command]
+pub(crate) async fn config_tls_reissue(state: State<'_, SolxState>) -> Result<TlsResult> {
+    let config = host_config(&state)?;
+    #[cfg(feature = "local")]
+    {
+        tls_action(state.inner(), config, true, |c| {
+            open_ca(c)?
+                .issue_server(
+                    &solx_certs::wanted_sans(c),
+                    solx_certs::SERVER_VALIDITY_DAYS,
+                )
+                .map(|_| ())
+                .map_err(|e| SolxError::Other(e.to_string()))
+        })
+        .await
+    }
+    #[cfg(not(feature = "local"))]
+    no_tls(config)
+}
+
+/// Delete the CA: keys, certificates, and files. Every device that trusts
+/// or pins the root has to be set up again. With `server_tls: "auto"`, the
+/// host creates a new CA when it restarts.
+#[command]
+pub(crate) async fn config_tls_reset(state: State<'_, SolxState>) -> Result<TlsResult> {
+    let config = host_config(&state)?;
+    #[cfg(feature = "local")]
+    {
+        tls_action(state.inner(), config, true, |c| {
+            open_ca(c)?
+                .delete()
+                .map_err(|e| SolxError::Other(e.to_string()))
+        })
+        .await
+    }
+    #[cfg(not(feature = "local"))]
+    no_tls(config)
 }
 
 #[cfg(test)]

@@ -10,7 +10,8 @@ options ride in the query string, and the HTTP method carries the verb.
 
 - **Base URL** — `http://127.0.0.1:8766` by default. The bind address and
   port come from `--host`/`--port`, else the config's `server_host`/
-  `server_port`.
+  `server_port`. With TLS on (below), other machines use `https://`, and
+  this machine can use either.
 - **Auth** — every route except `/health`, `/auth/exchange` and `/connect`
   requires `Authorization: Bearer <token>`. Three kinds of token are
   accepted:
@@ -37,10 +38,11 @@ has only the root token, accepted from anywhere, and no `/auth/exchange` or
 
 Set `server_host` to `0.0.0.0` (or a specific interface IP), or start the
 server with `--host`. If clients should use a different address than the one
-bound (a `0.0.0.0` bind, a reverse proxy, a Tailscale name or IP), set
-`server_public_url`; connect links use it. It takes a full URL
-(`https://solx.example.com`, used as is) or a bare IP or host name
-(`100.101.102.103`), which gets `http://` and `server_port`. To use a
+bound (a `0.0.0.0` bind, a Tailscale name or IP), set `server_public_url`;
+connect links use it, and it is added to the server certificate. It takes a
+full URL (`https://solx.example.com`, used as is) or a bare IP or host name
+(`100.101.102.103`), which gets `server_port` and `https://` with TLS on,
+else `http://`. To use a
 different address for one link only, pass
 `solx token connect-code --url <URL|HOST>`, or fill in "Address for the
 link" in the desktop app.
@@ -59,15 +61,68 @@ Then connect each device with its own token:
    MCP client's configuration.
 
 `solx token clients` lists the devices and `solx token revoke <id>` cuts one
-off; the revocation applies on its next request. The server prints a warning
-at startup when it isn't bound to loopback, because traffic is plain HTTP and
-tokens are sent unencrypted. Run it over a private network
-(Tailscale/WireGuard) or behind a TLS reverse proxy (Caddy, nginx), and don't
-expose it directly to the internet.
+off; the revocation applies on its next request. Don't expose the server
+directly to the internet.
 
-Behind a reverse proxy **on the same machine**, every request reaches the
-server from loopback, so the root token is accepted from anywhere the proxy
-is. Don't give the root token to remote clients in that setup either.
+Reverse proxies aren't supported: through one on the same machine, every
+request reaches the server from loopback, so the root token would be
+accepted from anywhere the proxy is. Use the server's own TLS instead.
+
+### TLS
+
+`server_tls` in the config turns on HTTPS. It is read at startup.
+
+| Value | Certificate |
+|---|---|
+| `"off"` (default) | None: plain HTTP. |
+| `"auto"` | The one `solx-certs` keeps in `<appdata>/certs`. |
+| `{"cert_file": "...", "key_file": "..."}` | PEM files: the certificate chain, server certificate first, and its private key (PKCS#8, SEC1 or PKCS#1). Relative paths are under the appdata dir. |
+| `{"store_thumbprint": "<sha256 hex>"}` | Windows: the certificate in `CurrentUser\My` with that SHA-256 thumbprint. Its key is used where it is. |
+
+With TLS on, one port serves both: a connection that starts a TLS handshake
+gets HTTPS (HTTP/2 or HTTP/1.1), and a plain-HTTP connection is served only
+from this machine. Any other machine's plain-HTTP request gets a `400`
+saying to use `https://`. The address handed to Command actions
+(`SOLX_SERVER_URL`) stays `http://127.0.0.1:…`, so they need no
+certificate. Connect links and the exchange's `server_url` use `https://`.
+A `server_tls` that can't be served (a missing file, no certificates for
+`"auto"`) stops the server from starting.
+
+**Certificates.** The desktop app manages them: on Windows, a network
+address with `server_tls` unset turns it on (`"auto"`), and at each start
+the app creates the certificate authority if it is missing and reissues the
+server certificate when it's near expiry or its names changed. "Secure
+connections" in its settings shows the fingerprint, trusts the root on this
+machine, reissues, and resets. For a standalone `solx-server`, run
+`solx-certs`:
+
+```sh
+solx-certs init        # a CA and a server certificate in <appdata>/certs
+solx-certs show        # fingerprint, expiry, names, where the keys are
+solx-certs issue --san 192.168.1.10 --san my-laptop.tailnet.ts.net
+                       # reissue with the addresses other devices use
+```
+
+then set `server_tls` to `"auto"`. On Windows the keys are non-exportable CNG
+keys (the CA's on the TPM when there is one); elsewhere they are PEM files.
+PEM files made with OpenSSL work too, through `cert_file`/`key_file`.
+
+**Clients.** solx's own clients (`solx-cli`, the desktop client, the Node
+bindings) trust the built-in roots, the OS trust store, and the PEM file
+named by `server_ca_file` in their config or `SOLX_CA_FILE`. Point either at
+a copy of the server's `solx-root.crt`. Browsers and other HTTPS clients,
+such as an MCP client, need the root in the OS or browser trust store:
+
+- Windows: `certutil -user -addstore Root solx-root.crt`, or "Trust on this
+  machine" in the desktop app on the server itself
+- macOS: open it in Keychain Access, then set it to "Always Trust"
+- Linux: copy it to `/usr/local/share/ca-certificates/solx-root.crt` and run
+  `sudo update-ca-certificates`
+- Firefox: Settings → Privacy & Security → Certificates → Import
+
+Importing the root trusts it for every site on that machine, so prefer
+`server_ca_file` where it's enough. curl on Windows (Schannel) also needs
+`--ssl-no-revoke`, because the certificates name no revocation endpoint.
 
 ### Connecting another device
 

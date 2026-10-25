@@ -260,6 +260,42 @@ fn issue_rejects_bad_input() {
 // containers named after a temp directory. `Cleanup` deletes the CA even
 // when an assertion fails.
 
+#[test]
+fn wanted_sans_follow_the_server_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = solx_config::ConfigService::open_in(dir.path()).unwrap();
+    config.set("server_host", "10.0.0.5".into()).unwrap();
+    config
+        .set("server_public_url", "https://solx.example.com".into())
+        .unwrap();
+    let wanted = wanted_sans(&config);
+    for name in [
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "10.0.0.5",
+        "solx.example.com",
+    ] {
+        assert!(
+            wanted.contains(&name.parse().unwrap()),
+            "{name} in {wanted:?}"
+        );
+    }
+    assert_eq!(certs_dir(&config), dir.path().join("certs"));
+
+    // Bound on every IPv4 interface: no IPv6 addresses but ::1, and never
+    // the unspecified address itself.
+    config.set("server_host", "0.0.0.0".into()).unwrap();
+    config
+        .set("server_public_url", serde_json::Value::Null)
+        .unwrap();
+    let wanted = wanted_sans(&config);
+    assert!(!wanted.contains(&San::Ip("0.0.0.0".parse().unwrap())));
+    assert!(wanted
+        .iter()
+        .all(|s| !matches!(s, San::Ip(IpAddr::V6(ip)) if !ip.is_loopback())));
+}
+
 #[cfg(all(windows, feature = "cng"))]
 mod cng_backend {
     use super::*;

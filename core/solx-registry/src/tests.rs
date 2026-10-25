@@ -408,3 +408,30 @@ async fn two_registries_on_one_appdata_dir_agree() {
     let code = a.create_connect_code(None, None, None, None).await.unwrap();
     b.redeem(&code.code).await.unwrap();
 }
+
+#[tokio::test]
+async fn links_use_https_when_the_server_serves_tls() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let config = ConfigService::open_in(dir.path()).unwrap();
+        config.set("server_host", "10.0.0.5".into()).unwrap();
+        config.set("server_tls", "auto".into()).unwrap();
+    }
+    let r = open_in(dir.path()).await;
+    assert_eq!(r.public_url().as_deref(), Some("https://10.0.0.5:8766"));
+
+    let code = r
+        .create_connect_code(None, None, None, Some("100.101.102.103"))
+        .await
+        .unwrap();
+    assert_eq!(
+        code.server_url.as_deref(),
+        Some("https://100.101.102.103:8766")
+    );
+
+    r.set_advertised_url(crate::advertised_url(
+        "192.168.1.5:9000".parse().unwrap(),
+        true,
+    ));
+    assert_eq!(r.public_url().as_deref(), Some("https://192.168.1.5:9000"));
+}

@@ -14,8 +14,23 @@ path = "src/main.rs"
 # `/connect`) and root-token-from-loopback-only. Implies the manager's
 # feature, so the two can't get out of sync. Off, every bearer is the root
 # token, as before.
-default = ["registry"]
+default = ["registry", "tls"]
 registry = ["solx-manager/registry", "solx-mcp/registry", "dep:solx-registry"]
+# TLS serving (`server_tls`; see docs/tls-plan.md): from PEM files, from
+# `<appdata>/certs` (`"auto"`), or on Windows from the certificate store.
+# Plain HTTP stays available to loopback peers on the same port. Off, the
+# server is plain HTTP only and `server_tls` other than "off" is an error.
+tls = [
+    "dep:rustls",
+    "dep:rustls-pki-types",
+    "dep:tokio-rustls",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:tower-service",
+    "dep:solx-certs",
+    "dep:chrono",
+    "dep:rustls-cng",
+]
 
 [dependencies]
 solx-manager = { workspace = true, default-features = false, features = ["local"] }
@@ -42,6 +57,19 @@ serde = { workspace = true }
 # Content-Type for `GET /files/{*rel_path}`, guessed from the extension —
 # the `FileStore` trait doesn't persist one.
 mime_guess = { workspace = true }
+rustls = { workspace = true, optional = true }
+rustls-pki-types = { workspace = true, optional = true }
+tokio-rustls = { workspace = true, optional = true }
+hyper = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true }
+tower-service = { workspace = true, optional = true }
+# Only `TlsState`, to read what `<appdata>/certs/tls.json` records for
+# `server_tls: "auto"`.
+solx-certs = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+rustls-cng = { workspace = true, optional = true }
 
 [dev-dependencies]
 # For the principal-propagation tests (`solx_actions::test_probe`).
@@ -56,3 +84,5 @@ rmcp = { version = "3.0.0", features = ["client", "transport-streamable-http-cli
 # Test-only, to register a Script action's artifact directly for the
 # progress-notification test — same use as `solx-mcp`'s own dev-dependency.
 solx-files = { workspace = true }
+# TLS tests: a file-backend CA and server certificate in a tempdir.
+solx-certs = { workspace = true }

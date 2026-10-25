@@ -165,9 +165,21 @@ token.** `solx-server` listens on `127.0.0.1` unless `server_host` in
 `solx-config.json` (or `--host`) says otherwise. Every route except
 `/health`, `/auth/exchange` and the static `/connect` page requires a bearer
 token. Setting `server_host` to a LAN address or `0.0.0.0` allows non-local
-access. In that case bearer tokens are the only gate, traffic is not
-encrypted (no TLS), and CORS is limited to the origins listed in
-`server_cors_origins`.
+access. In that case bearer tokens are the only gate, and CORS is limited to
+the origins listed in `server_cors_origins`.
+
+**Other machines get TLS when it's on, and never plain HTTP.** With
+`server_tls` set, `solx-server` serves HTTPS, and plain HTTP on the same
+port is accepted only from this machine; anyone else gets a 400. The desktop
+app turns it on by itself for a network address on Windows
+(`server_tls: "auto"`): it creates a certificate authority for this appdata
+dir and renews the server certificate it signs. On Windows both keys are
+non-exportable CNG keys, the authority's on the TPM when there is one. On
+the TPM, a key can't leave the chip; in the software key storage provider,
+non-exportability is a policy that an administrator, or malware running as
+you, can get around. Elsewhere the keys are PEM files that any process
+running as you can read. `solx-certs show` says which applies. A standalone
+`solx-server` uses certificates from `solx-certs`, or your own PEM files.
 
 **The root token is accepted from this machine only.** The root token is
 generated on first start and kept in the OS credential manager. Requests
@@ -213,7 +225,16 @@ everything running through solx today is trusted by construction.
   revocation and knowing who is calling.
 - **A reverse proxy on the same machine hides remote callers.** Every
   request then arrives from loopback, so the root token is accepted through
-  the proxy. Don't hand the root token to remote clients in that setup.
+  the proxy. solx doesn't support running behind one; it serves TLS itself.
+- **Off-loopback TLS is opt-in outside the desktop app on Windows.** A
+  standalone `solx-server`, or the desktop app elsewhere, serves plain HTTP
+  to the network until `server_tls` is set.
+- **solx clients don't pin the server's certificate authority yet.** They
+  trust whatever their OS trust store and `server_ca_file`/`SOLX_CA_FILE`
+  trust. Browsers and other HTTPS clients can only ever do that, so
+  importing the solx root on a machine trusts it for every host name there.
+- **Certificates can't be revoked.** Reissue the server certificate, or
+  reset the certificate authority and set every device up again.
 - **The in-process env store is global.** Any caller can read and write
   `get-env`/`set-env`, including the system variables mapped in through
   `env_mappings`. Don't map a secret into it.
@@ -265,10 +286,14 @@ is implemented, the full list of known gaps, and the intended direction.
   it can connect until it is used or expires. Share it over a channel you
   trust, or read it off the screen.
 - **Think before exposing `solx-server` beyond loopback.** Setting
-  `server_host`, or tunnelling or proxying the server, makes a
-  shell-execution endpoint reachable from the network, protected only by
-  bearer tokens and without TLS. Keep it on a trusted network, put TLS (and
-  ideally real authentication) in front of it, and set
-  `server_cors_origins` to only the browser origins you use.
+  `server_host`, or tunnelling the server, makes a shell-execution endpoint
+  reachable from the network, protected only by bearer tokens. Turn on TLS
+  (`server_tls`; see [docs/tls-plan.md](docs/tls-plan.md)), keep it on a
+  network you trust, and set `server_cors_origins` to only the browser
+  origins you use.
+- **Import the solx root only where you need it.** A browser or HTTPS
+  client on another device needs `solx-root.crt` in that device's trust
+  store, and then trusts it for every site. solx's own clients can use
+  `server_ca_file` or `SOLX_CA_FILE` instead, which affects only solx.
 - **Prefer WASM for third-party logic.** The `custom-action` world is the
   only genuinely sandboxed dispatch kind.

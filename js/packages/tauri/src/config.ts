@@ -68,12 +68,21 @@ export interface SolxConfigFile {
   env_mappings?: Record<string, string>;
   env_vars?: Record<string, Record<string, string>>;
   server_url?: string;
+  /** A PEM file of extra roots a client trusts for an https:// server (relative to the appdata dir). */
+  server_ca_file?: string;
   server_token?: string;
   server_port?: number;
   server_host?: string;
   server_cors_origins?: string[];
   /** The address other machines use to reach this server, for connect links. */
   server_public_url?: string;
+  /**
+   * TLS for the HTTP server: `"off"`, `"auto"` (certificates in
+   * `<appdata>/certs`, made by the app), PEM files, or (Windows) a
+   * certificate-store thumbprint. Unset, the app turns it on for a network
+   * address on Windows.
+   */
+  server_tls?: 'off' | 'auto' | { cert_file: string; key_file: string } | { store_thumbprint: string };
   /** Lifetime of a client token, in days (default 90). */
   client_token_ttl_days?: number;
   server_embedded?: boolean;
@@ -137,6 +146,59 @@ export interface ConfigUpdateResult {
 /** Top-level key changes; `null` removes a key. */
 export type ConfigChanges = { [K in keyof SolxConfigFile]?: SolxConfigFile[K] | null };
 
+/** One certificate in the TLS certificates directory. */
+export interface TlsCert {
+  /** SHA-256 of the certificate, lowercase hex (also its Windows thumbprint). */
+  sha256: string;
+  subject: string;
+  notBefore: string;
+  notAfter: string;
+  sans: string[];
+  /** Where its key is: a key storage provider or a file. */
+  keyLocation: string;
+  /** Whether the key is held in hardware (a TPM). */
+  keyHardware: boolean;
+  /** `false` when the platform enforces that the key can't be exported; `null` when unknown. */
+  keyExportable: boolean | null;
+  keyPresent: boolean;
+}
+
+/** The local certificate authority behind `server_tls: "auto"`. */
+export interface TlsCa {
+  backend: 'cng' | 'file';
+  /** What clients pin: base64url SHA-256 of the root's public key. */
+  pin: string;
+  /** The pin as people compare it, `3F7A-91C2-0B4E-D518`. */
+  fingerprint: string;
+  root: TlsCert;
+  server: TlsCert | null;
+  /** Whether this machine trusts the root; `null` where that can't be told. */
+  trusted: boolean | null;
+  rootCertPath: string;
+}
+
+/** The "Secure connections" status. */
+export interface TlsStatus {
+  /** `server_tls` as configured. */
+  mode: 'off' | 'auto' | 'files' | 'store';
+  modeError: string | null;
+  /** Whether the running embedded server serves TLS; `null` when it isn't running. */
+  servingHttps: boolean | null;
+  /** Why the embedded server didn't start, if it didn't. */
+  serverError: string | null;
+  /** The certificates directory. */
+  dir: string;
+  ca: TlsCa | null;
+  caError: string | null;
+}
+
+/** What a TLS action leaves behind. */
+export interface TlsResult {
+  status: TlsStatus;
+  /** Whether the app must restart before the embedded server serves the change. */
+  restartRequired: boolean;
+}
+
 /** What installing or uninstalling a package leaves behind. */
 export interface PackageResult {
   /** The config as it is now: the package registered or gone, grants applied or revoked. */
@@ -172,5 +234,33 @@ export class TauriConfig {
   /** Uninstall by name: run `uninstall.solx`, revoke the grants, delete unpacked files. */
   uninstallPackage(name: string): Promise<PackageResult> {
     return this.t.call('config_uninstall_package', { name });
+  }
+
+  /** The TLS certificates behind `server_tls: "auto"`, and what the server is serving. */
+  tlsStatus(): Promise<TlsStatus> {
+    return this.t.call('config_tls_status');
+  }
+
+  /**
+   * Trust the root on this machine, so browsers here accept the server. On
+   * Windows this waits for the person to confirm Windows' own dialog.
+   */
+  tlsTrust(): Promise<TlsResult> {
+    return this.t.call('config_tls_trust');
+  }
+
+  /** Stop trusting the root on this machine. */
+  tlsUntrust(): Promise<TlsResult> {
+    return this.t.call('config_tls_untrust');
+  }
+
+  /** Issue a new server certificate for the current addresses. Clients don't notice. */
+  tlsReissue(): Promise<TlsResult> {
+    return this.t.call('config_tls_reissue');
+  }
+
+  /** Delete the certificate authority. Every other device has to be set up again. */
+  tlsReset(): Promise<TlsResult> {
+    return this.t.call('config_tls_reset');
   }
 }

@@ -222,20 +222,28 @@ impl App {
         token: String,
     ) -> Result<Arc<Self>> {
         let remote_url = Some(server_url.clone());
-        let types: Arc<dyn TypeManager> = Arc::new(solx_client::RemoteTypeManager::new(
+        // One client for all four, trusting `server_ca_file`/`SOLX_CA_FILE`
+        // besides the built-in and OS roots.
+        let http = solx_client::http_client_for(config.server_ca_file().as_deref())?;
+        let types: Arc<dyn TypeManager> = Arc::new(solx_client::RemoteTypeManager::with_client(
             server_url.clone(),
             token.clone(),
+            http.clone(),
         ));
-        let docs: Arc<dyn DocManager> = Arc::new(solx_client::RemoteDocManager::new(
+        let docs: Arc<dyn DocManager> = Arc::new(solx_client::RemoteDocManager::with_client(
             server_url.clone(),
             token.clone(),
+            http.clone(),
         ));
-        let actions: Arc<dyn ActionManager> = Arc::new(solx_client::RemoteActionManager::new(
-            server_url.clone(),
-            token.clone(),
+        let actions: Arc<dyn ActionManager> =
+            Arc::new(solx_client::RemoteActionManager::with_client(
+                server_url.clone(),
+                token.clone(),
+                http.clone(),
+            ));
+        let files: Arc<dyn FileStore> = Arc::new(solx_client::RemoteFileStore::with_client(
+            server_url, token, http,
         ));
-        let files: Arc<dyn FileStore> =
-            Arc::new(solx_client::RemoteFileStore::new(server_url, token));
 
         Ok(Arc::new(App {
             config,

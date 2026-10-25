@@ -15,11 +15,25 @@ pub struct RemoteFileStore {
 }
 
 impl RemoteFileStore {
+    /// A manager with its own client, trusting the roots `SOLX_CA_FILE`
+    /// names besides the built-in and OS ones. Prefer
+    /// [`with_client`](Self::with_client) with one shared
+    /// [`crate::http_client`].
     pub fn new(base_url: impl Into<String>, token: impl Into<String>) -> Self {
+        Self::with_client(base_url, token, crate::tls::default_client())
+    }
+
+    /// A manager using `http`, normally one [`crate::http_client`] shared by
+    /// every manager talking to the same server.
+    pub fn with_client(
+        base_url: impl Into<String>,
+        token: impl Into<String>,
+        http: reqwest::Client,
+    ) -> Self {
         RemoteFileStore {
             base_url: base_url.into(),
             token: token.into(),
-            http: reqwest::Client::new(),
+            http,
         }
     }
 }
