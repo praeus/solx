@@ -114,8 +114,11 @@ impl InternalActionHandler for AuthHandler {
                     .map_err(|e| e.to_string())?;
                 // The address to give the client, with the pin it should
                 // hold, so a token handed over by hand is pinned too.
-                let tls_pin = r.tls_pin();
-                let server_url = r.public_url().map(|url| {
+                let public_url = r.public_url();
+                let tls_pin = r
+                    .tls_pin()
+                    .filter(|_| public_url.as_deref().is_some_and(|u| u.starts_with("https://")));
+                let server_url = public_url.map(|url| {
                     solx_config::credentials::with_server_pin(&url, tls_pin.as_deref())
                 });
                 json!({

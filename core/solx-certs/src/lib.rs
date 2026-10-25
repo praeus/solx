@@ -519,15 +519,18 @@ impl Authority {
     }
 
     /// Reissue the server certificate if there is none, its names differ
-    /// from `sans`, its key is gone, or it has under [`RENEW_WITHIN_DAYS`]
-    /// left. Returns whether it reissued. What solx-browser calls at
-    /// startup.
+    /// from `sans`, its key or certificate is gone (from the directory, or
+    /// from the store it was installed in), or it has under
+    /// [`RENEW_WITHIN_DAYS`] left. Returns whether it reissued. What
+    /// solx-browser calls at startup.
     pub fn ensure_server(&mut self, sans: &[San]) -> Result<bool> {
         let wanted: Vec<String> = normalize_sans(sans).iter().map(San::to_string).collect();
         let fresh = self.state.server.as_ref().is_some_and(|s| {
             s.sans == wanted
                 && s.not_after - Utc::now() > Duration::days(RENEW_WITHIN_DAYS)
                 && self.backend.key_exists(&s.key)
+                && self.server_cert_path().is_file()
+                && self.backend.cert_installed(&s.sha256)
         });
         if fresh {
             return Ok(false);
@@ -536,10 +539,17 @@ impl Authority {
         Ok(true)
     }
 
-    /// Remove the CA: both certificates (including from the OS store), both
-    /// keys, and the directory's files. Every client that trusts or pins
-    /// this root has to be set up again.
+    /// Remove the CA: both certificates (including from the OS stores, so
+    /// this machine stops trusting the root), both keys, and the
+    /// directory's files. Every client that trusts or pins this root has to
+    /// be set up again.
     pub fn delete(self) -> Result<()> {
+        // First, and nothing is deleted if it fails (on Windows the person
+        // can cancel the confirmation): a trusted root whose CA is gone
+        // could no longer be found and removed by solx.
+        if self.trusted_on_this_machine() == Some(true) {
+            self.untrust_on_this_machine()?;
+        }
         let mut errors = Vec::new();
         let mut note = |r: Result<()>| {
             if let Err(e) = r {

@@ -1216,8 +1216,9 @@ pub(crate) async fn config_tls_reissue(state: State<'_, SolxState>) -> Result<Tl
     no_tls(config)
 }
 
-/// Delete the CA: keys, certificates, and files. Every device that trusts
-/// or pins the root has to be set up again. With `server_tls: "auto"`, the
+/// Delete the CA: keys, certificates, and files, and stop trusting its root
+/// on this machine (Windows asks first; cancelling deletes nothing). Every
+/// device that trusts or pins the root has to be set up again. With `server_tls: "auto"`, the
 /// host creates a new CA when it restarts.
 #[command]
 pub(crate) async fn config_tls_reset(state: State<'_, SolxState>) -> Result<TlsResult> {

@@ -112,7 +112,8 @@ pub fn http_client(tls: &ClientTls) -> Result<reqwest::Client, SolxError> {
                 provider,
             }))
             .with_no_client_auth();
-        builder = builder.use_preconfigured_tls(config);
+        // A pin protects nothing over plain HTTP, so refuse it.
+        builder = builder.use_preconfigured_tls(config).https_only(true);
     } else {
         builder = builder.use_rustls_tls();
         for root in &tls.extra_roots {
@@ -130,6 +131,30 @@ pub fn http_client_for(
     pin: Option<&str>,
 ) -> Result<reqwest::Client, SolxError> {
     http_client(&ClientTls::load(ca_file)?.with_pin(pin))
+}
+
+/// For the constructors that take no client (the Node bindings use them):
+/// `base_url` without its fragment, and a client pinned to the `#pin=` it
+/// carried, else [`default_client`]. A malformed pin is still a pin: it
+/// matches no root, so every request fails rather than going unpinned.
+pub(crate) fn client_for_url(base_url: String) -> (String, reqwest::Client) {
+    let Some((base, fragment)) = base_url.split_once('#') else {
+        return (base_url, default_client());
+    };
+    let base = base.trim_end_matches('/').to_string();
+    match fragment
+        .split('&')
+        .find_map(|param| param.strip_prefix("pin="))
+    {
+        Some(pin) => {
+            let tls = ClientTls::default().with_pin(Some(pin.trim()));
+            // Building a pinned client only fails if ring offers no TLS
+            // version, which it always does; never fall back to unpinned.
+            let client = http_client(&tls).expect("a pinned HTTP client always builds");
+            (base, client)
+        }
+        None => (base, default_client()),
+    }
 }
 
 /// [`http_client`] for roots from `SOLX_CA_FILE` only, for the
@@ -374,7 +399,7 @@ fn causes<'a>(e: &'a (dyn StdError + 'static)) -> Vec<&'a (dyn StdError + 'stati
 
 #[cfg(test)]
 mod tests {
-    use super::{der_sequence, fingerprint_of_pin, ClientTls};
+    use super::{client_for_url, der_sequence, fingerprint_of_pin, ClientTls};
 
     #[test]
     fn a_ca_file_must_hold_a_certificate() {
@@ -385,6 +410,21 @@ mod tests {
         let missing = std::path::Path::new("definitely/not/here.crt");
         let err = ClientTls::load(Some(missing)).unwrap_err().to_string();
         assert!(err.contains("here.crt"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_pin_on_the_url_is_taken_off_and_enforced() {
+        let pin = "q83vASNFZ4mrze8BI0VniavN7wEjRWeJq83vASNFZ4k";
+        let (base, _) = client_for_url(format!("https://h:8766/#pin={pin}"));
+        assert_eq!(base, "https://h:8766");
+        let (base, _) = client_for_url("https://h:8766".into());
+        assert_eq!(base, "https://h:8766");
+
+        // A pinned client never speaks plain HTTP: it fails before any
+        // connection is made (port 9 on loopback; nothing is listening).
+        let (base, pinned) = client_for_url(format!("http://127.0.0.1:9#pin={pin}"));
+        let err = pinned.get(format!("{base}/health")).send().await.unwrap_err();
+        assert!(err.is_builder(), "{err:?}");
     }
 
     #[test]

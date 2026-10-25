@@ -230,6 +230,11 @@ fn ensure_server_reissues_only_when_needed() {
     std::fs::remove_file(dir.path().join(state::SERVER_KEY_FILE)).unwrap();
     assert!(ca.ensure_server(&more).unwrap());
     verify_for(&ca, "localhost").unwrap();
+
+    // So did the certificate file the server serves.
+    std::fs::remove_file(ca.server_cert_path()).unwrap();
+    assert!(ca.ensure_server(&more).unwrap());
+    assert!(ca.server_cert_path().is_file());
 }
 
 #[test]
@@ -437,6 +442,13 @@ mod cng_backend {
         assert!(ca.ensure_server(&names).unwrap());
         verify_for(&ca, "localhost").unwrap();
         assert!(!in_my_store(&server.sha256));
+
+        // Someone removed the certificate from CurrentUser\My, which the
+        // server serves from: reissued too.
+        let server = ca.state().server.clone().unwrap();
+        crate::backend::KeyBackend::remove_cert(&backend, &server.sha256).unwrap();
+        assert!(ca.ensure_server(&names).unwrap());
+        assert!(in_my_store(&ca.state().server.as_ref().unwrap().sha256));
     }
 
     /// TPM against software signing speed, for docs/tls-plan.md. Run with

@@ -39,12 +39,21 @@ function pinParam(fragment: string): string | null {
   return pin;
 }
 
+/** A pin over plain HTTP would protect nothing, and a code sent there travels in cleartext. */
+function requireHttpsForPin(serverUrl: string, pin: string | null): void {
+  if (pin && !/^https:\/\//i.test(serverUrl)) {
+    throw new Error(`${serverUrl} carries a server pin, but a pinned server must be reached over https://.`);
+  }
+}
+
 /** `serverUrl` without its fragment and trailing slash, and the pin in its fragment. */
 export function splitServerPin(serverUrl: string): { serverUrl: string; pin: string | null } {
   const text = serverUrl.trim();
   const at = text.indexOf("#");
-  const base = at >= 0 ? text.slice(0, at) : text;
-  return { serverUrl: base.replace(/\/+$/, ""), pin: at >= 0 ? pinParam(text.slice(at + 1)) : null };
+  const base = (at >= 0 ? text.slice(0, at) : text).replace(/\/+$/, "");
+  const pin = at >= 0 ? pinParam(text.slice(at + 1)) : null;
+  requireHttpsForPin(base, pin);
+  return { serverUrl: base, pin };
 }
 
 /** The 8 digits of `12345678`, `1234-5678` or `1234 5678`, else `null`. */
@@ -89,11 +98,10 @@ export function parseConnectInput(serverUrl: string | null | undefined, input: s
     if (split.pin && linkPin && split.pin !== linkPin) {
       throw new Error("The server address and the connect link carry different pins.");
     }
-    return {
-      credential: { kind: "code", code },
-      serverUrl: given ?? connectLinkBase(text.slice(0, at)),
-      pin: split.pin ?? linkPin,
-    };
+    const url = given ?? connectLinkBase(text.slice(0, at));
+    const pin = split.pin ?? linkPin;
+    if (url) requireHttpsForPin(url, pin);
+    return { credential: { kind: "code", code }, serverUrl: url, pin };
   }
 
   const code = connectCodeDigits(text);

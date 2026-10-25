@@ -51,6 +51,11 @@ describe("parseConnectInput", () => {
     expect(() => parseConnectInput(null, "https://h/connect#code=12345678&pin=abc")).toThrow();
     expect(() => parseConnectInput("https://h#pin=abc", "12345678")).toThrow();
 
+    // A pin never rides on plain HTTP, from the address or the link.
+    expect(() => parseConnectInput(`http://h#pin=${PIN}`, "12345678")).toThrow();
+    expect(() => parseConnectInput(null, `http://h:8766/connect#code=12345678&pin=${PIN}`)).toThrow();
+    expect(() => parseConnectInput("http://h:8766", link)).toThrow();
+
     expect(parseConnectInput(null, "12345678").pin).toBeNull();
   });
 

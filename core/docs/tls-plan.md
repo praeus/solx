@@ -384,6 +384,11 @@ web `/connect` page.
   falls back to other roots.
 - **Untrusted and unpinned** (`UnknownIssuer`): the error says to connect
   with a connect link, or set `server_ca_file`.
+- **Never over plain HTTP.** A pin on an `http://` address is refused when
+  parsed (`split_server_pin`, `parse_connect_input` and the TS twin), and a
+  pinned client is `https_only`, so a pin can't be silently dropped and a
+  code meant for a pinned server is never sent in cleartext. The registry
+  pins only `https://` links and addresses.
 
 #### Where the pin comes from
 

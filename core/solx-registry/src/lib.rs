@@ -299,7 +299,11 @@ impl Registry {
                 .map_err(map_db)?;
             if inserted == 1 {
                 tracing::info!(label = ?label, "token registry: created a connect code");
-                let tls_pin = self.tls_pin();
+                // Only on an https:// address: a client refuses a pin on
+                // plain HTTP.
+                let tls_pin = self
+                    .tls_pin()
+                    .filter(|_| base.as_deref().is_some_and(|b| b.starts_with("https://")));
                 let url = base.as_ref().map(|base| match &tls_pin {
                     Some(pin) => format!("{base}/connect#code={code}&pin={pin}"),
                     None => format!("{base}/connect#code={code}"),

@@ -580,9 +580,13 @@ pub fn parse_connect_input(server_url: Option<&str>, input: &str) -> Result<Conn
             }
             (a, b) => a.or(b),
         };
+        let server_url = given.or_else(|| connect_link_base(before));
+        if let Some(url) = &server_url {
+            require_https_for_pin(url, pin.as_deref())?;
+        }
         return Ok(ConnectInput {
             credential: ConnectCredential::Code(digits),
-            server_url: given.or_else(|| connect_link_base(before)),
+            server_url,
             pin,
         });
     }
@@ -615,13 +619,32 @@ pub fn is_pin(pin: &str) -> bool {
 
 /// `server_url` without its fragment and trailing slash, and the `pin` in
 /// its fragment, if any. A fragment's other parameters are dropped; a
-/// malformed pin is an error, never ignored.
+/// malformed pin, or a pin on anything but `https://`, is an error, never
+/// ignored.
 pub fn split_server_pin(server_url: &str) -> Result<(String, Option<String>)> {
     let (base, fragment) = server_url
         .trim()
         .split_once('#')
         .unwrap_or((server_url.trim(), ""));
-    Ok((base.trim_end_matches('/').to_string(), pin_param(fragment)?))
+    let base = base.trim_end_matches('/').to_string();
+    let pin = pin_param(fragment)?;
+    require_https_for_pin(&base, pin.as_deref())?;
+    Ok((base, pin))
+}
+
+/// A pin says the server must prove itself over TLS. Over `http://` it
+/// would protect nothing, and a code or token sent there travels in
+/// cleartext, so refuse rather than ignore it.
+fn require_https_for_pin(server_url: &str, pin: Option<&str>) -> Result<()> {
+    let https = server_url
+        .get(..8)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"));
+    if pin.is_some() && !https {
+        return Err(SolxError::Invalid(format!(
+            "{server_url} carries a server pin, but a pinned server must be reached over https://"
+        )));
+    }
+    Ok(())
 }
 
 /// `server_url` (any fragment dropped) with `#pin=<pin>` when there is a
@@ -972,6 +995,12 @@ mod tests {
         assert!(parse_connect_input(Some(&other), &link).is_err());
         assert!(parse_connect_input(None, "https://h/connect#code=12345678&pin=abc").is_err());
         assert!(parse_connect_input(Some("https://h#pin=abc"), "12345678").is_err());
+
+        // A pin never rides on plain HTTP, from the address or the link.
+        assert!(parse_connect_input(Some(&format!("http://h#pin={PIN}")), "12345678").is_err());
+        let plain_link = format!("http://h:8766/connect#code=12345678&pin={PIN}");
+        assert!(parse_connect_input(None, &plain_link).is_err());
+        assert!(parse_connect_input(Some("http://h:8766"), &link).is_err());
 
         assert_eq!(parse_connect_input(None, "12345678").unwrap().pin, None);
     }
