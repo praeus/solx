@@ -233,7 +233,6 @@ fn main() -> anyhow::Result<()> {
             }
             if ca.trusted_on_this_machine() == Some(true) {
                 eprintln!("Removing the root from this machine's trust store first.");
-                ca.untrust_on_this_machine()?;
             }
             ca.delete()?;
             println!("Deleted the certificate authority in {}.", dir.display());

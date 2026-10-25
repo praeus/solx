@@ -148,6 +148,11 @@ impl KeyBackend for CngBackend {
         remove_from_store("My", sha256)
     }
 
+    fn cert_installed(&self, sha256: &str) -> bool {
+        // An unreadable store counts as present: reissuing wouldn't help.
+        find_in_store("My", sha256).map_or(true, |c| c.is_some())
+    }
+
     fn describe_key(&self, key: &KeyRef) -> KeyReport {
         let Ok((provider, container)) = cng_ref(key) else {
             return KeyReport {

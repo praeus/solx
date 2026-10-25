@@ -185,9 +185,13 @@ solx token clients                        # on the server: list devices
 solx token revoke <id>                    #   ...and cut one off
 ```
 
-The laptop has to trust the server's certificate authority: point
-`server_ca_file` (or `SOLX_CA_FILE`) at a copy of the server's
-`solx-root.crt`, or import it into the laptop's trust store. See
+With TLS on, the connect link carries the server's pin
+(`…/connect#code=…&pin=…`), so `solx connect '<link>'` needs no certificate
+setup: the laptop then trusts only that server's certificate authority, for
+that server. Typing the address and code instead needs the address with its
+pin (`https://server:8766#pin=…`, which Settings copies), or a laptop that
+already trusts the root through `server_ca_file`/`SOLX_CA_FILE` or its trust
+store. See
 [docs/http-api.md](docs/http-api.md#serving-other-machines) for the
 details. See [solx-cli/examples/](solx-cli/examples/) for runnable end-to-end
 scripts covering each action kind.

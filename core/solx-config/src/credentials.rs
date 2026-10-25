@@ -258,7 +258,9 @@ fn root_account(config: &ConfigService) -> String {
 }
 
 fn client_account(config: &ConfigService, server_url: &str) -> String {
-    let url = server_url.trim().trim_end_matches('/');
+    // A `#pin=` doesn't make it another server.
+    let url = server_url.split('#').next().unwrap_or_default();
+    let url = url.trim().trim_end_matches('/');
     format!("client:{}:{url}", appdata_key(config))
 }
 
@@ -530,37 +532,62 @@ pub enum ConnectCredential {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectInput {
     pub credential: ConnectCredential,
+    /// Without a `#pin=`; that is in `pin`.
     pub server_url: Option<String>,
+    /// The server's root pin, from the link or the server address.
+    pub pin: Option<String>,
 }
 
 /// Classify the single connect field, shared by the CLI and the desktop
 /// client (`web/web/src/api/connectInput.ts` is the TypeScript twin, with
 /// the same test cases):
 /// - a link containing `#code=` is a code, and its origin becomes the
-///   server URL when `server_url` is empty;
+///   server URL when `server_url` is empty. Its `&pin=`, if any, is the
+///   server's root pin;
 /// - exactly 8 digits once spaces and dashes are removed is a code;
 /// - anything else non-empty is a token, trimmed.
+///
+/// `server_url` may carry a pin too (`https://host:8766#pin=…`). A pin in
+/// both places must be the same pin.
 ///
 /// Tokens are 44-character base64, never exactly 8 digits, so this can't
 /// be ambiguous. A malformed code (7 digits, say) comes back as a token and
 /// fails verification like any other wrong token.
 pub fn parse_connect_input(server_url: Option<&str>, input: &str) -> Result<ConnectInput> {
-    let given = server_url
-        .map(|u| u.trim().trim_end_matches('/'))
-        .filter(|u| !u.is_empty())
-        .map(String::from);
+    let (given, given_pin) = match server_url.map(str::trim).filter(|u| !u.is_empty()) {
+        Some(url) => {
+            let (base, pin) = split_server_pin(url)?;
+            (Some(base), pin)
+        }
+        None => (None, None),
+    };
     let input = input.trim();
     if input.is_empty() {
         return Err(SolxError::Invalid(
             "enter a connect code, a connect link or a token".into(),
         ));
     }
-    if let Some((before, code)) = input.split_once("#code=") {
+    if let Some((before, fragment)) = input.split_once("#code=") {
+        let (code, rest) = fragment.split_once('&').unwrap_or((fragment, ""));
         let digits = connect_code_digits(code)
             .ok_or_else(|| SolxError::Invalid("the connect link's code is not 8 digits".into()))?;
+        let link_pin = pin_param(rest)?;
+        let pin = match (given_pin, link_pin) {
+            (Some(a), Some(b)) if a != b => {
+                return Err(SolxError::Invalid(
+                    "the server address and the connect link carry different pins".into(),
+                ))
+            }
+            (a, b) => a.or(b),
+        };
+        let server_url = given.or_else(|| connect_link_base(before));
+        if let Some(url) = &server_url {
+            require_https_for_pin(url, pin.as_deref())?;
+        }
         return Ok(ConnectInput {
             credential: ConnectCredential::Code(digits),
-            server_url: given.or_else(|| connect_link_base(before)),
+            server_url,
+            pin,
         });
     }
     let credential = match connect_code_digits(input) {
@@ -570,7 +597,82 @@ pub fn parse_connect_input(server_url: Option<&str>, input: &str) -> Result<Conn
     Ok(ConnectInput {
         credential,
         server_url: given,
+        pin: given_pin,
     })
+}
+
+// ── pins ─────────────────────────────────────────────────────────────────────
+//
+// A pin is `base64url(SHA-256(root SubjectPublicKeyInfo))`, unpadded: the
+// root a server's TLS chain must end in (see `docs/tls-plan.md`). It
+// travels as a URL fragment, `https://host:8766#pin=…`, in connect links,
+// in `server_url` and in `SOLX_SERVER_URL`, so a pinned client stores it
+// wherever it stores the URL. A fragment is never sent to the server.
+
+/// Whether `pin` looks like a pin: 43 base64url characters (32 bytes).
+pub fn is_pin(pin: &str) -> bool {
+    pin.len() == 43
+        && base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(pin)
+            .is_ok_and(|bytes| bytes.len() == 32)
+}
+
+/// `server_url` without its fragment and trailing slash, and the `pin` in
+/// its fragment, if any. A fragment's other parameters are dropped; a
+/// malformed pin, or a pin on anything but `https://`, is an error, never
+/// ignored.
+pub fn split_server_pin(server_url: &str) -> Result<(String, Option<String>)> {
+    let (base, fragment) = server_url
+        .trim()
+        .split_once('#')
+        .unwrap_or((server_url.trim(), ""));
+    let base = base.trim_end_matches('/').to_string();
+    let pin = pin_param(fragment)?;
+    require_https_for_pin(&base, pin.as_deref())?;
+    Ok((base, pin))
+}
+
+/// A pin says the server must prove itself over TLS. Over `http://` it
+/// would protect nothing, and a code or token sent there travels in
+/// cleartext, so refuse rather than ignore it.
+fn require_https_for_pin(server_url: &str, pin: Option<&str>) -> Result<()> {
+    let https = server_url
+        .get(..8)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"));
+    if pin.is_some() && !https {
+        return Err(SolxError::Invalid(format!(
+            "{server_url} carries a server pin, but a pinned server must be reached over https://"
+        )));
+    }
+    Ok(())
+}
+
+/// `server_url` (any fragment dropped) with `#pin=<pin>` when there is a
+/// pin.
+pub fn with_server_pin(server_url: &str, pin: Option<&str>) -> String {
+    let base = server_url.split('#').next().unwrap_or_default();
+    let base = base.trim().trim_end_matches('/');
+    match pin {
+        Some(pin) => format!("{base}#pin={pin}"),
+        None => base.to_string(),
+    }
+}
+
+/// The `pin` among `&`-separated `key=value` fragment parameters.
+fn pin_param(fragment: &str) -> Result<Option<String>> {
+    let Some(pin) = fragment
+        .split('&')
+        .find_map(|param| param.strip_prefix("pin="))
+    else {
+        return Ok(None);
+    };
+    let pin = pin.trim();
+    if !is_pin(pin) {
+        return Err(SolxError::Invalid(format!(
+            "{pin:?} is not a server pin (43 base64url characters)"
+        )));
+    }
+    Ok(Some(pin.to_string()))
 }
 
 /// The server a connect link (`<public url>/connect`, fragment already cut
@@ -867,6 +969,63 @@ mod tests {
         );
 
         assert!(parse_connect_input(None, "http://h/connect#code=123").is_err());
+    }
+
+    const PIN: &str = "q83vASNFZ4mrze8BI0VniavN7wEjRWeJq83vASNFZ4k";
+
+    #[test]
+    fn a_pin_comes_from_the_link_or_the_server_address() {
+        let link = format!("https://10.0.0.5:8766/connect#code=12345678&pin={PIN}");
+        let parsed = parse_connect_input(None, &link).unwrap();
+        assert_eq!(parsed.credential, code("12345678"));
+        assert_eq!(parsed.server_url.as_deref(), Some("https://10.0.0.5:8766"));
+        assert_eq!(parsed.pin.as_deref(), Some(PIN));
+
+        let address = format!("https://10.0.0.5:8766/#pin={PIN}");
+        let parsed = parse_connect_input(Some(&address), "1234-5678").unwrap();
+        assert_eq!(parsed.server_url.as_deref(), Some("https://10.0.0.5:8766"));
+        assert_eq!(parsed.pin.as_deref(), Some(PIN));
+        let parsed = parse_connect_input(Some(&address), &generate_token()).unwrap();
+        assert_eq!(parsed.pin.as_deref(), Some(PIN));
+
+        // The same pin twice is fine; a different one, or a malformed one,
+        // is refused.
+        assert!(parse_connect_input(Some(&address), &link).is_ok());
+        let other = format!("https://h#pin={}", "A".repeat(43));
+        assert!(parse_connect_input(Some(&other), &link).is_err());
+        assert!(parse_connect_input(None, "https://h/connect#code=12345678&pin=abc").is_err());
+        assert!(parse_connect_input(Some("https://h#pin=abc"), "12345678").is_err());
+
+        // A pin never rides on plain HTTP, from the address or the link.
+        assert!(parse_connect_input(Some(&format!("http://h#pin={PIN}")), "12345678").is_err());
+        let plain_link = format!("http://h:8766/connect#code=12345678&pin={PIN}");
+        assert!(parse_connect_input(None, &plain_link).is_err());
+        assert!(parse_connect_input(Some("http://h:8766"), &link).is_err());
+
+        assert_eq!(parse_connect_input(None, "12345678").unwrap().pin, None);
+    }
+
+    #[test]
+    fn pins_ride_on_the_server_url() {
+        let pinned = with_server_pin("https://h:8766/", Some(PIN));
+        assert_eq!(pinned, format!("https://h:8766#pin={PIN}"));
+        assert_eq!(
+            split_server_pin(&pinned).unwrap(),
+            ("https://h:8766".to_string(), Some(PIN.to_string()))
+        );
+        assert_eq!(with_server_pin(&pinned, None), "https://h:8766");
+        assert_eq!(
+            split_server_pin("http://h").unwrap(),
+            ("http://h".to_string(), None)
+        );
+
+        // The token saved for a server is found with or without its pin.
+        let (_dir, cfg) = config();
+        set_client_token(&cfg, "https://h:8766", "tok").unwrap();
+        assert_eq!(
+            stored_client_token(&cfg, &pinned).as_deref(),
+            Some("tok")
+        );
     }
 
     #[test]

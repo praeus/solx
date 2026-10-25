@@ -63,6 +63,13 @@ pub(crate) trait KeyBackend {
     /// hex). Not finding it is not an error.
     fn remove_cert(&self, sha256: &str) -> Result<()>;
 
+    /// Whether an installed certificate is still where
+    /// [`install_cert`](Self::install_cert) put it. Always true for
+    /// backends whose certificates are only files.
+    fn cert_installed(&self, _sha256: &str) -> bool {
+        true
+    }
+
     fn describe_key(&self, key: &KeyRef) -> KeyReport;
 
     /// Remove anything this backend keeps outside the directory, apart from

@@ -663,8 +663,12 @@ plan's "Follow-on" section uses them for two more things:
   (gap 7);
 - scoping `get-env`/`set-env` (gap 6).
 
-TLS serving is in place (§3.2). Pinning the server's root during the
-exchange is planned separately, in [tls-plan.md](tls-plan.md) phase 4.
+TLS serving is in place (§3.2), and solx clients pin the server's root
+([tls-plan.md](tls-plan.md), "Pinning"). A connect link and an issued
+token's `server_url` carry the pin as a URL fragment (`#pin=`), so it
+arrives out of band with the credential; a pinned client checks it in the
+handshake, before the code or token is sent, and trusts no other root for
+that server.
 
 ## 9. Known gaps
 
@@ -698,10 +702,11 @@ These are accepted for now. Each one is a candidate for future hardening.
 8. **Command children inherit solx's environment**, and timeouts don't kill
    process trees (§4.1).
 9. **Off-loopback TLS is opt-in** (automatic in the desktop app on
-   Windows); plain HTTP is accepted only from loopback peers (§3.2). solx
-   clients don't pin the server's root yet ([tls-plan.md](tls-plan.md)
-   phase 4): they trust the built-in roots, the OS trust store and
-   `server_ca_file`/`SOLX_CA_FILE`.
+   Windows); plain HTTP is accepted only from loopback peers (§3.2). A solx
+   client given a bare `https://` address and a token, with no pin, trusts
+   the built-in roots, the OS trust store and `server_ca_file`/
+   `SOLX_CA_FILE`. A typed code with no pin has no trust on first use: it
+   needs the root already trusted, or the pinned address.
 10. **Bearer-style loopback ids** for streams, consoles and OAuth (§6).
 11. **No general rate limiting or audit log** on `solx-server`. Only
     `/auth/exchange` is throttled. Root-token rotation exists but only takes

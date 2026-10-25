@@ -108,10 +108,20 @@ keys (the CA's on the TPM when there is one); elsewhere they are PEM files.
 PEM files made with OpenSSL work too, through `cert_file`/`key_file`.
 
 **Clients.** solx's own clients (`solx-cli`, the desktop client, the Node
-bindings) trust the built-in roots, the OS trust store, and the PEM file
-named by `server_ca_file` in their config or `SOLX_CA_FILE`. Point either at
-a copy of the server's `solx-root.crt`. Browsers and other HTTPS clients,
-such as an MCP client, need the root in the OS or browser trust store:
+bindings) **pin** the server's root when they have its pin: a server URL
+written as `https://host:8766#pin=<pin>` (in `solx connect`, the desktop
+client's address field, `server_url`, or `SOLX_SERVER_URL`) trusts only the
+certificate authority with that public key, which the server sends in its
+chain, and fails with "the server's certificate authority changed" for any
+other. The pin is `base64url(SHA-256(root SPKI))`, as `solx-certs` and
+Settings show it; connect links, `create-connect-code`, `issue-client` and
+`/auth/exchange` hand it out with `server_tls: "auto"`. Saved connections
+keep the pin on `server_url`.
+
+Without a pin they trust the built-in roots, the OS trust store, and the PEM
+file named by `server_ca_file` in their config or `SOLX_CA_FILE`. Browsers
+and other HTTPS clients, such as an MCP client, need the root in the OS or
+browser trust store:
 
 - Windows: `certutil -user -addstore Root solx-root.crt`, or "Trust on this
   machine" in the desktop app on the server itself
@@ -120,20 +130,22 @@ such as an MCP client, need the root in the OS or browser trust store:
   `sudo update-ca-certificates`
 - Firefox: Settings → Privacy & Security → Certificates → Import
 
-Importing the root trusts it for every site on that machine, so prefer
-`server_ca_file` where it's enough. curl on Windows (Schannel) also needs
+Importing the root trusts it for every site on that machine, so prefer a
+pin, or `server_ca_file`, where it's enough. curl on Windows (Schannel) also needs
 `--ssl-no-revoke`, because the certificates name no revocation endpoint.
 
 ### Connecting another device
 
 | Method | Route | Body | Returns |
 | --- | --- | --- | --- |
-| `POST` | `/auth/exchange` | `{"code": "1234-5678"}` | `{token, client_id, expires_at, server_url}` |
+| `POST` | `/auth/exchange` | `{"code": "1234-5678"}` | `{token, client_id, expires_at, server_url, tls_pin}` |
 | `GET` | `/connect` | — | a static HTML page |
 
 `/auth/exchange` redeems a connect code for a client token. It needs no
 bearer token. Spaces and dashes in the code are ignored. `server_url` is
-`server_public_url` if set, else the address the request reached. A wrong,
+`server_public_url` if set, else the address the request reached. `tls_pin`
+is the server's root pin with `server_tls: "auto"`, else `null`; a client
+that had no pin keeps it for an `https://` server. A wrong,
 expired or spent code is a `401`; the same peer's next attempt within a
 second is a `429`. Every failure, from any peer and any solx process on the
 host, counts against a global budget: after 10, every pending code is
@@ -148,7 +160,10 @@ pages without submitting forms, so they can't spend a code.
 Codes and client tokens are created by four root-only actions under
 `/builtin/auth`: `create-connect-code {label?, code_ttl_secs?,
 token_ttl_secs?, public_url?}`, `list-clients`, `revoke-client {id}` and
-`issue-client {label, token_ttl_secs?}`. They refuse every caller except the
+`issue-client {label, token_ttl_secs?}`. With `server_tls: "auto"`, a
+connect code's `url` ends in `&pin=<pin>` and it has a `tls_pin`, and
+`issue-client` returns `tls_pin` and a `server_url` with `#pin=`, so a
+token handed over by hand is pinned too. They refuse every caller except the
 root token (over REST or `/mcp`) and the trusted local entry points that run
 them as root: `solx token …` and the desktop Settings window's `auth_exec`.
 A client token, an action token, an action calling them and a local call

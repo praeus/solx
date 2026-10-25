@@ -245,16 +245,21 @@ async fn run_connect(target: String, credential: Option<String>, print: bool) ->
     let mut server_url = parsed
         .server_url
         .context("no server address: pass the server's URL, or a connect link")?;
+    let mut pin = parsed.pin;
 
     let (token, client_id, expires_at) = match parsed.credential {
         ConnectCredential::Code(code) => {
-            let http = solx_client::http_client_for(config.server_ca_file().as_deref())?;
+            // Pinned before the code is sent: a server without the pinned
+            // root never sees it.
+            let http =
+                solx_client::http_client_for(config.server_ca_file().as_deref(), pin.as_deref())?;
             let exchanged = solx_client::exchange_connect_code(&http, &server_url, &code)
                 .await
                 .context("redeem the connect code")?;
-            if let Some(url) = exchanged.server_url.filter(|u| !u.trim().is_empty()) {
-                server_url = url;
+            if let Some(url) = exchanged.server_url.as_ref().filter(|u| !u.trim().is_empty()) {
+                server_url = url.clone();
             }
+            pin = pin.or_else(|| exchanged.adopted_pin(&server_url));
             (
                 exchanged.token,
                 Some(exchanged.client_id),
@@ -267,7 +272,8 @@ async fn run_connect(target: String, credential: Option<String>, print: bool) ->
         return Ok(Value::String(token));
     }
 
-    let app = App::remote(config.clone(), server_url.clone(), token.clone())?;
+    let pinned_url = credentials::with_server_pin(&server_url, pin.as_deref());
+    let app = App::remote(config.clone(), pinned_url.clone(), token.clone())?;
     if let Err(e) = app
         .docs()
         .list(solx_surface::query::ListOptions {
@@ -288,11 +294,12 @@ async fn run_connect(target: String, credential: Option<String>, print: bool) ->
         bail!("{server_url} did not accept the credential{hint}: {e}");
     }
     credentials::set_client_token(&config, &server_url, &token)?;
-    config.set("server_url", Value::String(server_url.clone()))?;
+    config.set("server_url", Value::String(pinned_url))?;
     Ok(json!({
         "connected": server_url,
         "client_id": client_id,
         "expires_at": expires_at,
+        "pinned": pin.as_deref().map(solx_client::fingerprint_of_pin),
         "note": "solx on this machine now uses that server; remove server_url from \
                  solx-config.json to go back to local storage",
     }))

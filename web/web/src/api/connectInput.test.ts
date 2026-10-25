@@ -31,6 +31,34 @@ describe("parseConnectInput", () => {
     expect(() => parseConnectInput(null, "http://h/connect#code=123")).toThrow();
   });
 
+  const PIN = "q83vASNFZ4mrze8BI0VniavN7wEjRWeJq83vASNFZ4k";
+
+  test("a pin comes from the link or the server address", () => {
+    const link = `https://10.0.0.5:8766/connect#code=12345678&pin=${PIN}`;
+    let parsed = parseConnectInput(null, link);
+    expect(parsed.credential).toEqual(code("12345678"));
+    expect(parsed.serverUrl).toBe("https://10.0.0.5:8766");
+    expect(parsed.pin).toBe(PIN);
+
+    const address = `https://10.0.0.5:8766/#pin=${PIN}`;
+    parsed = parseConnectInput(address, "1234-5678");
+    expect(parsed.serverUrl).toBe("https://10.0.0.5:8766");
+    expect(parsed.pin).toBe(PIN);
+
+    // The same pin twice is fine; a different one, or a malformed one, is refused.
+    expect(() => parseConnectInput(address, link)).not.toThrow();
+    expect(() => parseConnectInput(`https://h#pin=${"A".repeat(43)}`, link)).toThrow();
+    expect(() => parseConnectInput(null, "https://h/connect#code=12345678&pin=abc")).toThrow();
+    expect(() => parseConnectInput("https://h#pin=abc", "12345678")).toThrow();
+
+    // A pin never rides on plain HTTP, from the address or the link.
+    expect(() => parseConnectInput(`http://h#pin=${PIN}`, "12345678")).toThrow();
+    expect(() => parseConnectInput(null, `http://h:8766/connect#code=12345678&pin=${PIN}`)).toThrow();
+    expect(() => parseConnectInput("http://h:8766", link)).toThrow();
+
+    expect(parseConnectInput(null, "12345678").pin).toBeNull();
+  });
+
   test("a 44-character base64 token is a token", () => {
     const token = "q2Vq7Jx0bN3m1u5bWb0i8l0S2x4lQe9oZ7mT1aYk3cE=";
     expect(token.length).toBe(44);
