@@ -13,28 +13,32 @@ use std::sync::Arc;
 use base64::Engine as _;
 use serde_json::{json, Value};
 use solx_surface::managers::FileStore;
+use solx_surface::Actor;
 
 use super::require_str;
 use crate::LocalActionManager;
 
-/// Refuse when any of `targets` is a locked action's pinned artifact.
+/// Refuse when `actor` may not write or delete any of `targets` — see
+/// `LocalActionManager::authorize_file_change`.
 async fn guard_pinned<'a>(
     local: &LocalActionManager,
+    actor: Actor<'_>,
     targets: impl IntoIterator<Item = &'a str>,
 ) -> Result<(), String> {
     local
-        .guard_pinned_files(targets)
+        .authorize_file_change(actor, targets)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(super::denial)
 }
 
 pub(super) async fn file_put(
     params: &Value,
     files: &Arc<dyn FileStore>,
     local: &LocalActionManager,
+    actor: Actor<'_>,
 ) -> Result<Value, String> {
     let rel_path = require_str(params, "rel_path")?;
-    guard_pinned(local, [rel_path]).await?;
+    guard_pinned(local, actor, [rel_path]).await?;
     let content = require_str(params, "content")?;
     let encoding = params
         .get("encoding")
@@ -75,9 +79,10 @@ pub(super) async fn file_delete(
     params: &Value,
     files: &Arc<dyn FileStore>,
     local: &LocalActionManager,
+    actor: Actor<'_>,
 ) -> Result<Value, String> {
     let rel_path = require_str(params, "rel_path")?;
-    guard_pinned(local, [rel_path]).await?;
+    guard_pinned(local, actor, [rel_path]).await?;
     files.delete(rel_path).await.map_err(|e| e.to_string())?;
     Ok(json!({ "deleted": true }))
 }
@@ -92,10 +97,11 @@ pub(super) async fn file_copy(
     params: &Value,
     files: &Arc<dyn FileStore>,
     local: &LocalActionManager,
+    actor: Actor<'_>,
 ) -> Result<Value, String> {
     let source = require_str(params, "source")?;
     let dest = require_str(params, "dest")?;
-    guard_pinned(local, [dest]).await?;
+    guard_pinned(local, actor, [dest]).await?;
     let bytes = files.get(source).await.map_err(|e| e.to_string())?;
     files.put(dest, bytes).await.map_err(|e| e.to_string())?;
     Ok(json!({ "dest": dest }))
@@ -107,6 +113,7 @@ pub(super) async fn dir_copy(
     params: &Value,
     files: &Arc<dyn FileStore>,
     local: &LocalActionManager,
+    actor: Actor<'_>,
 ) -> Result<Value, String> {
     let source = require_str(params, "source")?;
     let dest = require_str(params, "dest")?;
@@ -123,7 +130,7 @@ pub(super) async fn dir_copy(
             (entry, format!("{dest_prefix}/{rel}"))
         })
         .collect();
-    guard_pinned(local, pairs.iter().map(|(_, dest)| dest.as_str())).await?;
+    guard_pinned(local, actor, pairs.iter().map(|(_, dest)| dest.as_str())).await?;
     let mut copied = Vec::with_capacity(pairs.len());
     for (entry, dest_entry) in pairs {
         let bytes = files.get(entry).await.map_err(|e| e.to_string())?;
@@ -146,6 +153,7 @@ pub(super) async fn dir_delete(
     params: &Value,
     files: &Arc<dyn FileStore>,
     local: &LocalActionManager,
+    actor: Actor<'_>,
 ) -> Result<Value, String> {
     let rel_path = require_str(params, "rel_path")?;
     let prefix = rel_path.trim_end_matches('/');
@@ -157,7 +165,7 @@ pub(super) async fn dir_delete(
         .iter()
         .filter(|entry| *entry != prefix && entry.starts_with(&format!("{prefix}/")))
         .collect();
-    guard_pinned(local, entries.iter().map(|e| e.as_str())).await?;
+    guard_pinned(local, actor, entries.iter().map(|e| e.as_str())).await?;
     let mut deleted = Vec::with_capacity(entries.len());
     for entry in entries {
         files.delete(entry).await.map_err(|e| e.to_string())?;

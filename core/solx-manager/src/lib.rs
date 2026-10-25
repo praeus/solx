@@ -61,7 +61,7 @@ pub struct App {
     #[cfg(feature = "registry")]
     registry: Option<Arc<solx_registry::Registry>>,
     /// The concrete action manager behind `actions`, for checks that aren't
-    /// on the `ActionManager` trait (`guard_pinned_files`). `Some` only for
+    /// on the `ActionManager` trait (`authorize_*_change`). `Some` only for
     /// local wiring; a remote host enforces them itself.
     #[cfg(feature = "local")]
     local_actions: Option<Arc<LocalActionManager>>,
@@ -304,50 +304,45 @@ async fn build_authority(config: &Arc<ConfigService>) -> Result<BuiltAuthority> 
 }
 
 impl App {
-    /// Refuse, for content, a write or delete of any of `targets` that is a
-    /// locked action's pinned artifact — see
-    /// `solx_actions::LocalActionManager::guard_pinned_files`. A no-op for a
-    /// remote app, whose server enforces it.
-    pub async fn guard_pinned_files(&self, targets: &[&str]) -> solx_surface::error::Result<()> {
+    /// Refuse a write or delete of any of `targets` that `actor` may not
+    /// make: for content, a locked action's pinned artifact. See
+    /// `solx_actions::LocalActionManager::authorize_file_change`. A no-op
+    /// for a remote app, whose server authorizes the request itself.
+    pub async fn authorize_file_change(
+        &self,
+        actor: solx_surface::Actor<'_>,
+        targets: &[&str],
+    ) -> solx_surface::error::Result<()> {
         #[cfg(feature = "local")]
         if let Some(local) = &self.local_actions {
-            return local.guard_pinned_files(targets.iter().copied()).await;
+            return local
+                .authorize_file_change(actor, targets.iter().copied())
+                .await;
         }
-        let _ = targets;
+        let _ = (actor, targets);
         Ok(())
     }
 
-    /// Refuse, for content, a save (`incoming`) or delete (`None`) of the
-    /// action at `path`/`name` that only an operator may make: any change
-    /// to a locked action, locking or unlocking, a save of a keyed action,
-    /// and anything under `/packages/`. See
-    /// `solx_actions::guard_content_action_change`. A no-op for a remote
-    /// app, whose server applies the same checks to anything but the root
-    /// token.
-    pub async fn guard_content_action_change(
+    /// Refuse a save (`incoming`) or delete (`None`) of the action at
+    /// `path`/`name` that `actor` may not make. For content: any change to a
+    /// locked action, locking or unlocking, a save of a keyed action, and
+    /// anything under another package's `/packages/<name>/`. See
+    /// `solx_actions::check_action_change`. A no-op for a remote app, whose
+    /// server authorizes the request itself.
+    pub async fn authorize_action_change(
         &self,
+        actor: solx_surface::Actor<'_>,
         path: &str,
         name: &str,
         incoming: Option<&solx_surface::entities::ActionInput>,
     ) -> solx_surface::error::Result<()> {
         #[cfg(feature = "local")]
-        if self.local_actions.is_some() {
-            use solx_surface::error::SolxError;
-            let existing = match self.actions.get(path, name).await {
-                Ok(a) => Some(a),
-                Err(SolxError::NotFound(_)) => None,
-                Err(e) => return Err(e),
-            };
-            solx_actions::guard_content_action_change(
-                existing.as_ref(),
-                incoming,
-                path,
-                name,
-                None,
-            )
-            .map_err(SolxError::Unauthorized)?;
+        if let Some(local) = &self.local_actions {
+            return local
+                .authorize_action_change(actor, path, name, incoming)
+                .await;
         }
-        let _ = (path, name, incoming);
+        let _ = (actor, path, name, incoming);
         Ok(())
     }
 

@@ -1,24 +1,24 @@
 //! Entity CRUD and search built-ins: documents, types, actions.
 //!
-//! The `entity-save-action` / `entity-delete-action` handlers apply the
-//! shell-/webhook-guard that prevents an MCP tool call, a WASM guest, or a
+//! The `entity-save-action` / `entity-delete-action` handlers authorize as
+//! [`Actor::Builtin`], which keeps an MCP tool call, a WASM guest, or a
 //! `.solx` script from creating or modifying an executable action — see
-//! [`super::guard_executable_action`] for the shared helper.
+//! [`crate::check_action_change`].
 
 use std::sync::Arc;
 
 use serde_json::{json, Value};
 use solx_config::{ConfigService, EntityKind};
 use solx_surface::entities::{ActionInput, TypeInput};
-use solx_surface::error::SolxError;
 use solx_surface::managers::{ActionManager, DocManager, TypeManager};
-use solx_surface::ExecContext;
 use solx_surface::query::{ActionSearchQuery, ListOptions, SearchQuery};
+use solx_surface::Actor;
 
 use solx_surface::entities::DocumentInput;
 
 use super::exclude::{apply_action_search, apply_doc_search, apply_list};
-use super::{guard_executable_action, parse_input, path_or_root, require_str, to_value};
+use super::{denial, parse_input, path_or_root, require_str, to_value};
+use crate::LocalActionManager;
 
 /// Parse a `ListOptions` and expand its `excludeMode` for `kind`.
 fn list_opts(
@@ -144,59 +144,26 @@ pub(super) async fn type_paths(
 
 // ── action CRUD ──────────────────────────────────────────────────────────────
 //
-// `action_save` / `action_delete` apply the executable-action guard that
-// closes MCP/guest/script routes to creating, modifying, or removing
-// Command and Webhook actions — see `super::guard_executable_action`.
-//
-// The guard lives *here*, on the built-in, rather than in the managers,
-// because this built-in is the only route to action creation those callers
-// have: a WASM guest imports nothing but `action-exec`, a `.solx` script
-// composes actions, and an MCP client calls action rows. Everything they can
-// do arrives through this function.
-//
-// The CLI and the HTTP surface deliberately do **not** apply that one
-// guard. Both call `ActionManager::save` directly, which is what lets
-// `solx save action` register a Command, and equally what lets solx-web's
-// action editor and solx-quickjs write rows over `PUT /actions/{ref}` (known
-// gap 7 in docs/security-design.md).
-//
-// Every content guard besides it is shared with HTTP (for anyone but the
-// root token) and the desktop app's main window, and this built-in applies
-// it always, whatever principal the chain carries: no write under another
-// package's `/packages/<name>/`, no keyed action, no change to a locked
-// one. See `crate::guard_content_action_change`.
+// These built-ins are the only route to action creation an MCP client, a
+// WASM guest or a `.solx` script has: a guest imports nothing but
+// `action-exec`, a script composes actions, and an MCP client calls action
+// rows. They authorize as `Actor::Builtin` whatever principal the chain
+// carries, which adds a refusal of Command and Webhook rows to the content
+// checks REST and the desktop app share — see `crate::check_action_change`.
 
 pub(super) async fn action_save(
     params: &Value,
     actions: &Arc<dyn ActionManager>,
-    exec: &ExecContext,
+    local: &LocalActionManager,
+    actor: Actor<'_>,
 ) -> Result<Value, String> {
     let name = require_str(params, "name")?;
     let input: ActionInput = parse_input(params)?;
     let path = path_or_root(params);
-
-    // Apply the guards using the *existing* row (so a merge upsert that
-    // omits `action_type` can't silently rewrite what an established
-    // Command action shells out to) and the *incoming* one.
-    let existing = match actions.get(path, name).await {
-        Ok(a) => Some(a),
-        Err(SolxError::NotFound(_)) => None,
-        Err(e) => return Err(e.to_string()),
-    };
-    guard_executable_action(
-        existing.as_ref().and_then(|a| a.action_type),
-        input.action_type,
-        path,
-        name,
-        "create or modify",
-    )?;
-    crate::guard_content_action_change(
-        existing.as_ref(),
-        Some(&input),
-        path,
-        name,
-        crate::content::acting_action(exec),
-    )?;
+    local
+        .authorize_action_change(actor, path, name, Some(&input))
+        .await
+        .map_err(denial)?;
 
     let a = actions
         .save(path, name, input)
@@ -222,32 +189,15 @@ pub(super) async fn action_get(
 pub(super) async fn action_delete(
     params: &Value,
     actions: &Arc<dyn ActionManager>,
-    exec: &ExecContext,
+    local: &LocalActionManager,
+    actor: Actor<'_>,
 ) -> Result<Value, String> {
     let name = require_str(params, "name")?;
     let path = path_or_root(params);
-    // Same reasoning as `action_save`: if these callers can't create or
-    // modify an executable action, they shouldn't be able to remove one
-    // either.
-    let existing = match actions.get(path, name).await {
-        Ok(a) => Some(a),
-        Err(SolxError::NotFound(_)) => None,
-        Err(e) => return Err(e.to_string()),
-    };
-    guard_executable_action(
-        existing.as_ref().and_then(|a| a.action_type),
-        None,
-        path,
-        name,
-        "delete",
-    )?;
-    crate::guard_content_action_change(
-        existing.as_ref(),
-        None,
-        path,
-        name,
-        crate::content::acting_action(exec),
-    )?;
+    local
+        .authorize_action_change(actor, path, name, None)
+        .await
+        .map_err(denial)?;
     actions
         .delete(path, name)
         .await

@@ -1,10 +1,17 @@
 # Scoped tokens — design plan
 
-Status: **Proposed** (2026-10-24). Nothing here is implemented yet. This is
+Status: **Proposed** (2026-10-24). No scope code exists yet. This is
 the follow-on that [token-registry-plan.md](token-registry-plan.md) calls
 "authorization that the principal makes possible", and it closes the first
 gap in SECURITY.md's "What is not enforced": *client and action tokens
 aren't scoped*.
+
+Baseline: commit `51442d5` ("Lock keyed actions, confine package scripts
+and seal the built-in catalogue"), plus the authorization consolidation
+that followed it: `solx_surface::Actor` and the two `authorize_*_change`
+entry points (see "Where things stand"). Read
+[security-design.md](security-design.md) for the controls this plan sits
+on top of.
 
 ## Goal
 
@@ -27,6 +34,23 @@ the call against that set.
   declare `command_actions` and `allowed_base_urls` today. Install grants
   them and reports them.
 
+## Where things stand
+
+What this plan builds on, all present at the baseline:
+
+| Piece | Where | What it does today |
+|---|---|---|
+| `Principal` | `solx-surface/src/auth.rs` | `Root`, `Client { id, label }`, `Action { action_ref, invocation_id }`. `require_bearer` puts it in the request extensions. |
+| `ExecContext` / `ExecContextInfo` | `solx-surface/src/exec_context.rs` | Carries caller, principal and exclusion mode through every frame; `enter` replaces the caller at each Script/WASM frame; `resume` carries it across `action-start`. The ceiling becomes its fourth fact. |
+| `Actor` | `solx-surface/src/actor.rs` | Who is changing an action or a file: `Operator`, `Content { acting }`, `Builtin { acting }`. Built by `Actor::for_principal` (REST), `Actor::builtin(&ExecContext)` (built-ins) and the Tauri plugin's `CONTENT` constant (main window). |
+| `authorize_action_change` / `authorize_file_change` | `solx-actions/src/content.rs`, reached through `solx_manager::App` | **The only authorization calls** for action saves and deletes and for file writes and deletes, on every surface: REST `/actions` and `/files`, the entity and file built-ins, the Tauri main window. They read the stored row and run `check_action_change` (package namespace, keyed actions, locks, and Command/Webhook refusal for `Builtin`) or the pinned-artifact check. Operators pass. |
+| `enforce_scope` | `solx-actions/src/dispatch.rs` (`exec_as_with_inner`) | Runs on every frame and holds it to the tooling exclusions. The exec check goes beside it. |
+| `exclude::guard` / `exclude::apply` | `solx-server/src/routes/exclude.rs`; the built-ins' `apply_list`/`apply_*_search` (`solx-actions/src/internal/exclude.rs`); `App::guard_excluded`; MCP `explore_tools` | Exclusion checks on every single-entity call and list narrowing on every list, search and path facet. Resource scopes are applied inside these helpers. |
+| `include_paths` | `ListOptions`, `SearchQuery`, `ActionSearchQuery` in `solx-surface/src/query.rs` | Glob patterns combined with OR, then with AND against the rest of the query, at every SQL render site. Caller-settable today but unused outside tests; it becomes the server-set scope filter. |
+| `issue_action_token` | `solx-surface/src/auth.rs` trait; `solx-registry/src/lib.rs`; called from `run_command` in `solx-actions/src/exec.rs` | Issues and releases per-invocation tokens, stored in `solx-registry.db`'s `tokens` table. |
+| `secret_config::normalize` / `guard_keyed_action` | `solx-actions/src/secret_config.rs` | Validates `action_config` on save. `scopes` validation goes here. |
+| Package grants | `solx-packages/src/lib.rs` (`Grants`, `InstalledPackage`) | Grants and revokes `command_actions`/`allowed_base_urls` from the manifest; records them on the installed-package row. |
+
 ## Scope grammar
 
 ```
@@ -38,14 +62,25 @@ exec-scope     := "exec:" path
 ```
 
 - **Paths are segment-prefix matches**, normalised with
-  `solx_surface::path::normalize_path`. `exec:/builtin/web` admits
-  `/builtin/web/http-request` and `/builtin/web/stream/start` but not
-  `/builtin/webby/x`. An exact action reference such as
-  `exec:/builtin/web/http-request` admits only that action. `exec:/` admits
-  every action.
+  `solx_surface::path::normalize_path`. A scope path `P` admits an entity
+  when its full reference (`<path>/<name>`) is `P` or lies under `P/`, which
+  is the same as its folder being `P` or under it, or the entity itself
+  being `P`. Every kind of scope matches this one way:
+  - `exec:/builtin/web` admits `/builtin/web/http-request` and
+    `/builtin/web/stream/start` but not `/builtin/webby/x`;
+  - an exact action reference such as `exec:/builtin/web/http-request`
+    admits only that action, and `exec:/` admits every action;
+  - `read:document:/path` admits `/path/name`, `/path/sub/x` and an entity
+    named `path` at `/`, but not `/pathology/x`;
+  - `read:document:/path/name` admits exactly that document, plus anything
+    stored in a folder of that name.
+- **No wildcards.** `*`, `?` and `[` are rejected in scope paths, so there
+  is one matching rule, and a scope path can be turned into a list filter
+  without escaping (see "Narrowing lists").
 - **A resource scope with no path means `/`.** `read:document` is
   `read:document:/`. `write:document:/research` limits writes to that
-  subtree. For `file`, the path is the rel-path prefix under the files root.
+  subtree. For `file`, the path is the rel-path prefix under the files root,
+  matched by segment the same way.
 - **Scopes don't imply each other.** `write:document` doesn't imply
   `read:document`, and `exec:/` doesn't imply `write:action`. Presets (below)
   cover the common bundles, so the grammar can stay orthogonal.
@@ -94,24 +129,48 @@ preset later never widens an existing token.
 
 ## What a scope check covers
 
-### Resource scopes: one guard, called from REST and from the builtins
+### Where the checks plug in
 
-Add a guard next to `exclude::guard`/`exclude::apply`
-([solx-server/src/routes/exclude.rs](../solx-server/src/routes/exclude.rs)):
+**Rule: no new per-surface checks.** Every surface already names an
+[`Actor`](../solx-surface/src/actor.rs) and calls one `authorize_*` entry
+point. Scopes extend those, never the call sites:
 
-- `scope::require(scopes, Need::Read(Resource::Document, path))` for
-  single-entity routes. It returns 403 `{"kind":"forbidden", ...}`, which
-  needs a new `SolxError::Forbidden` so a client can tell "bad token" (401)
-  from "not allowed" (403).
-- `scope::narrow(scopes, Resource::Document, &mut opts)` for list, search
-  and path facets. It clamps `opts.path_prefix` to the granted paths, the
-  same way exclusions are applied, so a list returns only what the token can
-  read instead of failing.
+1. **`Actor` gains the ceiling.** `Content` and `Builtin` get
+   `ceiling: &Ceiling`. `Actor::for_principal` takes it from the token,
+   `Actor::builtin` from the `ExecContext`, and the Tauri `CONTENT`
+   constant uses `Ceiling::Unlimited` (the desktop app has no ceiling).
+2. **Action and file writes go through the existing entry points.** The
+   resource check (`write:action:<path>`, `write:file:<path>`), the kind
+   check and the delegation check go inside `check_action_change` and
+   `authorize_file_change`
+   ([solx-actions/src/content.rs](../solx-actions/src/content.rs)). No
+   route, built-in or Tauri command changes.
+3. **Documents, types and every read go through the exclusion helpers.**
+   Every single-entity read and write and every list, search and path-facet
+   call already runs an exclusion helper. That's 34 call sites:
+   - REST `exclude::guard`, `exclude::apply` and `apply_search` (17);
+   - the built-ins' `apply_list`, `apply_doc_search` and
+     `apply_action_search` (6);
+   - `App::guard_excluded` for Tauri and other hosts (10);
+   - MCP `explore_tools`' `exclusion_policy().apply` (1).
 
-The same calls go inside the entity builtins in
-[solx-actions/src/internal/entity.rs](../solx-actions/src/internal/entity.rs)
-and `doc_fields.rs`, reading the scopes from `InternalCallCtx`. Over MCP
-everything is an action exec, so the builtins are where most checks land.
+   Each helper gains an `actor` argument and applies the exclusions and the
+   scopes together:
+   - **Single entity** (the `guard` helpers): the read or write scope for
+     its resource must admit the entity, or 403.
+   - **Lists, searches and path facets** (the `apply` helpers): the query
+     is narrowed by writing `include_paths` (see "Narrowing lists").
+
+   This is a mechanical signature change at the existing call sites, not a
+   new call beside each one.
+4. **Refusals return 403.** Add a new `SolxError::Forbidden`, serialised as
+   `{"kind":"forbidden", ...}`, so a client can tell "bad token" (401) from
+   "not allowed" (403). The `authorize_*` functions return it for scope
+   failures; the existing guards keep their current errors.
+5. **Exec is checked in one place:** dispatch (below).
+
+Over MCP everything is an action exec, so the built-ins are where most
+checks land. They reach the same entry points with `Actor::builtin`.
 
 | Surface | Read | Write |
 |---|---|---|
@@ -125,6 +184,55 @@ everything is an action exec, so the builtins are where most checks land.
 
 `file-copy` and `dir-copy` need `read:file` on the source and `write:file`
 on the destination.
+
+### Narrowing lists
+
+Lists, searches and path facets are narrowed with the existing
+`include_paths` field on `ListOptions`, `SearchQuery` and
+`ActionSearchQuery` (`solx-surface/src/query.rs`). It becomes
+**server-set only**:
+
+- **Callers can't set it.** The field gets `#[serde(skip)]`, so neither a
+  REST query string, a built-in's params nor a remote `solx-client` request
+  can supply it. Nothing outside tests sets it today. Remove it from:
+  - the built-in `ListParams` schema (`solx-types/src/seed.rs`) and any
+    search params schemas that list it;
+  - the JS `@solx/surface` query type (`js/packages/surface/src/query.ts`)
+    and its test in `js/packages/http/test/http.test.ts`;
+  - the `includePaths=` part of `solx-server/tests/integration.rs`, which
+    becomes a scope test.
+
+  In-process Rust code can still set the field, since it's trusted.
+- **The exclusion helper writes it** from the actor's ceiling. For each
+  scope path `P` that grants the resource, it adds the patterns `P` and
+  `P/*`.
+  - The existing renderer (`include_conditions`/`pattern_matches_sql`)
+    matches each pattern against both the folder path and the full
+    reference. That gives exactly the semantics in "Scope grammar".
+  - Scope paths contain no glob characters, so nothing needs escaping.
+- **It narrows, never widens.** The patterns are combined with OR among
+  themselves: `read:document:/a` and `read:document:/b` admit either. The
+  group is then combined with AND against everything else: `pathPrefix`,
+  the exclusions, the caller's filters. A caller's `pathPrefix=/elsewhere`
+  therefore returns nothing rather than escaping the scope.
+- **No new SQL.** `ListOptions::to_sql` (list and path facets for every
+  store), document search (`solx-docs/src/lib.rs`) and action search
+  (`solx-actions/src/store.rs`) already render `include_paths`.
+- **Empty means unrestricted.** That's how the renderer treats an empty
+  list, and it's what an unlimited ceiling or a grant on `/` leaves. So a
+  ceiling that grants **no** read scope for the resource can't be expressed
+  as an empty list, and must be refused with 403 before the query runs.
+  Otherwise it fails open. Test this case explicitly.
+- **Files** have no SQL list. `FileStore::list(prefix)` results are
+  filtered in Rust by the same segment-prefix rule, in the file built-ins
+  and REST `/files`.
+
+Two limits to state in SECURITY.md:
+
+- **Links.** Reading a document returns the references it links to, which
+  may be outside the token's scope, never the linked documents' contents.
+- **Path facets** report only folders that hold an admitted entity, so a
+  scope never reveals the folders around it.
 
 ### Exec scopes: checked at dispatch, on every frame
 
@@ -210,12 +318,11 @@ writer's own ceiling:
   job a lock would, and it lets a builder rebuild the action it created.
   Actions with `secrets` keep their own root-only rule and lock, unchanged.
 
-The check runs wherever an action is saved or deleted for content: REST
-`/actions`, `entity-save-action` and `entity-delete-action`, alongside
-`guard_content_action_change`
-([solx-actions/src/content.rs](../solx-actions/src/content.rs)). It needs
-`ScopeSet::covers(&ScopeSet)`, the same subset-by-coverage test the package
-manifest check uses.
+The check goes in `check_action_change`
+([solx-actions/src/content.rs](../solx-actions/src/content.rs)), against
+the actor's ceiling, so it covers every surface that saves or deletes for
+content with no new call site. It needs `ScopeSet::covers(&ScopeSet)`, the
+same subset-by-coverage test the package manifest check uses.
 
 A declared list is a *ceiling*, not only a grant. A package action with
 `scopes: ["exec:/builtin/web/http-request"]` that tries `get-env` is
@@ -269,12 +376,14 @@ explicitly.
 
 - **`Principal`** (`solx-surface/src/auth.rs`): `Client` and `Action` gain
   `scopes: Arc<ScopeSet>`. `Root` stays scope-less and means everything.
-  `Principal` is compared with `==` in several routes
-  (`principal != Principal::Root`), which still works.
+  `Actor::for_principal` matches on `Principal::Root`, so routes no longer
+  compare principals themselves.
+- **`Actor`** (`solx-surface/src/actor.rs`): `Content` and `Builtin` gain
+  the ceiling (see "Where the checks plug in").
 - **`solx-surface/src/scope.rs`** (new): `Scope`, `ScopeSet` (parse,
-  display, serde as a list of strings), `Need`, `Ceiling`, and the
-  `require*`/`narrow` helpers. It has no I/O, so it is unit-testable on its
-  own.
+  display, serde as a list of strings), `Need`, `Ceiling`, and the pure
+  matching helpers the `authorize_*` functions call. It has no I/O, so it is
+  unit-testable on its own.
 - **`solx-registry.db`**: `tokens.scopes TEXT` and `connect_codes.scopes
   TEXT`, holding a JSON array.
   - The migration adds both columns as nullable. A `NULL` row means `all`,
@@ -301,10 +410,10 @@ point:
 - writes under `/packages/<other>/`. `guard_package_namespace` still
   applies on top of scopes.
 
-`entity-save-action`'s hard refusal of Command and Webhook rows
-(`guard_executable_action`) stays for in-process content: MCP tool calls,
-WASM guests and scripts. `write:command` and `write:webhook` take effect on
-REST, which is what `solx-mcp-actions` uses. That also closes known gap 7:
+The built-ins' hard refusal of Command and Webhook rows (`Actor::Builtin`
+in `check_action_change`) stays for in-process content: MCP tool calls,
+WASM guests and scripts. `write:command` and `write:webhook` take effect for
+`Actor::Content` on REST, which is what `solx-mcp-actions` uses. That also closes known gap 7:
 REST `/actions` save of a Command row by a client token, which is allowed
 today.
 
@@ -410,15 +519,23 @@ is needed.
 2. **Plumbing.**
    - `Principal` gets scopes, `ExecContext` gets a ceiling, and
      `ExecContextInfo` carries it through `resume`.
+   - `Actor` gets the ceiling; `Actor::for_principal`, `Actor::builtin` and
+     the Tauri `CONTENT` constant fill it in.
    - Registry columns and migration, scopes on `issue_action_token`.
    - The `X-Solx-Principal: none` fix.
    - Everything runs with `scope_enforcement = "off"`.
 3. **Checks.**
-   - Resource guards in REST routes and entity builtins, the exec check in
-     dispatch, kind checks on action save and delete, discovery filtering,
+   - Scope, kind and delegation checks inside `check_action_change` and
+     `authorize_file_change`.
+   - Resource scopes inside the exclusion helpers, which gain an `actor`
+     argument at their 34 call sites.
+   - `include_paths` becomes server-set: `#[serde(skip)]`, removed from the
+     built-in schemas and the JS query type, written by the exclusion
+     helpers from the ceiling. A ceiling with no read grant is refused with
+     403.
+   - The exec check in dispatch, discovery filtering, and
      `SolxError::Forbidden`.
-   - The delegation check on `action_config.scopes` (covers-check on
-     declare, modify and delete), and `"inherit"`.
+   - `"inherit"` handling in the ceiling and in action-token issuing.
    - Default the config to `audit`.
 4. **Packages.**
    - Manifest `scopes`, the subset check, and recording on
@@ -449,6 +566,19 @@ is needed.
   - each route is allowed with its scope and gets 403 without it;
   - lists narrow rather than fail;
   - `write:document:/a` can't write `/b`;
+- **Narrowing** (per store: documents, types, actions; for list, path
+  facets and search):
+  - with `read:document:/path`, a list shows `/path/name` and everything
+    under `/path`, and nothing at `/pathology` or elsewhere;
+  - two grants (`/a`, `/b`) admit both, and nothing else;
+  - `pathPrefix=/elsewhere` returns nothing, never more;
+  - a caller's `includePaths` / `include_paths` in a query string, a
+    built-in's params or a `solx-client` request is ignored;
+  - a ceiling with no `read:document` gets 403 on a list, not an
+    unrestricted list;
+  - the SQL filter and the Rust single-entity matcher agree on the same
+    table of paths and references;
+  - `file-list` and `GET /files` return only admitted files;
   - `X-Solx-Principal: none` from a client token doesn't widen its scopes.
 - **MCP:**
   - `explore_tools` shows only actions the token can exec;
@@ -502,6 +632,8 @@ is needed.
 | How does a JavaScript action get its scopes? | As a `scopes` parameter to `build-javascript-action`, which declares `"inherit"`, so the covers-check is made against its caller. |
 | Who may declare `action_config.scopes`? | Anyone whose ceiling covers the declared list (delegation). It doesn't lock the action. `secrets` stay root-only. |
 | How do builtins with path parameters narrow? | The exec scope only makes the builtin reachable. The resource scope narrows it: `exec:/builtin/file/file-get` plus `read:file:/x` can read only under `/x`. |
+| Do resource scopes take paths? | Yes, for documents, types, actions and files. They are segment-prefix matches with no wildcards, the same rule as `exec:`. |
+| How are lists narrowed? | Through `include_paths`, which becomes server-set only (`#[serde(skip)]`) and is written from the ceiling by the exclusion helpers. No new field or SQL. A ceiling with no read grant is refused with 403. |
 
 ## Future work
 

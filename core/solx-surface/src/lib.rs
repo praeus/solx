@@ -6,6 +6,7 @@
 //! async-trait so it can back both the local impls and a future HTTP
 //! client/server.
 
+pub mod actor;
 pub mod auth;
 pub mod entities;
 pub mod error;
@@ -16,6 +17,7 @@ pub mod path;
 pub mod query;
 pub mod wire;
 
+pub use actor::Actor;
 pub use auth::{ActionCredential, Principal, TokenAuthority};
 pub use exec_context::{ExecContext, ExecContextInfo};
 pub use error::{Result, SolxError};

@@ -7,10 +7,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use solx_surface::auth::{EXEC_SCOPE_HEADER, NO_PRINCIPAL_HEADER};
 use solx_surface::entities::{Action, ActionExecResult, ActionInput};
-use solx_surface::error::SolxError;
 use solx_surface::managers::Solx;
 use solx_surface::query::{ActionSearchQuery, ListOptions, Page, PathFacet};
-use solx_surface::Principal;
+use solx_surface::{Actor, Principal};
 
 use solx_config::EntityKind;
 
@@ -48,7 +47,7 @@ pub fn router() -> Router<AppState> {
 /// Only the root token may create or change a keyed action, change a locked
 /// action, lock or unlock one, or write under `/packages/` (a package's own
 /// action token may write within its package) — see
-/// `solx_actions::guard_content_action_change`.
+/// `solx_actions::check_action_change`.
 async fn save_action(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -58,21 +57,10 @@ async fn save_action(
 ) -> Result<Json<Action>, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
     exclude::guard(&state, EntityKind::Action, &mode, &path, &name, true).await?;
-    if principal != Principal::Root {
-        let existing = match state.app.actions().get(&path, &name).await {
-            Ok(a) => Some(a),
-            Err(SolxError::NotFound(_)) => None,
-            Err(e) => return Err(e.into()),
-        };
-        solx_actions::guard_content_action_change(
-            existing.as_ref(),
-            Some(&input),
-            &path,
-            &name,
-            solx_actions::principal_action(Some(&principal)),
-        )
-        .map_err(SolxError::Unauthorized)?;
-    }
+    state
+        .app
+        .authorize_action_change(Actor::for_principal(&principal), &path, &name, Some(&input))
+        .await?;
     let action = state.app.actions().save(&path, &name, input).await?;
     Ok(Json(action))
 }
@@ -98,21 +86,10 @@ async fn delete_action(
 ) -> Result<StatusCode, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
     exclude::guard(&state, EntityKind::Action, &mode, &path, &name, false).await?;
-    if principal != Principal::Root {
-        let existing = match state.app.actions().get(&path, &name).await {
-            Ok(a) => Some(a),
-            Err(SolxError::NotFound(_)) => None,
-            Err(e) => return Err(e.into()),
-        };
-        solx_actions::guard_content_action_change(
-            existing.as_ref(),
-            None,
-            &path,
-            &name,
-            solx_actions::principal_action(Some(&principal)),
-        )
-        .map_err(SolxError::Unauthorized)?;
-    }
+    state
+        .app
+        .authorize_action_change(Actor::for_principal(&principal), &path, &name, None)
+        .await?;
     state.app.actions().delete(&path, &name).await?;
     Ok(StatusCode::NO_CONTENT)
 }

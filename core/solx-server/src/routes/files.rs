@@ -9,7 +9,7 @@ use axum::routing::get;
 use axum::{Extension, Json, Router};
 use serde::Deserialize;
 use solx_surface::managers::Solx;
-use solx_surface::Principal;
+use solx_surface::{Actor, Principal};
 use solx_surface::wire::{FileListResponse, FilePutResponse};
 
 use crate::error::ApiError;
@@ -42,7 +42,7 @@ pub fn router() -> Router<AppState> {
 }
 
 /// Only the root token may replace a locked action's pinned artifact — see
-/// `solx_manager::App::guard_pinned_files`. A Command action calling back
+/// `solx_manager::App::authorize_file_change`. A Command action calling back
 /// with its own token is held to that too.
 async fn put_file(
     State(state): State<AppState>,
@@ -50,9 +50,10 @@ async fn put_file(
     Path(rel_path): Path<String>,
     bytes: Bytes,
 ) -> Result<Json<FilePutResponse>, ApiError> {
-    if principal != Principal::Root {
-        state.app.guard_pinned_files(&[rel_path.as_str()]).await?;
-    }
+    state
+        .app
+        .authorize_file_change(Actor::for_principal(&principal), &[rel_path.as_str()])
+        .await?;
     let rel_path = state.app.files().put(&rel_path, bytes.to_vec()).await?;
     Ok(Json(FilePutResponse { rel_path }))
 }
@@ -123,9 +124,10 @@ async fn delete_file(
     Extension(principal): Extension<Principal>,
     Path(rel_path): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    if principal != Principal::Root {
-        state.app.guard_pinned_files(&[rel_path.as_str()]).await?;
-    }
+    state
+        .app
+        .authorize_file_change(Actor::for_principal(&principal), &[rel_path.as_str()])
+        .await?;
     state.app.files().delete(&rel_path).await?;
     Ok(StatusCode::NO_CONTENT)
 }

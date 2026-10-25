@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use solx_config::credentials::ConnectCredential;
 use solx_config::{ConfigService, EntityKind};
 use solx_surface::auth::Principal;
+use solx_surface::Actor;
 use solx_surface::entities::{
     Action, ActionExecResult, ActionInput, Document, DocumentInput, TypeEntity, TypeInput,
 };
@@ -46,6 +47,11 @@ fn entity(path: &str, name: &str) -> Result<(String, String)> {
 /// the web UI. Exec is never filtered (the agent widget reaches the builtins
 /// through it and asks for the tooling scope itself).
 const DEFAULT_MODE: ExcludeMode = ExcludeMode::User;
+
+/// Who the main window's commands act as when they change an action or a
+/// file: content, since package widgets run there. The Settings window's
+/// `config_*` commands are the operator path and don't authorize.
+const CONTENT: Actor<'static> = Actor::Content { acting: None };
 
 /// Expand `opts`' mode (or [`DEFAULT_MODE`]) into its `exclude_paths`.
 fn scoped(app: &solx_manager::App, kind: EntityKind, opts: Option<ListOptions>) -> ListOptions {
@@ -292,7 +298,7 @@ pub(crate) async fn actions_save(
         true,
     )
     .await?;
-    app.guard_content_action_change(&path, &name, Some(&input))
+    app.authorize_action_change(CONTENT, &path, &name, Some(&input))
         .await?;
     app.actions().save(&path, &name, input).await
 }
@@ -361,7 +367,7 @@ pub(crate) async fn actions_delete(
     )
     .await?;
     // Content — see `actions_save`.
-    app.guard_content_action_change(&path, &name, None).await?;
+    app.authorize_action_change(CONTENT, &path, &name, None).await?;
     app.actions().delete(&path, &name).await
 }
 
@@ -448,7 +454,7 @@ pub(crate) async fn files_put(state: State<'_, SolxState>, request: Request<'_>)
     };
     let app = state.app()?;
     // Content (see `actions_save`): no locked action's artifact.
-    app.guard_pinned_files(&[rel_path.as_str()]).await?;
+    app.authorize_file_change(CONTENT, &[rel_path.as_str()]).await?;
     app.files().put(&rel_path, bytes).await
 }
 
@@ -463,7 +469,7 @@ pub(crate) async fn files_get(state: State<'_, SolxState>, rel_path: String) -> 
 #[command]
 pub(crate) async fn files_delete(state: State<'_, SolxState>, rel_path: String) -> Result<()> {
     let app = state.app()?;
-    app.guard_pinned_files(&[rel_path.as_str()]).await?;
+    app.authorize_file_change(CONTENT, &[rel_path.as_str()]).await?;
     app.files().delete(&rel_path).await
 }
 

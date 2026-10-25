@@ -330,10 +330,11 @@ side effect. The rules:
   `install.solx` files. Those run against the CLI's `Commands`, which can
   call `save` directly and install packages (§4.6).
 
-### 4.5 No self-granting (`internal/mod.rs` `guard_executable_action`)
+### 4.5 No self-granting (`content.rs` `check_action_change`)
 
-`entity-save-action` and `entity-delete-action` refuse to create, modify or
-delete `command` and `webhook` rows. These built-ins are the only route to
+`entity-save-action` and `entity-delete-action` authorize as
+`Actor::Builtin`, which refuses to create, modify or delete `command` and
+`webhook` rows. These built-ins are the only route to
 `save` for an MCP client, a WASM guest, or an in-system script. The check
 looks at both the incoming payload *and* the stored row, because `save` is a
 merge-upsert. Without the stored-row check, a payload carrying only
@@ -349,10 +350,15 @@ Routes that bypass this guard on purpose:
 These routes can only *point* at registered `command_actions` keys and
 allowed URL prefixes. They cannot create new grants.
 
-Every other content check is shared. `guard_content_action_change`
-(`content.rs`) runs on the built-ins always, and on HTTP and Tauri
-`actions-save`/`actions-delete` for everything but the root token and the
-Settings window. It refuses:
+Every other content check is shared. Each surface names its `Actor`
+(`solx-surface/src/actor.rs`) and calls
+`LocalActionManager::authorize_action_change` (`content.rs`; hosts reach it
+through `App`), which reads the stored row and runs `check_action_change`.
+The built-ins are always content, whatever the principal; HTTP is content
+for everything but the root token (`Actor::for_principal`); Tauri
+`actions-save`/`actions-delete` in the main window are content, and the
+Settings window's `config_*` commands are the operator. For content it
+refuses:
 
 - a save or delete under `/packages/`, except by one of that package's own
   actions within its own `/packages/<name>/` (§4.6);
@@ -406,7 +412,7 @@ with its scoped secrets. Locking fixes both the row and the code.
   `ActionManager::save`/`delete` called directly (the CLI, package installs,
   REST with `Principal::Root`, Tauri `config_actions_save`/`_delete` in the
   `config` set). Everything else applies `guard_locked_action` (as part of
-  `guard_content_action_change`, §4.5), which refuses any change to a
+  `check_action_change`, §4.5), which refuses any change to a
   locked row and any input that sets `locked`:
   `entity-save-action`/`entity-delete-action` always (so an MCP call with
   the root token is refused), REST for any other principal, and Tauri
@@ -414,7 +420,8 @@ with its scoped secrets. Locking fixes both the row and the code.
   path, not the principal.
 - **The CLI.** `save action` is in `Commands`, so a script can run it; it
   refuses `locked`. `solx action lock|unlock` are `BinCommand`s.
-- **Pinned files.** `LocalActionManager::guard_pinned_files` refuses a write
+- **Pinned files.** `LocalActionManager::authorize_file_change` refuses, for
+  content, a write
   or delete of any locked row's `pin_path` (compared case-insensitively,
   ignoring trailing dots and spaces, as Windows opens files). It is applied
   by the file built-ins (each entry of a directory operation checked before
@@ -689,8 +696,10 @@ These are accepted for now. Each one is a candidate for future hardening.
 - Any new path that makes a network request on a caller's behalf calls
   `net::check_outbound_url` before connecting, and uses `redirect_policy`.
 - Any new path to `ActionManager::save`/`delete` that content can reach
-  goes through `guard_content_action_change`, and through
-  `guard_executable_action` too unless it is one of the gap-7 routes.
+  calls `authorize_action_change` with the right `Actor`: `Builtin` for a
+  built-in, `Content` for a direct route (the gap-7 routes, which may point
+  at Command and Webhook rows). Add new checks inside
+  `check_action_change`, not at the call sites.
 - New built-ins are added to the catalogue (`seed.rs` or a plugin's seed
   list), never saved as rows.
 - Any new request to an endpoint taken from `action_config` (like
@@ -717,9 +726,9 @@ These are accepted for now. Each one is a candidate for future hardening.
 - Nothing outside the exec path reads `secret_keys`, and a key never
   becomes a field of `Action`. Secret-store entries are reached only
   through a `SecretHandle`, never by a bare name.
-- Any new path through which content saves or deletes an action applies
-  `guard_locked_action` (and `guard_keyed_action`), and any new path through
-  which it writes or deletes a file applies `guard_pinned_files`. Only an
-  operator path skips them, and only on purpose.
+- Any new path through which content writes or deletes a file calls
+  `authorize_file_change`. Only an operator path (`Actor::Operator`, or a
+  direct `ActionManager`/`FileStore` call) skips the checks, and only on
+  purpose.
 - Anything that can edit `solx-config.json` is operator-level. Don't expose
   it to content.

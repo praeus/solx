@@ -130,7 +130,7 @@ impl LocalActionManager {
     /// surface that writes or deletes files on content's behalf calls this:
     /// the file built-ins, REST `/files` for anything but the root token,
     /// and the desktop app's main window. See `crate::lock`.
-    pub async fn guard_pinned_files<'a>(
+    pub(crate) async fn guard_pinned_files<'a>(
         &self,
         targets: impl IntoIterator<Item = &'a str>,
     ) -> Result<()> {
@@ -167,9 +167,8 @@ impl ActionManager for LocalActionManager {
     async fn save(&self, path: &str, name: &str, input: ActionInput) -> Result<Action> {
         let path = normalize_path(path)?;
         validate_name(name)?;
-        // Checked here rather than at each surface, for the same reason
-        // `guard_executable_action` is shared: the CLI, MCP, HTTP, scripts,
-        // and wasm guests all arrive through this one method.
+        // Checked here rather than at each surface: the CLI, MCP, HTTP,
+        // scripts, and wasm guests all arrive through this one method.
         solx_config::validate_capabilities(&input.capabilities).map_err(SolxError::Invalid)?;
         let name = name.trim().to_string();
         let conn = self.db.connect().await?;

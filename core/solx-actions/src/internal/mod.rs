@@ -37,10 +37,10 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use solx_surface::entities::{ActionType, Document, DocumentInput};
+use solx_surface::entities::{Document, DocumentInput};
 use solx_surface::internal_actions::{InternalActionRegistry, InternalCallCtx};
 use solx_surface::managers::{ActionManager, DocManager, FileStore, TypeManager};
-use solx_surface::ExecContext;
+use solx_surface::{Actor, ExecContext};
 
 use crate::LocalActionManager;
 
@@ -149,9 +149,9 @@ pub async fn run_internal(
         "entity-list-types" => entity::type_list(params, &ctx.types, &ctx.config).await,
         "entity-list-type-paths" => entity::type_paths(params, &ctx.types, &ctx.config).await,
 
-        "entity-save-action" => entity::action_save(params, &ctx.actions, &ctx.exec).await,
+        "entity-save-action" => entity::action_save(params, &ctx.actions, &ctx.local, Actor::builtin(&ctx.exec)).await,
         "entity-get-action" => entity::action_get(params, &ctx.actions).await,
-        "entity-delete-action" => entity::action_delete(params, &ctx.actions, &ctx.exec).await,
+        "entity-delete-action" => entity::action_delete(params, &ctx.actions, &ctx.local, Actor::builtin(&ctx.exec)).await,
         "entity-list-actions" => entity::action_list(params, &ctx.actions, &ctx.config).await,
         "entity-list-action-paths" => entity::action_paths(params, &ctx.actions, &ctx.config).await,
 
@@ -160,13 +160,13 @@ pub async fn run_internal(
         "search-actions" => entity::search_actions(params, &ctx.actions, &ctx.config).await,
 
         // ── file store ───────────────────────────────────────────────────
-        "file-put" => file::file_put(params, &ctx.files, &ctx.local).await,
+        "file-put" => file::file_put(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await,
         "file-get" => file::file_get(params, &ctx.files).await,
-        "file-delete" => file::file_delete(params, &ctx.files, &ctx.local).await,
+        "file-delete" => file::file_delete(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await,
         "file-list" => file::file_list(params, &ctx.files).await,
-        "file-copy" => file::file_copy(params, &ctx.files, &ctx.local).await,
-        "dir-copy" => file::dir_copy(params, &ctx.files, &ctx.local).await,
-        "dir-delete" => file::dir_delete(params, &ctx.files, &ctx.local).await,
+        "file-copy" => file::file_copy(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await,
+        "dir-copy" => file::dir_copy(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await,
+        "dir-delete" => file::dir_delete(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await,
 
         // ── document field ops (flat and path-style) ─────────────────────
         "get-field" => doc_fields::get_field(params, &ctx.docs).await,
@@ -307,28 +307,14 @@ pub(super) fn to_value<T: serde::Serialize>(v: &T) -> Result<Value, String> {
     serde_json::to_value(v).map_err(|e| format!("failed to serialize result: {e}"))
 }
 
-/// Used by `entity::action_save` / `entity::action_delete` to apply the
-/// "no executable actions from an action, MCP tool call, or script" guard
-/// without duplicating the existing-row lookup.
-pub(super) fn guard_executable_action(
-    existing: Option<ActionType>,
-    incoming: Option<ActionType>,
-    path: &str,
-    name: &str,
-    verb: &str,
-) -> Result<(), String> {
-    for ty in [incoming, existing].into_iter().flatten() {
-        let label = match ty {
-            ActionType::Command => "command",
-            ActionType::Webhook => "webhook",
-            _ => continue,
-        };
-        return Err(format!(
-            "cannot {verb} '{label}' actions from an action, MCP tool call, or script \
-             (attempted on {path}/{name}); use the solx CLI"
-        ));
+/// A refused `authorize_*` call as a handler error: the reason alone, worded
+/// as the guards word it, without the `unauthorized:` prefix.
+pub(super) fn denial(e: solx_surface::error::SolxError) -> String {
+    match e {
+        solx_surface::error::SolxError::Unauthorized(reason)
+        | solx_surface::error::SolxError::Invalid(reason) => reason,
+        e => e.to_string(),
     }
-    Ok(())
 }
 
 /// Used by `doc_fields` to clone a `Document` into the upsert input shape.

@@ -33,7 +33,7 @@ mod test_support;
 pub mod test_probe;
 pub mod wasm;
 
-pub use content::{guard_content_action_change, guard_package_namespace, principal_action};
+pub use content::{check_action_change, guard_package_namespace};
 pub use invocation::set_long_lived_host;
 pub use lock::guard_locked_action;
 pub use secret_config::guard_keyed_action;
