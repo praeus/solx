@@ -15,6 +15,7 @@ pub mod internal_actions;
 pub mod managers;
 pub mod path;
 pub mod query;
+pub mod scope;
 pub mod wire;
 
 pub use actor::Actor;
@@ -32,3 +33,4 @@ pub use internal_actions::{
 };
 pub use managers::{ActionManager, DocManager, FileStore, Solx, TypeManager};
 pub use query::{ExcludeMode, ListOptions, Page, PathFacet, SearchQuery, SortOrder};
+pub use scope::{declared_scopes, Grant, Need, PathFilter, Preset, Scope, ScopeSet};
