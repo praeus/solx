@@ -85,6 +85,11 @@ export interface SolxConfigFile {
   server_tls?: 'off' | 'auto' | { cert_file: string; key_file: string } | { store_thumbprint: string };
   /** Lifetime of a client token, in days (default 90). */
   client_token_ttl_days?: number;
+  /**
+   * How a call outside its scopes is treated: allowed, allowed and logged
+   * (the default), or refused with a `Forbidden` error.
+   */
+  scope_enforcement?: 'off' | 'audit' | 'enforce';
   server_embedded?: boolean;
   console_max_entries?: number;
   console_ttl_days?: number;

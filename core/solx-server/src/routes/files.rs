@@ -8,7 +8,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Extension, Json, Router};
 use serde::Deserialize;
+use solx_actions::ScopeCheck;
 use solx_surface::managers::Solx;
+use solx_surface::scope::{Access, Need};
 use solx_surface::{Actor, Principal};
 use solx_surface::wire::{FileListResponse, FilePutResponse};
 
@@ -82,9 +84,15 @@ async fn put_file(
 /// change when the content does, and nothing here is a security boundary.
 async fn get_file(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Path(rel_path): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    // Judged as the path the store will read, so an alias (`a//b`, `a`)
+    // is checked as the file it names.
+    let stored = solx_files::normalize_rel_path(&rel_path)?;
+    ScopeCheck::for_principal(&state.app.config, &principal)
+        .require(&Need::file(Access::Read, &stored))?;
     let bytes = state.app.files().get(&rel_path).await?;
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -132,14 +140,21 @@ async fn delete_file(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Lists only the files the token may read: the store has no SQL to
+/// narrow, so each entry is checked.
 async fn list_files(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Query(query): Query<FileListQuery>,
 ) -> Result<Json<FileListResponse>, ApiError> {
+    let scopes = ScopeCheck::for_principal(&state.app.config, &principal);
+    scopes.require_some_reads(solx_surface::scope::Resource::File)?;
     let paths = state
         .app
         .files()
         .list(query.prefix.as_deref().unwrap_or(""))
         .await?;
-    Ok(Json(FileListResponse { paths }))
+    Ok(Json(FileListResponse {
+        paths: scopes.filter_file_reads(paths),
+    }))
 }

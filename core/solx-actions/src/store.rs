@@ -253,8 +253,8 @@ impl ActionManager for LocalActionManager {
         // credential is pinned.
         if keyed && input.locked == Some(false) {
             return Err(SolxError::Invalid(format!(
-                "cannot unlock {}: it has scoped secrets or a keyring reference, which keep \
-                 it locked",
+                "cannot unlock {}: it has scoped secrets, declared scopes or a keyring \
+                 reference, which keep it locked",
                 full_ref(&path, &name)?
             )));
         }

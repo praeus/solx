@@ -60,12 +60,6 @@ export interface ListOptions {
    * entity `b` in `/a`; `/a/b*` also drops everything beneath.
    */
   excludePaths?: string[];
-  /**
-   * Keep only entities matching at least one of these patterns — same syntax
-   * and matching as `excludePaths`. Empty means no restriction; exclusions
-   * still apply to whatever is included.
-   */
-  includePaths?: string[];
   /** See {@link ExcludeMode}. */
   excludeMode?: ExcludeMode;
 }
@@ -104,8 +98,6 @@ export interface SearchQuery {
   offset?: number;
   /** See {@link ListOptions.excludePaths}. */
   excludePaths?: string[];
-  /** See {@link ListOptions.includePaths}. */
-  includePaths?: string[];
   /** See {@link ExcludeMode}. */
   excludeMode?: ExcludeMode;
 }

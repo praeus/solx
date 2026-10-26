@@ -9,6 +9,7 @@ use solx_surface::auth::{EXEC_SCOPE_HEADER, NO_PRINCIPAL_HEADER};
 use solx_surface::entities::{Action, ActionExecResult, ActionInput};
 use solx_surface::managers::Solx;
 use solx_surface::query::{ActionSearchQuery, ListOptions, Page, PathFacet};
+use solx_surface::scope::Access;
 use solx_surface::{Actor, Principal};
 
 use solx_config::EntityKind;
@@ -67,11 +68,20 @@ async fn save_action(
 
 async fn get_action(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Path(reference): Path<String>,
     Query(mode): Query<ModeParam>,
 ) -> Result<Json<Action>, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
     exclude::guard(&state, EntityKind::Action, &mode, &path, &name, false).await?;
+    exclude::require_entity(
+        &state,
+        &principal,
+        EntityKind::Action,
+        Access::Read,
+        &path,
+        &name,
+    )?;
     let action = state.app.actions().get(&path, &name).await?;
     Ok(Json(action))
 }
@@ -96,18 +106,20 @@ async fn delete_action(
 
 async fn list_actions(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Query(mut opts): Query<ListOptions>,
 ) -> Result<Json<Page<Action>>, ApiError> {
-    exclude::apply(&state, EntityKind::Action, &mut opts);
+    exclude::apply(&state, &principal, EntityKind::Action, &mut opts)?;
     let page = state.app.actions().list(opts).await?;
     Ok(Json(page))
 }
 
 async fn action_paths(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Query(mut opts): Query<ListOptions>,
 ) -> Result<Json<Page<PathFacet>>, ApiError> {
-    exclude::apply(&state, EntityKind::Action, &mut opts);
+    exclude::apply(&state, &principal, EntityKind::Action, &mut opts)?;
     let page = state.app.actions().paths(opts).await?;
     Ok(Json(page))
 }
@@ -120,6 +132,7 @@ async fn action_paths(
 /// flat (non-nested) struct, which `serde_urlencoded` handles fine.
 async fn search_actions(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Query(list): Query<ListOptions>,
     Query(SearchTerm { q, exclude_hidden }): Query<SearchTerm>,
 ) -> Result<Json<Page<Action>>, ApiError> {
@@ -130,7 +143,7 @@ async fn search_actions(
     };
     query.list.exclude_mode = query.effective_mode();
     query.exclude_hidden = false;
-    exclude::apply(&state, EntityKind::Action, &mut query.list);
+    exclude::apply(&state, &principal, EntityKind::Action, &mut query.list)?;
     let page = state.app.actions().search(query).await?;
     Ok(Json(page))
 }

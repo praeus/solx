@@ -24,6 +24,7 @@ use fs2::FileExt;
 use serde_json::{Map, Value};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::query::ExcludeMode;
+use solx_surface::scope::Enforcement;
 
 pub use types::{
     glob_matches, validate_capabilities, CommandDef, EntityKind, ExclusionLists, ExclusionPolicy,
@@ -454,6 +455,16 @@ impl ConfigService {
         match self.snapshot().client_token_ttl_days {
             Some(n) if n > 0 => n,
             _ => 90,
+        }
+    }
+
+    /// How a call outside its scopes is treated (`scope_enforcement`).
+    /// Defaults to audit. A value that isn't `off`, `audit` or `enforce`
+    /// enforces: a typo must not turn the checks off.
+    pub fn scope_enforcement(&self) -> Enforcement {
+        match self.snapshot().scope_enforcement.as_deref() {
+            None => Enforcement::default(),
+            Some(value) => value.parse().unwrap_or(Enforcement::Enforce),
         }
     }
 
@@ -1120,6 +1131,22 @@ fn kind_of(v: &Value) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Audit by default, read live, and a value it doesn't know enforces.
+    #[test]
+    fn scope_enforcement_defaults_to_audit_and_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = ConfigService::open_in(dir.path()).unwrap();
+        assert_eq!(cfg.scope_enforcement(), Enforcement::Audit);
+        for (value, expected) in [
+            ("off", Enforcement::Off),
+            ("enforce", Enforcement::Enforce),
+            ("enforced", Enforcement::Enforce),
+        ] {
+            cfg.set("scope_enforcement", value.into()).unwrap();
+            assert_eq!(cfg.scope_enforcement(), expected, "{value}");
+        }
+    }
 
     #[test]
     fn set_get_and_unknown_field_preserved() {

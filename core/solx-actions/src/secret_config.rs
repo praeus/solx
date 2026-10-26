@@ -30,17 +30,22 @@ use solx_surface::entities::ActionInput;
 /// app's main window — must pass this check first. Declaring secrets is
 /// refused because the key comes from the action's scope, so a name declared
 /// under `/packages/<pkg>/` would read that package's secret. A keyring
-/// reference is refused because it reads whatever entry it names.
+/// reference is refused because it reads whatever entry it names. Declared
+/// scopes are refused because they are the authority the action runs with,
+/// whoever calls it: only an operator may grant that.
 ///
 /// Only the incoming config needs checking: a keyed action is always locked
 /// (see `crate::lock`), so [`crate::lock::guard_locked_action`] refuses any
 /// change to it, including repointing the code that runs with its key.
 pub fn guard_keyed_action(incoming: &ActionInput, reference: &str) -> Result<(), String> {
     let cfg = incoming.action_config.as_ref();
-    if cfg.is_some_and(|c| c.get("secrets").is_some()) || solx_surface::uses_keyring(cfg) {
+    if cfg.is_some_and(|c| c.get("secrets").is_some())
+        || solx_surface::uses_keyring(cfg)
+        || solx_surface::declares_scopes(cfg)
+    {
         return Err(format!(
-            "{reference} has scoped secrets or a keyring reference; only root (the solx \
-             CLI, a package install, or the root token) can create or modify it"
+            "{reference} has scoped secrets, declared scopes or a keyring reference; only \
+             root (the solx CLI, a package install, or the root token) can create or modify it"
         ));
     }
     Ok(())
@@ -52,6 +57,11 @@ pub fn guard_keyed_action(incoming: &ActionInput, reference: &str) -> Result<(),
 /// has a key.
 pub(crate) fn normalize(cfg: &mut Value) -> Result<bool, String> {
     reject_inline_credentials(cfg)?;
+    // `scopes` is stored canonical: parsed, sorted, deduplicated. A bad
+    // scope is refused here rather than granting nothing at run time.
+    if let Some(scopes) = solx_surface::declared_scopes(Some(cfg)).map_err(|e| e.to_string())? {
+        cfg["scopes"] = serde_json::to_value(scopes).map_err(|e| e.to_string())?;
+    }
     let Some(secrets) = cfg.get_mut("secrets") else {
         return Ok(false);
     };
@@ -255,6 +265,36 @@ mod tests {
         let err = guard_keyed_action(&input(keyring), "/p/w").unwrap_err();
         assert!(err.contains("keyring reference"), "{err}");
         assert!(guard_keyed_action(&input(json!({ "auth": { "type": "bearer" } })), "/p/w").is_ok());
+    }
+
+    /// Declared scopes are the authority an action runs with, so only root
+    /// may set them, even to an empty list.
+    #[test]
+    fn declared_scopes_are_root_only() {
+        let input = |cfg: Value| ActionInput {
+            action_config: Some(cfg),
+            ..Default::default()
+        };
+        for scopes in [json!(["exec:/builtin/web/http-request"]), json!([])] {
+            let err = guard_keyed_action(&input(json!({ "scopes": scopes })), "/p/w").unwrap_err();
+            assert!(err.contains("declared scopes"), "{err}");
+        }
+    }
+
+    #[test]
+    fn scopes_are_stored_canonical_and_bad_ones_refused() {
+        let mut cfg =
+            json!({ "scopes": ["write:script", "exec://builtin//web/*", "write:script"] });
+        normalize(&mut cfg).unwrap();
+        assert_eq!(
+            cfg,
+            json!({ "scopes": ["exec:/builtin/web/*", "write:script"] })
+        );
+
+        for bad in [json!({ "scopes": "all" }), json!({ "scopes": ["exec:"] })] {
+            let mut cfg = bad.clone();
+            assert!(normalize(&mut cfg).is_err(), "{bad}");
+        }
     }
 
     #[test]

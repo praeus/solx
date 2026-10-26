@@ -29,6 +29,7 @@ fn status_for(e: &SolxError) -> StatusCode {
         SolxError::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
         SolxError::Conflict(_) => StatusCode::CONFLICT,
         SolxError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+        SolxError::Forbidden(_) => StatusCode::FORBIDDEN,
         SolxError::Io(_)
         | SolxError::Db(_)
         | SolxError::Exec(_)

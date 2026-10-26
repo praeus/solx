@@ -457,8 +457,8 @@ pub async fn install_package(
                 continue;
             }
             let msg = format!(
-                "{full} is listed in unlocked_actions but has scoped secrets or a keyring \
-                 reference; locked anyway"
+                "{full} is listed in unlocked_actions but has scoped secrets, declared \
+                 scopes or a keyring reference; locked anyway"
             );
             tracing::warn!("{msg}");
             warnings.push(msg);

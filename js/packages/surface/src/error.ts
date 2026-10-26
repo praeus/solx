@@ -18,6 +18,7 @@ export type SolxErrorKind =
   | 'Exec'
   | 'Config'
   | 'Unauthorized'
+  | 'Forbidden'
   | 'Other';
 
 export const SOLX_ERROR_KINDS: readonly SolxErrorKind[] = [
@@ -30,6 +31,7 @@ export const SOLX_ERROR_KINDS: readonly SolxErrorKind[] = [
   'Exec',
   'Config',
   'Unauthorized',
+  'Forbidden',
   'Other',
 ] as const;
 
@@ -96,6 +98,7 @@ const WIRE_KIND_MAP: Record<string, SolxErrorKind> = {
   exec: 'Exec',
   config: 'Config',
   unauthorized: 'Unauthorized',
+  forbidden: 'Forbidden',
   other: 'Other',
 };
 

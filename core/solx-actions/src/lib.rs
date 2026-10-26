@@ -22,11 +22,14 @@ pub mod loopback;
 pub mod net;
 mod row;
 mod schema;
+pub mod scope_gate;
 pub mod script;
 mod secret_config;
 pub mod secrets;
 mod seed;
 mod store;
+#[cfg(test)]
+mod scope_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(any(test, feature = "test-probe"))]
@@ -36,6 +39,7 @@ pub mod wasm;
 pub use content::{check_action_change, guard_package_namespace};
 pub use invocation::set_long_lived_host;
 pub use lock::guard_locked_action;
+pub use scope_gate::ScopeCheck;
 pub use secret_config::guard_keyed_action;
 
 use std::collections::HashMap;

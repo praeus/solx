@@ -1,8 +1,9 @@
 # Scoped tokens — design plan
 
-Status: **In progress.** Steps 1 (the scope types, `solx_surface::scope`)
-and 2 (plumbing: every principal, frame and actor carries its grant) have
-landed; nothing checks a grant yet. This is the follow-on that
+Status: **In progress.** Steps 1 (the scope types, `solx_surface::scope`),
+2 (plumbing: every principal, frame and actor carries its grant) and 3 (the
+checks, under `scope_enforcement`, default `audit`) have landed. This is the
+follow-on that
 [token-registry-plan.md](token-registry-plan.md) calls "authorization that the
 principal makes possible", and it closes the first gap in SECURITY.md's "What
 is not enforced": *client and action tokens aren't scoped*.
@@ -357,9 +358,10 @@ the calling action as they are now; the exec scope only decides whether the
 call is reachable.
 
 **Discovery follows exec.** `explore_tools` (in
-[solx-mcp/src/server.rs](../solx-mcp/src/server.rs)) and `/actions-search`
-drop actions the token can't exec, so a model is never shown a tool it then
-gets refused. The exclusion policy does the same thing for tooling today.
+[solx-mcp/src/server.rs](../solx-mcp/src/server.rs)) drops actions the token
+can't exec, so a model is never shown a tool it then gets refused. The
+exclusion policy does the same thing for tooling today. `/actions-search` is
+an ordinary action list, narrowed by `read:action`.
 
 ### Action tokens
 
@@ -493,11 +495,14 @@ A config key, `scope_enforcement: "off" | "audit" | "enforce"`:
 
 - **`off`**: checks run but always pass. This is the state right after the
   code lands.
-- **`audit`**: a failed check is allowed but logged once per
-  `(principal or calling action, need)`. The log goes to `tracing`, and `solx
-  scopes audit` reads a small table in `solx-registry.db` that holds the same
-  records. Running each package's `verify.solx` and normal use under audit
-  gives the exact scope list to paste into each manifest.
+- **`audit`** (the default): a failed check is allowed but logged once per
+  `(principal or calling action, need)`, naming the narrowest scope that
+  would grant it. The log goes to `tracing` (target `solx::scopes`, level
+  warn), which the hosts print only when asked: `RUST_LOG=solx::scopes=warn`.
+  A small table in `solx-registry.db` read by `solx scopes audit` is still
+  to come.
+  Running each package's `verify.solx` and normal use under audit gives the
+  exact scope list to paste into each manifest.
 - **`enforce`**: a failed check is refused with 403.
 
 It is read live through `ConfigService`, like the allowlists, so no restart
@@ -521,19 +526,41 @@ default; audit mode is how they're found.
    - The `X-Solx-Principal: none` fix.
    - Nothing checks a grant yet, so behaviour is unchanged. The
      `scope_enforcement` key arrives with the checks in step 3.
-3. **Checks.**
-   - `scopes` validated in `normalize` and made root-only in
-     `guard_keyed_action`.
-   - Resource and kind checks inside `check_action_change` and
-     `authorize_file_change`.
-   - Resource scopes inside the exclusion helpers, which gain an `actor`
-     argument.
-   - `include_paths` becomes server-set: `#[serde(skip)]`, removed from the
-     built-in schemas and the JS query type, written from `path_filter`;
-     `Nothing` is refused with 403.
-   - The exec check in dispatch, discovery filtering, `SolxError::Forbidden`,
-     and renaming `enforce_scope` to `enforce_exclusions`.
-   - Default the config to `audit`.
+3. **Checks.** ✅
+   - `scopes` validated and stored canonical in `normalize`. Declaring them
+     makes an action keyed (`solx_surface::is_keyed`), so it is root-only
+     to create or change (`guard_keyed_action`) and always locked.
+   - Every check goes through one type, `solx_actions::ScopeCheck`, built
+     from an `ExecContext`, an `Actor` or a REST `Principal`. It applies
+     `scope_enforcement` (default `audit`, read live; a value it doesn't
+     know enforces).
+   - Action and file writes: `write:action` plus the kind scopes, and
+     `write:file` on the normalised store path, inside
+     `authorize_action_change` and `authorize_file_change`.
+   - Exec: in dispatch on every frame, after the exclusions (so an excluded
+     action still reads as missing), and up front in `start_invocation`.
+     `enforce_scope` is renamed `enforce_exclusions`.
+   - Built-ins: a gate in dispatch (`internal::scopes::gate`) checks
+     one-entity reads, document and type writes, and refuses a list with no
+     grant at all, keeping the `Forbidden` kind. A refusal raised later,
+     inside a handler (an action or file write, a `dir-copy` entry), reaches
+     the caller as an execution error naming the missing scope, like the
+     built-ins' other refusals.
+   - REST: `exclude::require_entity` on every single-entity route,
+     `exclude::apply`/`apply_search` narrow every list; `/validate` needs
+     `read:type` on its type; `/files` filters its listing.
+   - `include_paths` is server-set: `#[serde(skip)]`, removed from the
+     built-in schemas and the JS query type, written by `ScopeCheck::narrow`;
+     a filter that admits nothing is refused with 403.
+   - MCP discovery (`explore_tools`) is narrowed by exec scopes alone. Only
+     one include group fits in a query, and what a model needs to see is
+     what it may call. REST `/actions-search` follows `read:action`, like
+     the other action lists.
+   - `SolxError::Forbidden` (HTTP 403, `{"kind":"forbidden"}`), mapped in
+     MCP tool results, the JS bindings and `@solx/surface`.
+   - The desktop app needed no change: its main window is unlimited.
+   - Not yet: the audit table and `solx scopes audit`. Audit findings go to
+     `tracing` (target `solx::scopes`), once per party and need.
 4. **Packages.**
    - Manifest `scopes`, the covers check, the implicit own-namespace exec,
      and recording on `InstalledPackage`.

@@ -1,12 +1,16 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
+use axum::Extension;
 use axum::{Json, Router};
 use axum_extra::extract::Query;
 use solx_surface::entities::{TypeEntity, TypeInput};
 use solx_surface::managers::Solx;
+use solx_surface::path::split_ref;
 use solx_surface::query::{ListOptions, Page, PathFacet};
+use solx_surface::scope::Access;
 use solx_surface::wire::ValidateRequest;
+use solx_surface::Principal;
 
 use solx_config::EntityKind;
 
@@ -38,60 +42,102 @@ pub fn router() -> Router<AppState> {
 
 async fn save_type(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Path(reference): Path<String>,
     Query(mode): Query<ModeParam>,
     Json(input): Json<TypeInput>,
 ) -> Result<Json<TypeEntity>, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
     exclude::guard(&state, EntityKind::Type, &mode, &path, &name, true).await?;
+    exclude::require_entity(
+        &state,
+        &principal,
+        EntityKind::Type,
+        Access::Write,
+        &path,
+        &name,
+    )?;
     let entity = state.app.types().save(&path, &name, input).await?;
     Ok(Json(entity))
 }
 
 async fn get_type(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Path(reference): Path<String>,
     Query(mode): Query<ModeParam>,
 ) -> Result<Json<TypeEntity>, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
     exclude::guard(&state, EntityKind::Type, &mode, &path, &name, false).await?;
+    exclude::require_entity(
+        &state,
+        &principal,
+        EntityKind::Type,
+        Access::Read,
+        &path,
+        &name,
+    )?;
     let entity = state.app.types().get(&path, &name).await?;
     Ok(Json(entity))
 }
 
 async fn delete_type(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Path(reference): Path<String>,
     Query(mode): Query<ModeParam>,
 ) -> Result<StatusCode, ApiError> {
     let (path, name) = split_url_ref(&reference)?;
     exclude::guard(&state, EntityKind::Type, &mode, &path, &name, false).await?;
+    exclude::require_entity(
+        &state,
+        &principal,
+        EntityKind::Type,
+        Access::Write,
+        &path,
+        &name,
+    )?;
     state.app.types().delete(&path, &name).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_types(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Query(mut opts): Query<ListOptions>,
 ) -> Result<Json<Page<TypeEntity>>, ApiError> {
-    exclude::apply(&state, EntityKind::Type, &mut opts);
+    exclude::apply(&state, &principal, EntityKind::Type, &mut opts)?;
     let page = state.app.types().list(opts).await?;
     Ok(Json(page))
 }
 
 async fn type_paths(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Query(mut opts): Query<ListOptions>,
 ) -> Result<Json<Page<PathFacet>>, ApiError> {
-    exclude::apply(&state, EntityKind::Type, &mut opts);
+    exclude::apply(&state, &principal, EntityKind::Type, &mut opts)?;
     let page = state.app.types().paths(opts).await?;
     Ok(Json(page))
 }
 
 async fn validate_type(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Json(req): Json<ValidateRequest>,
 ) -> Result<StatusCode, ApiError> {
+    // Validating reads the type. A reference that doesn't split is the
+    // validator's error to report.
+    if let Ok((path, name)) = split_ref(&req.type_ref) {
+        exclude::require_entity(
+            &state,
+            &principal,
+            EntityKind::Type,
+            Access::Read,
+            &path,
+            &name,
+        )?;
+    }
     state
         .app
         .types()

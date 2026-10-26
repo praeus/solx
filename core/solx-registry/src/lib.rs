@@ -400,11 +400,30 @@ impl Registry {
     // ── client tokens ────────────────────────────────────────────────────────
 
     /// Mint a client token directly, valid for `ttl` (default
-    /// `client_token_ttl_days`).
+    /// `client_token_ttl_days`), holding `all`.
     pub async fn issue_client(
         &self,
         label: Option<&str>,
         ttl: Option<Duration>,
+    ) -> Result<IssuedClient> {
+        self.issue(label, ttl, None).await
+    }
+
+    /// [`Self::issue_client`] for a token holding only `scopes`.
+    pub async fn issue_scoped_client(
+        &self,
+        label: Option<&str>,
+        ttl: Option<Duration>,
+        scopes: &ScopeSet,
+    ) -> Result<IssuedClient> {
+        self.issue(label, ttl, Some(scopes_column(scopes))).await
+    }
+
+    async fn issue(
+        &self,
+        label: Option<&str>,
+        ttl: Option<Duration>,
+        scopes: Option<String>,
     ) -> Result<IssuedClient> {
         if ttl.is_some_and(|t| t.is_zero()) {
             return Err(SolxError::Invalid(
@@ -413,7 +432,7 @@ impl Registry {
         }
         let conn = self.db.connect().await?;
         let issued = self
-            .insert_client(&conn, clean_label(label), ttl, None)
+            .insert_client(&conn, clean_label(label), ttl, scopes)
             .await?;
         tracing::info!(
             client_id = %issued.client_id,

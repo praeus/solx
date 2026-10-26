@@ -29,6 +29,7 @@ use rmcp::service::RequestContext;
 use rmcp::{Peer, RoleServer, ServerHandler};
 use serde_json::{Map, Value};
 
+use solx_actions::ScopeCheck;
 use solx_config::{EntityKind, ToolPolicy};
 use solx_manager::App;
 use solx_surface::entities::{Action, ActionExecResult};
@@ -36,6 +37,7 @@ use solx_surface::error::SolxError;
 use solx_surface::managers::Solx;
 use solx_surface::path::full_ref;
 use solx_surface::query::{ActionSearchQuery, ExcludeMode, ListOptions};
+use solx_surface::scope::UNLIMITED;
 use solx_surface::Principal;
 
 use crate::{error, tools};
@@ -122,35 +124,60 @@ impl SolxMcpServer {
             .or_else(|| self.path_prefix.clone())
     }
 
+    /// What a router call may discover: the actions `principal`'s token
+    /// may call. Stdio has no principal, and is a local entry point.
+    fn scopes<'a>(&'a self, principal: Option<&'a Principal>) -> ScopeCheck<'a> {
+        match principal {
+            Some(p) => ScopeCheck::for_principal(&self.app.config, p),
+            None => ScopeCheck::new(&self.app.config, UNLIMITED, "the caller".into()),
+        }
+    }
+
     /// A list query in the tooling scope: the configured tooling action
     /// patterns expanded into `exclude_paths`, and the mode left set so the
     /// store also drops `solx:hidden` rows. Forced, not defaulted - nothing
-    /// a client sends can widen what this server shows a model.
-    fn tooling_list(&self, mut opts: ListOptions) -> ListOptions {
+    /// a client sends can widen what this server shows a model. It is
+    /// narrowed to the actions the caller may exec, so a model is never
+    /// shown a tool it would then be refused.
+    fn tooling_list(
+        &self,
+        mut opts: ListOptions,
+        scopes: &ScopeCheck<'_>,
+    ) -> Result<ListOptions, ErrorData> {
         opts.exclude_mode = Some(ExcludeMode::Tooling);
         self.app.config.exclusion_policy().apply(
             EntityKind::Action,
             &mut opts,
             ExcludeMode::Tooling,
         );
-        opts
+        scopes
+            .narrow_exec(&mut opts.include_paths)
+            .map_err(|e| ErrorData::invalid_request(e.to_string(), None))?;
+        Ok(opts)
     }
 
     /// Fetch every non-excluded action in the effective scope, in the default
     /// `path,name` order. Used by the router's `list_all` mode. Exclusion is
     /// done in SQL, so every page is full and `total` is exact.
-    async fn all_actions(&self, path_prefix: Option<String>) -> Result<Vec<Action>, ErrorData> {
+    async fn all_actions(
+        &self,
+        path_prefix: Option<String>,
+        scopes: &ScopeCheck<'_>,
+    ) -> Result<Vec<Action>, ErrorData> {
         let actions = self.app.actions();
         let mut out = Vec::new();
         let mut offset = 0usize;
         loop {
             let page = actions
-                .list(self.tooling_list(ListOptions {
-                    path_prefix: path_prefix.clone(),
-                    limit: Some(PAGE_SIZE),
-                    offset: Some(offset),
-                    ..Default::default()
-                }))
+                .list(self.tooling_list(
+                    ListOptions {
+                        path_prefix: path_prefix.clone(),
+                        limit: Some(PAGE_SIZE),
+                        offset: Some(offset),
+                        ..Default::default()
+                    },
+                    scopes,
+                )?)
                 .await
                 .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
             let n = page.items.len();
@@ -195,17 +222,23 @@ impl SolxMcpServer {
     async fn handle_explore_tools(
         &self,
         args: &Map<String, Value>,
+        principal: Option<&Principal>,
     ) -> Result<CallToolResult, ErrorData> {
+        let scopes = self.scopes(principal);
         match args.get("discovery_mode").and_then(Value::as_str) {
-            Some("search") => self.explore_search(args).await,
-            Some("list_all") => self.explore_list_all(args).await,
+            Some("search") => self.explore_search(args, &scopes).await,
+            Some("list_all") => self.explore_list_all(args, &scopes).await,
             _ => Ok(CallToolResult::error(vec![ContentBlock::text(
                 "invalid 'discovery_mode': must be 'search' or 'list_all'".to_string(),
             )])),
         }
     }
 
-    async fn explore_search(&self, args: &Map<String, Value>) -> Result<CallToolResult, ErrorData> {
+    async fn explore_search(
+        &self,
+        args: &Map<String, Value>,
+        scopes: &ScopeCheck<'_>,
+    ) -> Result<CallToolResult, ErrorData> {
         let query = args
             .get("search_query")
             .and_then(Value::as_str)
@@ -221,11 +254,14 @@ impl SolxMcpServer {
             .app
             .actions()
             .search(ActionSearchQuery {
-                list: self.tooling_list(ListOptions {
-                    path_prefix: self.effective_prefix(args),
-                    limit: Some(50),
-                    ..Default::default()
-                }),
+                list: self.tooling_list(
+                    ListOptions {
+                        path_prefix: self.effective_prefix(args),
+                        limit: Some(50),
+                        ..Default::default()
+                    },
+                    scopes,
+                )?,
                 q: Some(query.clone()),
                 ..Default::default()
             })
@@ -258,8 +294,11 @@ impl SolxMcpServer {
     async fn explore_list_all(
         &self,
         args: &Map<String, Value>,
+        scopes: &ScopeCheck<'_>,
     ) -> Result<CallToolResult, ErrorData> {
-        let all = self.all_actions(self.effective_prefix(args)).await?;
+        let all = self
+            .all_actions(self.effective_prefix(args), scopes)
+            .await?;
         let start = args
             .get("cursor")
             .and_then(Value::as_str)
@@ -348,7 +387,11 @@ impl ServerHandler for SolxMcpServer {
         // (which only understands `act__`-prefixed action tool names).
         if request.name == ROUTER_TOOL_NAME {
             let args = request.arguments.clone().unwrap_or_default();
-            return Ok(self.handle_explore_tools(&args).await?.into());
+            let principal = request_principal(&ctx);
+            return Ok(self
+                .handle_explore_tools(&args, principal.as_ref())
+                .await?
+                .into());
         }
         let Some((path, name)) = tools::decode_tool_name(&request.name) else {
             return Err(ErrorData::invalid_params(

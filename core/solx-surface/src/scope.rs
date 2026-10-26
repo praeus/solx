@@ -364,6 +364,38 @@ impl<'a> Need<'a> {
     }
 }
 
+/// The narrowest scope that grants the need, e.g. `read:document:/a/b` or
+/// `write:script`: what a refusal names, and what an audit log tells an
+/// operator to grant.
+impl fmt::Display for Need<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let target = |path: &str, name: &str| {
+            let path = path.trim_matches('/');
+            if path.is_empty() {
+                format!("/{name}")
+            } else {
+                format!("/{path}/{name}")
+            }
+        };
+        match *self {
+            Need::Resource {
+                access,
+                resource,
+                path,
+                name,
+            } => write!(
+                f,
+                "{}:{}:{}",
+                access.name(),
+                resource.name(),
+                target(path, name)
+            ),
+            Need::Kind(kind) => write!(f, "write:{}", kind.name()),
+            Need::Exec { path, name } => write!(f, "exec:{}", target(path, name)),
+        }
+    }
+}
+
 /// How a list, search or path facet is narrowed for one resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PathFilter {
@@ -448,21 +480,37 @@ impl ScopeSet {
     /// `access` on `resource`: its scope paths, as they stand, since they
     /// already follow the `include_paths` rule.
     pub fn path_filter(&self, access: Access, resource: Resource) -> PathFilter {
+        self.filter(|scope| match scope {
+            Scope::Resource {
+                access: a,
+                resource: r,
+                path,
+            } if *a == access && *r == resource => Some(path),
+            _ => None,
+        })
+    }
+
+    /// [`Self::path_filter`] for the actions this set may call: what a
+    /// model is shown when it discovers tools.
+    pub fn exec_filter(&self) -> PathFilter {
+        self.filter(|scope| match scope {
+            Scope::Exec { path } => Some(path),
+            _ => None,
+        })
+    }
+
+    /// The paths of the scopes `select` picks, as a filter.
+    fn filter<'s>(&'s self, select: impl Fn(&'s Scope) -> Option<&'s String>) -> PathFilter {
         let mut paths = Vec::new();
         for scope in &self.0 {
-            match scope {
-                Scope::All => return PathFilter::Unrestricted,
-                Scope::Resource {
-                    access: a,
-                    resource: r,
-                    path,
-                } if *a == access && *r == resource => {
-                    if path == "/*" {
-                        return PathFilter::Unrestricted;
-                    }
-                    paths.push(path.clone());
+            if *scope == Scope::All {
+                return PathFilter::Unrestricted;
+            }
+            if let Some(path) = select(scope) {
+                if path == "/*" {
+                    return PathFilter::Unrestricted;
                 }
-                _ => {}
+                paths.push(path.clone());
             }
         }
         if paths.is_empty() {
@@ -549,6 +597,55 @@ impl Grant {
             Grant::Unlimited => PathFilter::Unrestricted,
             Grant::Scoped(set) => set.path_filter(access, resource),
         }
+    }
+
+    /// See [`ScopeSet::exec_filter`].
+    pub fn exec_filter(&self) -> PathFilter {
+        match self {
+            Grant::Unlimited => PathFilter::Unrestricted,
+            Grant::Scoped(set) => set.exec_filter(),
+        }
+    }
+}
+
+/// How a failed scope check is treated: `scope_enforcement` in
+/// `solx-config.json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Enforcement {
+    /// Checks pass whatever they find.
+    Off,
+    /// A failed check is logged and allowed, so the scopes an action or a
+    /// client really uses can be found before they are enforced.
+    #[default]
+    Audit,
+    /// A failed check is refused with [`SolxError::Forbidden`].
+    Enforce,
+}
+
+impl Enforcement {
+    pub fn name(self) -> &'static str {
+        match self {
+            Enforcement::Off => "off",
+            Enforcement::Audit => "audit",
+            Enforcement::Enforce => "enforce",
+        }
+    }
+}
+
+impl FromStr for Enforcement {
+    type Err = SolxError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        Ok(match s.trim() {
+            "off" => Enforcement::Off,
+            "audit" => Enforcement::Audit,
+            "enforce" => Enforcement::Enforce,
+            other => {
+                return Err(SolxError::Invalid(format!(
+                    "unknown scope_enforcement '{other}' (expected off, audit or enforce)"
+                )))
+            }
+        })
     }
 }
 
@@ -1054,6 +1151,52 @@ mod tests {
         assert!(narrow.grants(&exec("/builtin/web/http-request")));
         assert!(!narrow.grants(&exec("/builtin/env/get-env")));
         assert!(!Grant::none().grants(&exec("/a")));
+    }
+
+    /// A need displays as the narrowest scope that grants it.
+    #[test]
+    fn a_need_names_the_scope_that_grants_it() {
+        let needs = [
+            (read_doc("/a/b"), "read:document:/a/b"),
+            (read_doc("/top"), "read:document:/top"),
+            (
+                exec("/builtin/web/http-request"),
+                "exec:/builtin/web/http-request",
+            ),
+            (Need::Kind(Kind::Wasm), "write:wasm"),
+            (
+                Need::file(Access::Write, "files/docs/x.txt"),
+                "write:file:/files/docs/x.txt",
+            ),
+            (Need::file(Access::Read, "top.txt"), "read:file:/top.txt"),
+        ];
+        for (need, shown) in needs {
+            assert_eq!(need.to_string(), shown);
+            let scope = set(&[shown]);
+            assert!(scope.grants(&need), "{shown}");
+        }
+    }
+
+    #[test]
+    fn exec_filter_follows_exec_scopes_only() {
+        use PathFilter::*;
+        assert_eq!(set(&["read:action"]).exec_filter(), Nothing);
+        assert_eq!(set(&["exec:/*"]).exec_filter(), Unrestricted);
+        assert_eq!(ScopeSet::all().exec_filter(), Unrestricted);
+        assert_eq!(
+            set(&["exec:/t/*", "exec:/builtin/web/http-request", "read:action"]).exec_filter(),
+            Only(vec!["/builtin/web/http-request".into(), "/t/*".into()])
+        );
+        assert_eq!(UNLIMITED.exec_filter(), Unrestricted);
+    }
+
+    #[test]
+    fn enforcement_parses_strictly() {
+        for e in [Enforcement::Off, Enforcement::Audit, Enforcement::Enforce] {
+            assert_eq!(e.name().parse::<Enforcement>().unwrap(), e);
+        }
+        assert_eq!(Enforcement::default(), Enforcement::Audit);
+        assert!("strict".parse::<Enforcement>().is_err());
     }
 
     #[test]

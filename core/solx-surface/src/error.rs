@@ -53,6 +53,11 @@ pub enum SolxError {
     #[error("unauthorized: {0}")]
     Unauthorized(String),
 
+    /// Authenticated, but the scopes the call is checked against (its
+    /// token's, or its calling action's) don't allow it.
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+
     /// Anything else.
     #[error("{0}")]
     Other(String),

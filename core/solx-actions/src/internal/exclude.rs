@@ -14,10 +14,13 @@
 //!   the configured patterns into the query before a list or search.
 
 use serde_json::Value;
-use solx_config::{ConfigService, EntityKind};
+use solx_config::EntityKind;
 use solx_surface::query::{ActionSearchQuery, ExcludeMode, ListOptions, SearchQuery};
+use solx_surface::scope::Resource;
 
 use super::{doc_path_or_root, path_or_root, InternalCtx};
+use crate::scope_gate::resource_of;
+use crate::ScopeCheck;
 
 /// The mode a builtin call asked for. `run_internal` has already aliased
 /// `excludeMode`/`exclude_mode` (and `excludeHidden`/`exclude_hidden`), so
@@ -83,44 +86,59 @@ pub(super) async fn gate(fn_name: &str, params: &Value, ctx: &InternalCtx) -> Re
     Ok(())
 }
 
-/// Expand the requested mode's patterns into a list query. Builtins
-/// default to [`ExcludeMode::None`] (see the module docs).
+/// Expand the requested mode's patterns into a list query, and narrow it to
+/// what the caller's scopes let it read. Builtins default to
+/// [`ExcludeMode::None`] (see the module docs).
 pub(super) fn apply_list(
     kind: EntityKind,
     opts: &mut ListOptions,
     params: &Value,
-    config: &ConfigService,
+    scopes: &ScopeCheck,
 ) -> Result<(), String> {
     if opts.exclude_mode.is_none() {
         opts.exclude_mode = requested_mode(params)?;
     }
-    config
+    scopes
+        .config()
         .exclusion_policy()
         .apply(kind, opts, ExcludeMode::None);
-    Ok(())
+    scopes
+        .narrow_reads(resource_of(kind), &mut opts.include_paths)
+        .map_err(|e| e.to_string())
 }
 
 /// [`apply_list`] for `search-actions`, folding in the deprecated
 /// `excludeHidden` flag the query struct carries itself.
-pub(super) fn apply_action_search(query: &mut ActionSearchQuery, config: &ConfigService) {
+pub(super) fn apply_action_search(
+    query: &mut ActionSearchQuery,
+    scopes: &ScopeCheck,
+) -> Result<(), String> {
     query.list.exclude_mode = query.effective_mode();
     query.exclude_hidden = false;
-    config
-        .exclusion_policy()
-        .apply(EntityKind::Action, &mut query.list, ExcludeMode::None);
+    scopes.config().exclusion_policy().apply(
+        EntityKind::Action,
+        &mut query.list,
+        ExcludeMode::None,
+    );
+    scopes
+        .narrow_reads(Resource::Action, &mut query.list.include_paths)
+        .map_err(|e| e.to_string())
 }
 
 /// [`apply_list`] for `search-documents`.
 pub(super) fn apply_doc_search(
     query: &mut SearchQuery,
     params: &Value,
-    config: &ConfigService,
+    scopes: &ScopeCheck,
 ) -> Result<(), String> {
     if query.exclude_mode.is_none() {
         query.exclude_mode = requested_mode(params)?;
     }
-    config
+    scopes
+        .config()
         .exclusion_policy()
         .apply_search(query, ExcludeMode::None);
-    Ok(())
+    scopes
+        .narrow_reads(Resource::Document, &mut query.include_paths)
+        .map_err(|e| e.to_string())
 }

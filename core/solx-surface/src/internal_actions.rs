@@ -204,11 +204,21 @@ pub fn uses_keyring(action_config: Option<&Value>) -> bool {
         })
 }
 
-/// Whether an action holds a credential: it declares scoped secrets, or its
-/// auth reads a keyring entry. A keyed action is root-only to create or
-/// change, and always locked, so content can't repoint what runs with it.
+/// Whether an action holds a credential or an authority: it declares scoped
+/// secrets, its auth reads a keyring entry, or it declares the scopes it
+/// runs with (`action_config.scopes`, even an empty list). A keyed action is
+/// root-only to create or change, and always locked, so content can't
+/// repoint what runs with it.
 pub fn is_keyed(action_config: Option<&Value>) -> bool {
-    !secret_names(action_config).is_empty() || uses_keyring(action_config)
+    !secret_names(action_config).is_empty()
+        || uses_keyring(action_config)
+        || declares_scopes(action_config)
+}
+
+/// Whether an action declares `action_config.scopes` at all. See
+/// [`crate::scope::declared_scopes`] for reading them.
+pub fn declares_scopes(action_config: Option<&Value>) -> bool {
+    action_config.is_some_and(|c| c.get("scopes").is_some())
 }
 
 /// The scoped-secret access of one action: the secret names it declares in

@@ -177,16 +177,6 @@ describe('collection routes', () => {
     expect(url.searchParams.get('excludeMode')).toBe('tooling');
   });
 
-  test('includePaths go out as repeated keys', async () => {
-    nextResponse = (res) => {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ items: [], total: 0, limit: 10, offset: 0 }));
-    };
-    await solx.docs.list({ includePaths: ['/notes*', '/blog'] });
-    const url = new URL(`http://x${last().url}`);
-    expect(url.searchParams.getAll('includePaths')).toEqual(['/notes*', '/blog']);
-  });
-
   test('search is top-level, not a sibling of the docs catch-all', async () => {
     nextResponse = (res) => {
       res.writeHead(200, { 'content-type': 'application/json' });

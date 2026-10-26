@@ -28,9 +28,12 @@ pub use entities::{
     LinkKind, TypeEntity, TypeInput,
 };
 pub use internal_actions::{
-    is_keyed, secret_names, secret_scope, uses_keyring, ActionExecutor, ActionSecrets, Caller, CallerInfo,
+    declares_scopes, is_keyed, secret_names, secret_scope, uses_keyring, ActionExecutor, ActionSecrets, Caller, CallerInfo,
     InternalActionHandler, InternalActionRegistry, InternalCallCtx, SecretHandle, SeedAction,
 };
 pub use managers::{ActionManager, DocManager, FileStore, Solx, TypeManager};
 pub use query::{ExcludeMode, ListOptions, Page, PathFacet, SearchQuery, SortOrder};
-pub use scope::{declared_scopes, Grant, Need, PathFilter, Preset, Scope, ScopeSet};
+pub use scope::{
+    declared_scopes, Access, Enforcement, Grant, Need, PathFilter, Preset, Resource, Scope,
+    ScopeSet,
+};

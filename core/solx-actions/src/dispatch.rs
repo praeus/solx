@@ -8,11 +8,12 @@ use serde_json::Value;
 use solx_surface::entities::{Action, ActionExecResult, ActionType};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::path::full_ref;
+use solx_surface::scope::Need;
 use solx_surface::{ExcludeMode, ExecContext, Grant};
 use uuid::Uuid;
 
 use crate::caller::Caller;
-use crate::{exec, internal, lock, script, wasm, LocalActionManager};
+use crate::{exec, internal, lock, script, wasm, LocalActionManager, ScopeCheck};
 
 /// Per-action wall-clock ceiling from `action_config.timeout_secs`, using
 /// the same untyped-config convention as `cwd`. `None` means the backend's
@@ -59,7 +60,12 @@ impl LocalActionManager {
     /// Runs on every frame, not just the first, which is the point: the MCP
     /// server's own check sees only the tool the model called, and that tool
     /// can be a Script or WASM action, or `action-start`, that calls another.
-    fn enforce_scope(&self, mode: ExcludeMode, action: &Action, params: Value) -> Result<Value> {
+    fn enforce_exclusions(
+        &self,
+        mode: ExcludeMode,
+        action: &Action,
+        params: Value,
+    ) -> Result<Value> {
         match mode {
             ExcludeMode::Tooling => {
                 self.config
@@ -122,7 +128,7 @@ impl LocalActionManager {
     /// script's `exec` stage), and scopes `get-secret`/`set-secret` to the
     /// *calling* action's own secrets. Its principal and exclusion mode were
     /// fixed where the chain entered; under [`ExcludeMode::Tooling`] every
-    /// frame is held to the tooling exclusions (see [`Self::enforce_scope`]).
+    /// frame is held to the tooling exclusions (see [`Self::enforce_exclusions`]).
     pub async fn exec_as(
         &self,
         path: &str,
@@ -179,7 +185,16 @@ impl LocalActionManager {
     ) -> Result<ActionExecResult> {
         let (action, secrets) = self.get_with_secrets(path, name).await?;
         let action_ref = full_ref(&action.path, &action.name)?;
-        let params = self.enforce_scope(ctx.exclude_mode(), &action, params)?;
+        let params = self.enforce_exclusions(ctx.exclude_mode(), &action, params)?;
+        // After the exclusions, so an excluded action still reads as
+        // missing. Like them it runs on every frame: a client's call is
+        // checked against its token, and each nested call against the
+        // action that makes it.
+        let scopes = ScopeCheck::for_exec(&self.config, ctx);
+        scopes.require(&Need::Exec {
+            path: &action.path,
+            name: &action.name,
+        })?;
 
         // Internal built-ins mix two wire-key conventions (camelCase
         // entity/search structs, snake_case raw-key handlers) — see
@@ -271,6 +286,7 @@ impl LocalActionManager {
                          solx's own catalogue"
                     )));
                 }
+                internal::scopes::gate(fn_name, &params, &scopes)?;
                 let ctx = internal::InternalCtx {
                     docs: self.docs.clone(),
                     types: self.types.clone(),
@@ -395,7 +411,7 @@ mod tests {
             .await
             .unwrap();
         let params = m
-            .enforce_scope(
+            .enforce_exclusions(
                 ExcludeMode::Tooling,
                 &action,
                 serde_json::json!({"excludeMode": "none"}),
@@ -404,7 +420,7 @@ mod tests {
         assert_eq!(params, serde_json::json!({"excludeMode": "tooling"}));
 
         let params = m
-            .enforce_scope(
+            .enforce_exclusions(
                 ExcludeMode::None,
                 &action,
                 serde_json::json!({"excludeMode": "none"}),

@@ -10,11 +10,12 @@ use solx_surface::error::{Result, SolxError};
 use solx_surface::internal_actions::CallerInfo;
 use solx_surface::managers::ActionManager;
 use solx_surface::path::{full_ref, split_ref};
+use solx_surface::scope::Need;
 use solx_surface::{ExcludeMode, ExecContextInfo, Grant};
 use uuid::Uuid;
 
 use crate::caller::Caller;
-use crate::LocalActionManager;
+use crate::{LocalActionManager, ScopeCheck};
 
 /// Whether this process is a long-lived host (`solx-server`, `solx-mcp`) —
 /// the only kind that can safely run a detached `action-start` invocation.
@@ -89,6 +90,12 @@ impl LocalActionManager {
                 .exclusion_policy()
                 .guard_action(ExcludeMode::Tooling, &action, false)?;
         }
+        // Likewise the caller's `exec` scope, which the spawned run checks
+        // again: refused here, it leaves no row behind.
+        ScopeCheck::for_exec_info(&self.config, &exec).require(&Need::Exec {
+            path: &action.path,
+            name: &action.name,
+        })?;
 
         let invocation_id = Uuid::new_v4().to_string();
         // Captured before the row exists, so a poller can jump straight to

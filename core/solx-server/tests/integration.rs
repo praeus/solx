@@ -509,14 +509,15 @@ async fn exclusions_scope_the_rest_surface() {
     .await;
     assert_eq!(total(ad_hoc), 0);
 
-    // Includes ride the same way and narrow within the scope: the user
-    // exclusion still hides /agent/skills on both routes.
+    // `includePaths` is how scopes narrow a list, so it is server-set only:
+    // a caller sending it changes nothing.
     for route in ["docs", "search"] {
+        let plain = get_json(http.get(format!("{base_url}/{route}?excludeMode=user"))).await;
         let included = get_json(http.get(format!(
             "{base_url}/{route}?excludeMode=user&includePaths=/notes&includePaths=/agent*"
         )))
         .await;
-        assert_eq!(total(included), 1, "{route}");
+        assert_eq!(total(included), total(plain), "{route}");
     }
 
     // Direct access follows the same scope.

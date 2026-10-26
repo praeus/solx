@@ -8,17 +8,21 @@
 //! with the root token, the Settings window) pass every check. Content (an
 //! MCP tool call whatever token its client holds, a WASM guest, a script,
 //! REST with a client or action token, the desktop app's main window) is
-//! held to the checks below.
+//! held to the checks below, and to its scopes ([`Actor::grant`]):
+//! `write:action` plus the kind scope (`write:script`, `write:command`, …)
+//! for an action, `write:file` for a file. The desktop app's main window is
+//! limited by no scope.
 //!
-//! Built-ins additionally refuse Command and Webhook rows; REST and the
-//! desktop app don't yet (known gap 7 in `docs/security-design.md`).
+//! Built-ins additionally refuse Command and Webhook rows; for REST,
+//! `write:command` and `write:webhook` decide it.
 
 use solx_surface::entities::{Action, ActionInput, ActionType};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::ActionManager;
+use solx_surface::scope::{Access, Kind, Need, Resource};
 use solx_surface::{secret_scope, Actor};
 
-use crate::LocalActionManager;
+use crate::{LocalActionManager, ScopeCheck};
 
 impl LocalActionManager {
     /// Refuse a save (`incoming`) or delete (`None`) of `path`/`name` that
@@ -41,7 +45,26 @@ impl LocalActionManager {
             Err(e) => return Err(e),
         };
         check_action_change(actor, existing.as_ref(), incoming, path, name)
-            .map_err(SolxError::Unauthorized)
+            .map_err(SolxError::Unauthorized)?;
+        // The actor's scopes: `write:action` on the action, and the kind
+        // scope of both the incoming and the stored type, since a
+        // merge-upsert that omits `action_type` keeps the stored one.
+        let scopes = ScopeCheck::for_actor(&self.config, actor);
+        scopes.require(&Need::Resource {
+            access: Access::Write,
+            resource: Resource::Action,
+            path,
+            name,
+        })?;
+        let types = [
+            incoming.and_then(|i| i.action_type),
+            existing.as_ref().and_then(|a| a.action_type),
+        ];
+        let kinds = types.into_iter().flatten().filter_map(Kind::for_action_type);
+        for kind in kinds {
+            scopes.require(&Need::Kind(kind))?;
+        }
+        Ok(())
     }
 
     /// Refuse when `actor` may not write or delete any of `targets`
@@ -55,6 +78,14 @@ impl LocalActionManager {
     ) -> Result<()> {
         if actor == Actor::Operator {
             return Ok(());
+        }
+        let targets: Vec<&str> = targets.into_iter().collect();
+        let scopes = ScopeCheck::for_actor(&self.config, actor);
+        for target in &targets {
+            // Checked against where the store will really write, so an
+            // alias of a path (`a//b`, `a\b`) is judged as the path it is.
+            let stored = solx_files::normalize_rel_path(target)?;
+            scopes.require(&Need::file(Access::Write, &stored))?;
         }
         self.guard_pinned_files(targets).await
     }

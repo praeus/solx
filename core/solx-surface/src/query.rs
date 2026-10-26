@@ -69,7 +69,12 @@ pub struct ListOptions {
     /// Keep only entities matching at least one of these patterns — same
     /// syntax and matching rule as `exclude_paths`. Empty means no
     /// restriction; exclusions still apply to whatever is included.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Server-set only: it is how a list is narrowed to what the caller's
+    /// scopes admit (`solx_surface::scope::ScopeSet::path_filter`), so it
+    /// is never read from or written to the wire, where a caller could
+    /// widen it.
+    #[serde(skip)]
     pub include_paths: Vec<String>,
     /// Which configured exclusion list applies. `None` means "the
     /// surface's default", which differs per surface — see [`ExcludeMode`].
@@ -444,8 +449,8 @@ pub struct SearchQuery {
     /// Same as [`ListOptions::exclude_paths`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude_paths: Vec<String>,
-    /// Same as [`ListOptions::include_paths`].
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Same as [`ListOptions::include_paths`]: server-set only.
+    #[serde(skip)]
     pub include_paths: Vec<String>,
     /// Same as [`ListOptions::exclude_mode`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -499,6 +504,27 @@ mod tests {
 
     fn opts() -> ListOptions {
         ListOptions::default()
+    }
+
+    /// `include_paths` is how scopes narrow a list, so a caller can neither
+    /// send it nor see it.
+    #[test]
+    fn include_paths_never_crosses_the_wire() {
+        let list: ListOptions =
+            serde_json::from_value(serde_json::json!({ "includePaths": ["/*"] })).unwrap();
+        assert!(list.include_paths.is_empty());
+        let query: SearchQuery =
+            serde_json::from_value(serde_json::json!({ "includePaths": ["/*"] })).unwrap();
+        assert!(query.include_paths.is_empty());
+        let query: ActionSearchQuery =
+            serde_json::from_value(serde_json::json!({ "includePaths": ["/*"] })).unwrap();
+        assert!(query.list.include_paths.is_empty());
+
+        let narrowed = ListOptions {
+            include_paths: vec!["/a/*".into()],
+            ..opts()
+        };
+        assert!(!serde_json::to_string(&narrowed).unwrap().contains("/a/*"));
     }
 
     #[test]

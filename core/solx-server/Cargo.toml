@@ -37,9 +37,13 @@ solx-manager = { workspace = true, default-features = false, features = ["local"
 solx-registry = { workspace = true, optional = true }
 solx-surface = { workspace = true }
 solx-config = { workspace = true }
-# Only for `set_long_lived_host` — everything else about action execution
-# stays behind `solx-manager`'s `App`/`Solx` facade.
+# For `set_long_lived_host` and the scope checks (`ScopeCheck`) — everything
+# else about action execution stays behind `solx-manager`'s `App`/`Solx`
+# facade.
 solx-actions = { workspace = true }
+# `normalize_rel_path`: a file's scope is checked against the path the store
+# will really use.
+solx-files = { workspace = true }
 # `streamable_http_service()` — mounts the same `SolxMcpServer` the stdio
 # `solx-mcp` binary uses, as an MCP-over-HTTP route sharing this process's
 # `Arc<App>`. See routes/mcp.rs.

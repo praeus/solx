@@ -627,7 +627,7 @@ These are bearer-style: holding the id or token is the only check.
     (`start_invocation` refuses an excluded target before creating its
     row). A remote `solx-client` carries it as `X-Solx-Scope: tooling`,
     which only ever restricts, so the server honors it from any caller.
-  - At every frame, `LocalActionManager::enforce_scope` (`dispatch.rs`)
+  - At every frame, `LocalActionManager::enforce_exclusions` (`dispatch.rs`)
     refuses an excluded action as `NotFound`, and forces every `Internal`
     action's params into `excludeMode: "tooling"`, replacing every spelling
     of the flag, so a model can't pass `exclude_mode: "none"`. This keys on
@@ -746,7 +746,7 @@ These are accepted for now. Each one is a candidate for future hardening.
   principal makes an action look like an external call; dropping the
   exclusion mode lets a model reach actions excluded from tooling. Only
   `ExcludeMode::Tooling` is enforced along the chain (`User` acts as
-  `None`); `enforce_scope` matches it exhaustively, so enforcing `User`
+  `None`); `enforce_exclusions` matches it exhaustively, so enforcing `User`
   would be a deliberate change.
 - Any built-in that authorizes on identity uses `external_principal()` and
   treats `None` as deny, never as root.

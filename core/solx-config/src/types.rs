@@ -178,6 +178,12 @@ pub struct SolxConfig {
     /// codes, `solx token issue`), in days. Defaults to 90.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_token_ttl_days: Option<i64>,
+    /// How a call outside its scopes is treated: `"off"` (allowed),
+    /// `"audit"` (allowed and logged, the default while packages declare
+    /// their scopes) or `"enforce"` (refused). Read live, so a change takes
+    /// effect on the next call. See `docs/token-scopes-plan.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_enforcement: Option<String>,
     /// Whether a host that runs the local managers in-process (e.g. the
     /// solx desktop app's server build) also exposes them over HTTP, as an
     /// embedded `solx-server` on `server_host`/`server_port`. Defaults to

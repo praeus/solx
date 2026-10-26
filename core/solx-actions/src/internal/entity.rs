@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use serde_json::{json, Value};
-use solx_config::{ConfigService, EntityKind};
+use solx_config::EntityKind;
 use solx_surface::entities::{ActionInput, TypeInput};
 use solx_surface::managers::{ActionManager, DocManager, TypeManager};
 use solx_surface::query::{ActionSearchQuery, ListOptions, SearchQuery};
@@ -18,16 +18,17 @@ use solx_surface::entities::DocumentInput;
 
 use super::exclude::{apply_action_search, apply_doc_search, apply_list};
 use super::{denial, parse_input, path_or_root, require_str, to_value};
-use crate::LocalActionManager;
+use crate::{LocalActionManager, ScopeCheck};
 
-/// Parse a `ListOptions` and expand its `excludeMode` for `kind`.
+/// Parse a `ListOptions`, expand its `excludeMode` for `kind`, and narrow it
+/// to what the caller may read.
 fn list_opts(
     kind: EntityKind,
     params: &Value,
-    config: &ConfigService,
+    scopes: &ScopeCheck<'_>,
 ) -> Result<ListOptions, String> {
     let mut opts: ListOptions = parse_input(params)?;
-    apply_list(kind, &mut opts, params, config)?;
+    apply_list(kind, &mut opts, params, scopes)?;
     Ok(opts)
 }
 
@@ -66,9 +67,9 @@ pub(super) async fn doc_delete(
 pub(super) async fn doc_list(
     params: &Value,
     docs: &Arc<dyn DocManager>,
-    config: &ConfigService,
+    scopes: &ScopeCheck<'_>,
 ) -> Result<Value, String> {
-    let opts = list_opts(EntityKind::Document, params, config)?;
+    let opts = list_opts(EntityKind::Document, params, scopes)?;
     let page = docs.list(opts).await.map_err(|e| e.to_string())?;
     to_value(&page)
 }
@@ -76,9 +77,9 @@ pub(super) async fn doc_list(
 pub(super) async fn doc_paths(
     params: &Value,
     docs: &Arc<dyn DocManager>,
-    config: &ConfigService,
+    scopes: &ScopeCheck<'_>,
 ) -> Result<Value, String> {
-    let opts = list_opts(EntityKind::Document, params, config)?;
+    let opts = list_opts(EntityKind::Document, params, scopes)?;
     let page = docs.paths(opts).await.map_err(|e| e.to_string())?;
     to_value(&page)
 }
@@ -125,9 +126,9 @@ pub(super) async fn type_delete(
 pub(super) async fn type_list(
     params: &Value,
     types: &Arc<dyn TypeManager>,
-    config: &ConfigService,
+    scopes: &ScopeCheck<'_>,
 ) -> Result<Value, String> {
-    let opts = list_opts(EntityKind::Type, params, config)?;
+    let opts = list_opts(EntityKind::Type, params, scopes)?;
     let page = types.list(opts).await.map_err(|e| e.to_string())?;
     to_value(&page)
 }
@@ -135,9 +136,9 @@ pub(super) async fn type_list(
 pub(super) async fn type_paths(
     params: &Value,
     types: &Arc<dyn TypeManager>,
-    config: &ConfigService,
+    scopes: &ScopeCheck<'_>,
 ) -> Result<Value, String> {
-    let opts = list_opts(EntityKind::Type, params, config)?;
+    let opts = list_opts(EntityKind::Type, params, scopes)?;
     let page = types.paths(opts).await.map_err(|e| e.to_string())?;
     to_value(&page)
 }
@@ -208,9 +209,9 @@ pub(super) async fn action_delete(
 pub(super) async fn action_list(
     params: &Value,
     actions: &Arc<dyn ActionManager>,
-    config: &ConfigService,
+    scopes: &ScopeCheck<'_>,
 ) -> Result<Value, String> {
-    let opts = list_opts(EntityKind::Action, params, config)?;
+    let opts = list_opts(EntityKind::Action, params, scopes)?;
     let page = actions.list(opts).await.map_err(|e| e.to_string())?;
     to_value(&page)
 }
@@ -218,9 +219,9 @@ pub(super) async fn action_list(
 pub(super) async fn action_paths(
     params: &Value,
     actions: &Arc<dyn ActionManager>,
-    config: &ConfigService,
+    scopes: &ScopeCheck<'_>,
 ) -> Result<Value, String> {
-    let opts = list_opts(EntityKind::Action, params, config)?;
+    let opts = list_opts(EntityKind::Action, params, scopes)?;
     let page = actions.paths(opts).await.map_err(|e| e.to_string())?;
     to_value(&page)
 }
@@ -230,10 +231,10 @@ pub(super) async fn action_paths(
 pub(super) async fn search_documents(
     params: &Value,
     docs: &Arc<dyn DocManager>,
-    config: &ConfigService,
+    scopes: &ScopeCheck<'_>,
 ) -> Result<Value, String> {
     let mut query: SearchQuery = parse_input(params)?;
-    apply_doc_search(&mut query, params, config)?;
+    apply_doc_search(&mut query, params, scopes)?;
     let results = docs.search(query).await.map_err(|e| e.to_string())?;
     to_value(&results)
 }
@@ -245,10 +246,10 @@ pub(super) async fn search_documents(
 pub(super) async fn search_actions(
     params: &Value,
     actions: &Arc<dyn ActionManager>,
-    config: &ConfigService,
+    scopes: &ScopeCheck<'_>,
 ) -> Result<Value, String> {
     let mut query: ActionSearchQuery = parse_input(params)?;
-    apply_action_search(&mut query, config);
+    apply_action_search(&mut query, scopes)?;
     let page = actions.search(query).await.map_err(|e| e.to_string())?;
     to_value(&page)
 }

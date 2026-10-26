@@ -196,7 +196,9 @@ pub(crate) async fn lock_keyed_actions(
             }
             _ => None,
         };
-        tracing::info!("locked {reference}: it has scoped secrets or a keyring reference");
+        tracing::info!(
+            "locked {reference}: it has scoped secrets, declared scopes or a keyring reference"
+        );
         conn.execute(
             "UPDATE actions SET locked=1, pin_path=?2, pin_sha256=?3 WHERE id=?1",
             libsql::params![

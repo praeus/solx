@@ -109,11 +109,6 @@ fn builtin_action_param_types() -> Vec<SeedType> {
         "items": { "type": "string" },
         "description": "Extra exclusion patterns, added to the excludeMode list. A pattern is a glob ('*' spans '/', '?' is one character) matched against an entity's path or its full reference: '/a/b' drops entities in /a/b and the entity b in /a; '/a/b*' also drops everything beneath.",
     });
-    let include_paths = json!({
-        "type": "array",
-        "items": { "type": "string" },
-        "description": "Keep only entities matching at least one of these patterns (same syntax and matching as excludePaths). Exclusions still apply to whatever is included. Omit or leave empty for no restriction.",
-    });
 
     vec![
         SeedType {
@@ -149,7 +144,6 @@ fn builtin_action_param_types() -> Vec<SeedType> {
                     "dateBefore": { "type": "string" },
                     "excludeMode": exclude_mode.clone(),
                     "excludePaths": exclude_paths.clone(),
-                    "includePaths": include_paths.clone(),
                 }
             }),
             groups: vec!["builtin-params"],
@@ -249,7 +243,6 @@ fn builtin_action_param_types() -> Vec<SeedType> {
                     "offset": { "type": "integer" },
                     "excludeMode": exclude_mode.clone(),
                     "excludePaths": exclude_paths.clone(),
-                    "includePaths": include_paths.clone(),
                 }
             }),
             groups: vec!["builtin-params"],
@@ -273,7 +266,6 @@ fn builtin_action_param_types() -> Vec<SeedType> {
                     "dateBefore": { "type": "string" },
                     "excludeMode": exclude_mode.clone(),
                     "excludePaths": exclude_paths.clone(),
-                    "includePaths": include_paths.clone(),
                 }
             }),
             groups: vec!["builtin-params"],

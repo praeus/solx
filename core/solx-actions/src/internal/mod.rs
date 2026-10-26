@@ -42,7 +42,7 @@ use solx_surface::internal_actions::{InternalActionRegistry, InternalCallCtx};
 use solx_surface::managers::{ActionManager, DocManager, FileStore, TypeManager};
 use solx_surface::{Actor, ExecContext};
 
-use crate::LocalActionManager;
+use crate::{LocalActionManager, ScopeCheck};
 
 pub mod doc_fields;
 pub mod entity;
@@ -53,6 +53,7 @@ pub mod http;
 pub mod http_stream;
 pub mod oauth;
 pub mod open_url;
+pub(crate) mod scopes;
 pub mod secrets;
 
 // Re-export `init_env_mappings` so the existing call site
@@ -130,6 +131,10 @@ pub async fn run_internal(
 ) -> Result<Value, String> {
     let params = &normalize_params(params);
     exclude::gate(fn_name, params, ctx).await?;
+    // What the caller may read, for the lists below. Single-entity reads
+    // were checked in dispatch (`scopes::gate`), writes are checked by the
+    // `authorize_*` entry points.
+    let scopes = ScopeCheck::for_exec(&ctx.config, &ctx.exec);
     match fn_name {
         // ── OAuth 2.0 authorization-code loopback ────────────────────────
         "oauth-start" => oauth::oauth_start(params).await,
@@ -140,32 +145,32 @@ pub async fn run_internal(
         "entity-save-document" => entity::doc_save(params, &ctx.docs).await,
         "entity-get-document" => entity::doc_get(params, &ctx.docs).await,
         "entity-delete-document" => entity::doc_delete(params, &ctx.docs).await,
-        "entity-list-documents" => entity::doc_list(params, &ctx.docs, &ctx.config).await,
-        "entity-list-document-paths" => entity::doc_paths(params, &ctx.docs, &ctx.config).await,
+        "entity-list-documents" => entity::doc_list(params, &ctx.docs, &scopes).await,
+        "entity-list-document-paths" => entity::doc_paths(params, &ctx.docs, &scopes).await,
 
         "entity-save-type" => entity::type_save(params, &ctx.types).await,
         "entity-get-type" => entity::type_get(params, &ctx.types).await,
         "entity-delete-type" => entity::type_delete(params, &ctx.types).await,
-        "entity-list-types" => entity::type_list(params, &ctx.types, &ctx.config).await,
-        "entity-list-type-paths" => entity::type_paths(params, &ctx.types, &ctx.config).await,
+        "entity-list-types" => entity::type_list(params, &ctx.types, &scopes).await,
+        "entity-list-type-paths" => entity::type_paths(params, &ctx.types, &scopes).await,
 
         "entity-save-action" => entity::action_save(params, &ctx.actions, &ctx.local, Actor::builtin(&ctx.exec)).await,
         "entity-get-action" => entity::action_get(params, &ctx.actions).await,
         "entity-delete-action" => entity::action_delete(params, &ctx.actions, &ctx.local, Actor::builtin(&ctx.exec)).await,
-        "entity-list-actions" => entity::action_list(params, &ctx.actions, &ctx.config).await,
-        "entity-list-action-paths" => entity::action_paths(params, &ctx.actions, &ctx.config).await,
+        "entity-list-actions" => entity::action_list(params, &ctx.actions, &scopes).await,
+        "entity-list-action-paths" => entity::action_paths(params, &ctx.actions, &scopes).await,
 
         // ── search ───────────────────────────────────────────────────────
-        "search-documents" => entity::search_documents(params, &ctx.docs, &ctx.config).await,
-        "search-actions" => entity::search_actions(params, &ctx.actions, &ctx.config).await,
+        "search-documents" => entity::search_documents(params, &ctx.docs, &scopes).await,
+        "search-actions" => entity::search_actions(params, &ctx.actions, &scopes).await,
 
         // ── file store ───────────────────────────────────────────────────
         "file-put" => file::file_put(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await,
         "file-get" => file::file_get(params, &ctx.files).await,
         "file-delete" => file::file_delete(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await,
-        "file-list" => file::file_list(params, &ctx.files).await,
+        "file-list" => file::file_list(params, &ctx.files, &scopes).await,
         "file-copy" => file::file_copy(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await,
-        "dir-copy" => file::dir_copy(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await,
+        "dir-copy" => file::dir_copy(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec), &scopes).await,
         "dir-delete" => file::dir_delete(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await,
 
         // ── document field ops (flat and path-style) ─────────────────────
