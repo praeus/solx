@@ -568,16 +568,9 @@ impl Grant {
         Self::scoped(stored.unwrap_or_else(ScopeSet::all))
     }
 
-    /// The grant an action runs with: the scopes it declares in
-    /// `action_config.scopes`, or nothing. A malformed declaration, which a
-    /// save refuses, grants nothing too.
-    pub fn for_action(action_config: Option<&Value>) -> Self {
-        Self::scoped(
-            declared_scopes(action_config)
-                .ok()
-                .flatten()
-                .unwrap_or_default(),
-        )
+    /// The grant the action in `path` runs with: [`action_scopes`].
+    pub fn for_action(path: &str, action_config: Option<&Value>) -> Self {
+        Self::scoped(action_scopes(path, action_config))
     }
 
     pub fn is_unlimited(&self) -> bool {
@@ -730,6 +723,35 @@ pub fn declared_scopes(action_config: Option<&Value>) -> Result<Option<ScopeSet>
         .map(|v| v.as_str().ok_or_else(not_a_list))
         .collect::<Result<Vec<&str>>>()?;
     ScopeSet::parse(names).map(Some)
+}
+
+/// The scopes the action in `path` runs with: those it declares in
+/// `action_config.scopes` (none if it declares none, or a malformed list,
+/// which a save refuses), plus, for a package's action
+/// (`/packages/<name>/...`), `exec:/packages/<name>/*`, so a package can
+/// always call its own actions.
+pub fn action_scopes(path: &str, action_config: Option<&Value>) -> ScopeSet {
+    let declared = declared_scopes(action_config)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    match package_of(path) {
+        Some(package) => ScopeSet::new(declared.iter().cloned().chain([Scope::Exec {
+            path: format!("/packages/{package}/*"),
+        }])),
+        None => declared,
+    }
+}
+
+/// The package an action in `path` belongs to: the segment after a
+/// leading `/packages/`. The action `/packages/p` (in path `/packages`)
+/// belongs to none. Matched exactly, like every scope path.
+pub fn package_of(path: &str) -> Option<&str> {
+    let mut segments = path.split('/').filter(|s| !s.is_empty());
+    match (segments.next(), segments.next()) {
+        (Some("packages"), Some(package)) => Some(package),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -1202,12 +1224,32 @@ mod tests {
     #[test]
     fn an_action_is_granted_what_it_declares_or_nothing() {
         let declared = json!({ "scopes": ["exec:/builtin/web/http-request"] });
-        let grant = Grant::for_action(Some(&declared));
+        let grant = Grant::for_action("/t", Some(&declared));
         assert!(grant.grants(&exec("/builtin/web/http-request")));
         assert!(!grant.grants(&exec("/builtin/env/get-env")));
 
         for config in [None, Some(json!({})), Some(json!({ "scopes": "all" }))] {
-            assert_eq!(Grant::for_action(config.as_ref()), Grant::none());
+            assert_eq!(Grant::for_action("/t", config.as_ref()), Grant::none());
+        }
+    }
+
+    /// A package's action may always call the package's own actions, and
+    /// nothing else it doesn't declare.
+    #[test]
+    fn a_package_action_may_call_its_own_package() {
+        let grant = Grant::for_action("/packages/p/sub", None);
+        assert!(grant.grants(&exec("/packages/p/other")));
+        assert!(grant.grants(&exec("/packages/p/deep/x")));
+        assert!(!grant.grants(&exec("/packages/q/x")));
+        assert!(!grant.grants(&exec("/builtin/web/http-request")));
+
+        let declared = json!({ "scopes": ["write:script"] });
+        assert_eq!(
+            action_scopes("/packages/p", Some(&declared)).to_string(),
+            "exec:/packages/p/* write:script"
+        );
+        for outside in ["/packages", "/", "/Packages/p", "/my/packages/p"] {
+            assert_eq!(package_of(outside), None, "{outside}");
         }
     }
 

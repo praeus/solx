@@ -60,3 +60,6 @@ solx-docs = { workspace = true }
 solx-registry = { workspace = true }
 tempfile = "3"
 serial_test = "3"
+# Seeds the principal probe for the integration tests (`tests/scope.rs`),
+# which see this crate built without `cfg(test)`.
+solx-actions = { path = ".", features = ["test-probe"] }

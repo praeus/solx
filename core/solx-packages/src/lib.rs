@@ -73,6 +73,20 @@
 //! artifact must therefore be written by the script itself (`save file`,
 //! the operator path), not rebuilt over HTTP with an action token.
 //!
+//! ## Scopes
+//!
+//! `solx-package.json` may list `scopes`: everything the package's actions
+//! may declare in `action_config.scopes`, and so what a reader reviews
+//! before installing, alongside `command_actions` and `allowed_base_urls`.
+//! While a script runs, [`guard_package_script_action`] refuses an action
+//! save declaring a scope the manifest doesn't cover
+//! (`exec:/builtin/web/*` covers `exec:/builtin/web/http-request`). Every
+//! package action may also call its own package (`exec:/packages/<name>/*`)
+//! without declaring it: see `solx_surface::scope::action_scopes`. The
+//! canonical list is recorded on [`InstalledPackage::granted_scopes`], and
+//! an install warns about any of its actions, left from an earlier install,
+//! whose stored scopes the manifest no longer covers.
+//!
 //! ## A package's scripts reach only its own actions
 //!
 //! `install.solx` and `uninstall.solx` run as the operator, which may save
@@ -116,6 +130,7 @@ use solx_surface::entities::ActionInput;
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::ActionManager;
 use solx_surface::query::ListOptions;
+use solx_surface::scope::{action_scopes, declared_scopes, ScopeSet};
 
 /// What an install needs from the action store: the refs of the actions
 /// under a package's path, and setting their lock. Implemented for a host's
@@ -134,6 +149,8 @@ pub trait PackageActions: Send + Sync {
     /// unlocked, its artifact could be replaced by content and run with its
     /// credential.
     async fn is_keyed(&self, path: &str, name: &str) -> Result<bool>;
+    /// The scopes the action declares in `action_config.scopes`, if any.
+    async fn declared_scopes(&self, path: &str, name: &str) -> Result<Option<ScopeSet>>;
 }
 
 #[async_trait]
@@ -175,6 +192,11 @@ impl PackageActions for Arc<dyn ActionManager> {
     async fn is_keyed(&self, path: &str, name: &str) -> Result<bool> {
         let action = self.get(path, name).await?;
         Ok(solx_surface::is_keyed(action.action_config.as_ref()))
+    }
+
+    async fn declared_scopes(&self, path: &str, name: &str) -> Result<Option<ScopeSet>> {
+        let action = self.get(path, name).await?;
+        declared_scopes(action.action_config.as_ref())
     }
 }
 
@@ -226,34 +248,68 @@ fn package_actions_base(name: &str) -> String {
     format!("/packages/{name}")
 }
 
-tokio::task_local! {
-    /// The package whose `install.solx` or `uninstall.solx` is running.
-    static RUNNING_PACKAGE: String;
+/// The package whose `install.solx` or `uninstall.solx` is running, and
+/// the scopes its manifest grants.
+#[derive(Clone)]
+struct RunningPackage {
+    name: String,
+    scopes: ScopeSet,
 }
 
-/// Refuse, while a package's script runs, a save or delete of an action at
-/// `path` outside that package's `/packages/<name>/`. A no-op outside a
-/// package script. Every operator path a script can reach calls this (the
-/// `save action` and `delete action` commands); the `/builtin/entity/*`
-/// actions are content paths and already refuse scoped secrets. See the
-/// module doc.
-pub fn guard_package_script_action(path: &str) -> Result<()> {
-    let Ok(package) = RUNNING_PACKAGE.try_with(String::clone) else {
+tokio::task_local! {
+    static RUNNING_PACKAGE: RunningPackage;
+}
+
+/// Refuse, while a package's script runs, a save (`incoming`) or delete
+/// (`None`) of an action at `path` outside that package's
+/// `/packages/<name>/`, or a save declaring scopes the package's manifest
+/// doesn't cover. A no-op outside a package script. Every operator path a
+/// script can reach calls this (the `save action` and `delete action`
+/// commands); the `/builtin/entity/*` actions are content paths and already
+/// refuse scoped secrets and declared scopes. See the module doc.
+pub fn guard_package_script_action(path: &str, incoming: Option<&ActionInput>) -> Result<()> {
+    let Ok(package) = RUNNING_PACKAGE.try_with(RunningPackage::clone) else {
         return Ok(());
     };
-    let base = package_actions_base(&package);
+    let name = &package.name;
+    let base = package_actions_base(name);
     let path = solx_surface::path::normalize_path(path)?;
-    if path == base || path.starts_with(&format!("{base}/")) {
+    if path != base && !path.starts_with(&format!("{base}/")) {
+        return Err(SolxError::Unauthorized(format!(
+            "package '{name}' may only save or delete actions under {base}/, not in {path}"
+        )));
+    }
+    let declared = declared_scopes(incoming.and_then(|i| i.action_config.as_ref()))?;
+    let missing = uncovered(&package.scopes, &path, declared.as_ref());
+    if missing.is_empty() {
         return Ok(());
     }
     Err(SolxError::Unauthorized(format!(
-        "package '{package}' may only save or delete actions under {base}/, not in {path}"
+        "package '{name}' declares scopes in {path} that its manifest doesn't list: {}. \
+         Add them to the manifest's \"scopes\", which is what an operator reviews \
+         before installing",
+        missing.join(", ")
     )))
+}
+
+/// The scopes in `declared` (an action's, in `path`) that neither the
+/// manifest's `granted` nor the action's implicit scopes cover.
+fn uncovered(granted: &ScopeSet, path: &str, declared: Option<&ScopeSet>) -> Vec<String> {
+    let Some(declared) = declared else {
+        return Vec::new();
+    };
+    let implicit = action_scopes(path, None);
+    let allowed: Vec<_> = granted.iter().chain(implicit.iter()).collect();
+    declared
+        .iter()
+        .filter(|s| !allowed.iter().any(|a| a.covers(s)))
+        .map(ToString::to_string)
+        .collect()
 }
 
 /// Refuse to install or uninstall a package from inside a package script.
 fn refuse_in_package_script(verb: &str) -> Result<()> {
-    match RUNNING_PACKAGE.try_with(String::clone) {
+    match RUNNING_PACKAGE.try_with(|p| p.name.clone()) {
         Ok(package) => Err(SolxError::Unauthorized(format!(
             "package '{package}' can't {verb} a package from its scripts"
         ))),
@@ -364,6 +420,11 @@ pub async fn install_package(
         .unwrap_or("0.0.0")
         .to_string();
     let grants = parse_grants(&meta, meta_file)?;
+    let scopes: ScopeSet = match meta.get("scopes") {
+        Some(v) if !v.is_null() => serde_json::from_value(v.clone())
+            .map_err(|e| SolxError::Invalid(format!("{meta_file} 'scopes': {e}")))?,
+        _ => ScopeSet::default(),
+    };
     let unlocked: Vec<String> = match meta.get("unlocked_actions") {
         Some(v) if !v.is_null() => serde_json::from_value(v.clone())
             .map_err(|e| SolxError::Invalid(format!("{meta_file} 'unlocked_actions': {e}")))?,
@@ -441,7 +502,11 @@ pub async fn install_package(
         }
     }
 
-    if let Err(e) = run_in_dir(runner, dir, &name, &script).await {
+    let running = RunningPackage {
+        name: name.clone(),
+        scopes: scopes.clone(),
+    };
+    if let Err(e) = run_in_dir(runner, dir, running, &script).await {
         return Err(relock_after_failure(actions, config, &name, e).await);
     }
 
@@ -468,6 +533,27 @@ pub async fn install_package(
             Err(e) => failed.push(format!("locking {full}: {e}")),
         }
     }
+    // The script's own saves were checked as they ran; this catches an
+    // action it left alone, whose stored scopes a narrower manifest no
+    // longer covers.
+    for (path, action) in own_actions(actions, &base).await? {
+        let declared = match actions.declared_scopes(&path, &action).await {
+            Ok(declared) => declared,
+            Err(e) => {
+                warnings.push(format!("reading the scopes of {path}/{action}: {e}"));
+                continue;
+            }
+        };
+        let missing = uncovered(&scopes, &path, declared.as_ref());
+        if !missing.is_empty() {
+            let msg = format!(
+                "{path}/{action} declares scopes the manifest doesn't list: {}",
+                missing.join(", ")
+            );
+            tracing::warn!("{msg}");
+            warnings.push(msg);
+        }
+    }
     if !failed.is_empty() {
         return Err(SolxError::Other(failed.join("; ")));
     }
@@ -480,6 +566,7 @@ pub async fn install_package(
         granted_commands: grants.commands.into_keys().collect(),
         granted_base_urls: grants.base_urls,
         locked_actions,
+        granted_scopes: scopes.into(),
     };
     config.register_package(pkg.clone())?;
     Ok(InstallOutcome {
@@ -508,7 +595,12 @@ pub async fn uninstall_package(
     if uninstall_path.exists() {
         let script = std::fs::read_to_string(&uninstall_path)
             .map_err(|e| SolxError::Io(format!("read {}: {e}", uninstall_path.display())))?;
-        run_in_dir(runner, dir, &pkg.name, &script).await?;
+        // Its saves are held to the scopes its install recorded.
+        let running = RunningPackage {
+            name: pkg.name.clone(),
+            scopes: ScopeSet::parse(&pkg.granted_scopes).unwrap_or_default(),
+        };
+        run_in_dir(runner, dir, running, &script).await?;
     }
 
     // Revoke after the script ran (symmetric with granting before install.solx
@@ -784,18 +876,18 @@ fn resolve_cwd(def: &CommandDef, pkg_dir: &Path) -> CommandDef {
 /// Run a package script with the process CWD temporarily set to the package
 /// directory (so relative paths in the script resolve), restoring it after.
 /// Run `package`'s `script` in `dir`, confined to that package's actions
-/// (see [`guard_package_script_action`]).
+/// and scopes (see [`guard_package_script_action`]).
 async fn run_in_dir(
     runner: &dyn CommandRunner,
     dir: &Path,
-    package: &str,
+    package: RunningPackage,
     script: &str,
 ) -> Result<()> {
     let original = std::env::current_dir().map_err(|e| SolxError::Io(format!("read cwd: {e}")))?;
     std::env::set_current_dir(dir)
         .map_err(|e| SolxError::Io(format!("set cwd to {}: {e}", dir.display())))?;
     let result = RUNNING_PACKAGE
-        .scope(package.to_string(), execute_script(runner, script))
+        .scope(package, execute_script(runner, script))
         .await;
     let restore = std::env::set_current_dir(&original)
         .map_err(|e| SolxError::Io(format!("restore cwd: {e}")));

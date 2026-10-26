@@ -31,6 +31,8 @@
 //! cover the keyring-failure path deterministically). The default
 //! loader is the real `keyring::Entry::get_password`.
 
+pub(crate) mod config;
+
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use base64::Engine as _;
@@ -160,7 +162,10 @@ pub fn load_keyring(r: &KeyringRef) -> Result<String, String> {
 /// the `keyring` crate builds a target as `<account>.<service>`.
 pub fn check_keyring_service(service: &str) -> Result<(), String> {
     let service = service.to_ascii_lowercase();
-    for reserved in [solx_config::credentials::KEYRING_SERVICE, SECRETS_KEYRING_SERVICE] {
+    for reserved in [
+        solx_config::credentials::KEYRING_SERVICE,
+        SECRETS_KEYRING_SERVICE,
+    ] {
         if service == reserved || service.ends_with(&format!(".{reserved}")) {
             return Err(format!(
                 "keyring service '{service}' is solx's own; a keyring reference can't read \
@@ -651,9 +656,7 @@ mod tests {
     async fn short_key_is_rejected() {
         install_fake_backend();
         let short_key = base64::engine::general_purpose::STANDARD.encode([1u8; 16]);
-        let err = set_secret(&handle(short_key), "value")
-            .await
-            .unwrap_err();
+        let err = set_secret(&handle(short_key), "value").await.unwrap_err();
         assert!(err.contains("must decode to 32 bytes"), "{err}");
         set_secret_backend_for_tests(None);
     }

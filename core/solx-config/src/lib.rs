@@ -1211,6 +1211,7 @@ mod tests {
             granted_commands: vec![],
             granted_base_urls: vec![],
             locked_actions: vec![],
+            granted_scopes: vec![],
         })
         .unwrap();
         assert_eq!(cfg.list_packages().len(), 1);

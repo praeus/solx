@@ -2,7 +2,9 @@
 
 Status: **In progress.** Steps 1 (the scope types, `solx_surface::scope`),
 2 (plumbing: every principal, frame and actor carries its grant) and 3 (the
-checks, under `scope_enforcement`, default `audit`) have landed. This is the
+checks, under `scope_enforcement`, default `audit`) have landed, and step 4's
+core half (manifest scopes, the own-package `exec`, `solx action scopes` and
+`solx scopes audit`); the packages' own manifests are next. This is the
 follow-on that
 [token-registry-plan.md](token-registry-plan.md) calls "authorization that the
 principal makes possible", and it closes the first gap in SECURITY.md's "What
@@ -374,7 +376,9 @@ the action's declared scopes, or an empty set when it declares none.
 `SingleTokenAuthority` (the registry feature turned off) hands every Command
 child the root token, so **scopes need the registry**. Document that, and
 have the single-token authority refuse to issue a credential for an action
-that declares scopes, instead of handing it root.
+that declares scopes, instead of handing it root. A package action's implicit
+`exec:/packages/<name>/*` (see "Packages") isn't a declaration: an action
+whose scopes are at most that still gets the root token, as before.
 
 ### Closing the `X-Solx-Principal: none` hole
 
@@ -445,14 +449,27 @@ which is allowed today.
   the complete list a reader reviews before installing. This keeps the
   promise SECURITY.md makes for `command_actions` and `allowed_base_urls`.
 - Each action's `action_config.scopes` in `install.solx` must be covered by
-  the manifest's `scopes` (`ScopeSet::covers`), or the install fails:
+  the manifest's `scopes` (`Scope::covers`), or the install fails:
   `exec:/builtin/web/http-request` is covered by `exec:/builtin/web/*`.
+  `guard_package_script_action`, which every `save action` in a package
+  script already passes, checks each save as it runs, so the error names the
+  offending action. An action left from an earlier install, whose stored
+  scopes a narrower manifest no longer covers, is a warning in the install's
+  output rather than a failure.
 - Every package action implicitly has `exec:/packages/<name>/*`, so a package
   can always call its own actions. Its own namespace is already special in
-  `guard_package_namespace`.
+  `guard_package_namespace`. `solx_surface::action_scopes(path, config)` is
+  the one place that adds it: dispatch, `action-start` and the Command
+  token all use it. `/packages/<name>` is matched exactly, like every scope
+  path, so `/Packages/p/x` belongs to no package.
 - `install_package` ([solx-packages/src/lib.rs](../solx-packages/src/lib.rs))
-  records the granted scopes on `InstalledPackage`. Install output lists them
-  next to the command and URL grants.
+  records the canonical list on `InstalledPackage::granted_scopes` (as
+  strings, so a record survives a later grammar). It's in the install
+  output next to the command and URL grants. An uninstall script is held to
+  the recorded list.
+- An operator may still grant a package action more than its manifest lists,
+  with `solx action scopes`. That's an operator decision. The next install
+  that re-saves the action replaces it, and one that doesn't warns.
 
 ### Callback inventory
 
@@ -499,8 +516,18 @@ A config key, `scope_enforcement: "off" | "audit" | "enforce"`:
   `(principal or calling action, need)`, naming the narrowest scope that
   would grant it. The log goes to `tracing` (target `solx::scopes`, level
   warn), which the hosts print only when asked: `RUST_LOG=solx::scopes=warn`.
-  A small table in `solx-registry.db` read by `solx scopes audit` is still
-  to come.
+  Each finding is also appended as a JSON line to
+  `<appdata>/logs/scope-audit.jsonl`, which every host on the machine shares
+  (rotated to `scope-audit.old.jsonl` at 4 MB). A list records what it
+  would have been narrowed to, or that it would have been refused. A plain
+  file rather than a table in `solx-registry.db`: findings come from every
+  process, including the CLI, and the registry is an optional feature.
+  `solx scopes audit [--action <ref>] [--json] [--clear]` groups the
+  findings by party. For an action it prints the `solx action scopes <ref>
+  --add ...` that would allow them (lists excepted: their paths are a
+  choice), and the package's manifest when it's a package action. It drops
+  what the action's current scopes already grant. It reads this machine's
+  log only, so it's run on the solx host.
   Running each package's `verify.solx` and normal use under audit gives the
   exact scope list to paste into each manifest.
 - **`enforce`**: a failed check is refused with 403.
@@ -559,16 +586,40 @@ default; audit mode is how they're found.
    - `SolxError::Forbidden` (HTTP 403, `{"kind":"forbidden"}`), mapped in
      MCP tool results, the JS bindings and `@solx/surface`.
    - The desktop app needed no change: its main window is unlimited.
-   - Not yet: the audit table and `solx scopes audit`. Audit findings go to
-     `tracing` (target `solx::scopes`), once per party and need.
+   - Audit findings go to `tracing` (target `solx::scopes`), once per party
+     and need, and to the audit log (step 4).
 4. **Packages.**
-   - Manifest `scopes`, the covers check, the implicit own-namespace exec,
-     and recording on `InstalledPackage`.
-   - Run every package under audit, then add `scopes` to each manifest and
-     `install.solx`.
+   - ✅ Manifest `scopes`, checked on each `save action` in a package script
+     and recorded on `InstalledPackage::granted_scopes`. The implicit
+     own-namespace exec (`action_scopes`), which single-token mode doesn't
+     count as a declaration.
+   - ✅ Brought forward from step 5, so one audit run serves packages and an
+     operator's own actions alike: `solx action scopes <ref>` (show, or
+     `--set`/`--add`/`--remove`/`--clear`; binary-only, so no package script
+     can grant beyond its manifest), the audit log and `solx scopes audit`.
+   - ✅ `scopes` in each `solx-packages` manifest and `install.solx`, from
+     reading what each action calls (most need accounts to run, so audit
+     can't reach them). Webhook actions and Command actions that never call
+     back need none, and neither do `solx-git` or `solx-names`. A WASM
+     module's actions share the union of what the module calls. Choices
+     made:
+     - The importers (facebook, livejournal, reddit) write `write:document`
+       on any path, because their `path` parameter may name anywhere. Their
+       images go to `write:file:/files/docs/shared/*`.
+     - `solx-agent`'s loop is broad: `exec:/*`, `read:document`,
+       `write:document`, `read:type`, `read:action`. SECURITY.md must say
+       that exec on the agent grants these (step 6).
+     - `solx-google` and `solx-inquiry` get `read:document` everywhere.
+       Inquiry writes only `/inquiry/*`.
+     - The rest are exact: media and omniparse write under `/media/`, and
+       quickjs reads any file but writes only `/files/actions/shared/*`
+       (plus `write:action` and `write:wasm` for `build-javascript-action`).
+       mcp-actions writes its own namespace and `write:command`.
+     - Verified by installing google, facebook, ollama, omniparse,
+       mcp-actions and firefox under `enforce` (every scope parses and is
+       covered), and by running ollama's actions under `enforce`.
 5. **Issuing and UI.**
-   - `--scope`/`--preset` on the CLI, builtin parameters, `whoami`, `solx
-     action scopes`.
+   - `--scope`/`--preset` on the CLI, builtin parameters, `whoami`.
    - Desktop and web preset picker, and scopes shown in the client list.
 6. **Enforce and document.**
    - Flip the default to `enforce`.

@@ -13,7 +13,7 @@
 //! within 60 seconds of expiry.
 //!
 //! Credentials ([`CREDENTIAL_FIELDS`]) are never inline in the config —
-//! `crate::secret_config` refuses them on save. Each comes from either a
+//! `crate::secrets::config` refuses them on save. Each comes from either a
 //! pointer into the scoped secret store (`client_secret_secret`, etc — see
 //! `secrets.rs`), decrypted with the action's scope key and allowed only for
 //! a name listed in its `action_config.secrets`:
@@ -55,7 +55,7 @@ use solx_surface::{ActionSecrets, SecretHandle};
 
 /// The `auth` fields that hold credentials. Each is resolved through
 /// [`secret_field`] and has a `<field>_secret` pointer form; an inline
-/// string at any of them is refused on save (see `crate::secret_config`).
+/// string at any of them is refused on save (see `crate::secrets::config`).
 pub(crate) const CREDENTIAL_FIELDS: &[&str] = &[
     "token",
     "client_id",
@@ -983,7 +983,7 @@ mod tests {
     async fn bearer_resolves_secret_pointer_with_the_actions_key() {
         clear();
         crate::secrets::set_secret_backend_for_tests(Some(
-            crate::test_support::fake_secret_backend(),
+            crate::testing::support::fake_secret_backend(),
         ));
         let cfg = json!({
             "secrets": ["BEARER"],
@@ -992,7 +992,7 @@ mod tests {
         let secrets = ActionSecrets::new(
             "action:/test/pointer",
             Some(&cfg),
-            Some(crate::test_support::TEST_KEY.to_string()),
+            Some(crate::testing::support::TEST_KEY.to_string()),
         );
         crate::secrets::set_secret(&secrets.resolve("BEARER").unwrap(), "from-store")
             .await
@@ -1016,13 +1016,16 @@ mod tests {
         let secrets = ActionSecrets::new(
             "action:/test/outside",
             Some(&cfg),
-            Some(crate::test_support::TEST_KEY.to_string()),
+            Some(crate::testing::support::TEST_KEY.to_string()),
         );
         let (_dir, config) = config();
         let err = resolve_auth("/test", "outside", &config, &cfg, &secrets)
             .await
             .unwrap_err();
-        assert!(err.contains("isn't listed in action_config.secrets"), "{err}");
+        assert!(
+            err.contains("isn't listed in action_config.secrets"),
+            "{err}"
+        );
     }
 
     // ── optional_secret_field (oauth_authorization_code client_secret) ─────

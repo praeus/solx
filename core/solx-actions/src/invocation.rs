@@ -269,7 +269,7 @@ impl LocalActionManager {
         // A row that has gone since leaves a frame with no secrets and no
         // scopes, so the detached run can do nothing it couldn't before.
         let grant = row.as_ref().map_or_else(Grant::none, |(action, _)| {
-            Grant::for_action(action.action_config.as_ref())
+            Grant::for_action(&action.path, action.action_config.as_ref())
         });
         Caller::with_invocation(
             info.action_ref(),
@@ -283,7 +283,7 @@ impl LocalActionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::*;
+    use crate::testing::support::*;
     use solx_config::ConfigService;
     use solx_surface::entities::{ActionInput, ActionType};
     use solx_surface::managers::ActionManager;
@@ -342,7 +342,12 @@ mod tests {
         save_command(&m, &cfg, "quick", quick_ok()).await;
 
         let err = m
-            .start_invocation("/t", "quick", serde_json::json!({}), ExecContext::local().info())
+            .start_invocation(
+                "/t",
+                "quick",
+                serde_json::json!({}),
+                ExecContext::local().info(),
+            )
             .await
             .unwrap_err();
         assert!(
@@ -359,7 +364,12 @@ mod tests {
         save_command(&m, &cfg, "quick", quick_ok()).await;
 
         let started = m
-            .start_invocation("/t", "quick", serde_json::json!({}), ExecContext::local().info())
+            .start_invocation(
+                "/t",
+                "quick",
+                serde_json::json!({}),
+                ExecContext::local().info(),
+            )
             .await
             .unwrap();
         let id = started["invocation_id"].as_str().unwrap().to_string();
@@ -402,7 +412,12 @@ mod tests {
         save_command(&m, &cfg, "hangs", hangs_forever()).await;
 
         let started = m
-            .start_invocation("/t", "hangs", serde_json::json!({}), ExecContext::local().info())
+            .start_invocation(
+                "/t",
+                "hangs",
+                serde_json::json!({}),
+                ExecContext::local().info(),
+            )
             .await
             .unwrap();
         let id = started["invocation_id"].as_str().unwrap().to_string();
@@ -434,7 +449,12 @@ mod tests {
         save_command(&m, &cfg, "hangs", hangs_forever()).await;
 
         let started = m
-            .start_invocation("/t", "hangs", serde_json::json!({}), ExecContext::local().info())
+            .start_invocation(
+                "/t",
+                "hangs",
+                serde_json::json!({}),
+                ExecContext::local().info(),
+            )
             .await
             .unwrap();
         let id = started["invocation_id"].as_str().unwrap().to_string();

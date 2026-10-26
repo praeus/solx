@@ -1,6 +1,6 @@
 //! [`ActionManager`] CRUD, listing and full-text search over the actions
 //! database. `action_config` is stored free of secret material, so it is
-//! returned as is — see [`crate::secret_config`].
+//! returned as is — see [`crate::secrets::config`].
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -8,18 +8,19 @@ use serde_json::Value;
 use solx_surface::entities::{Action, ActionExecResult, ActionInput, ActionType};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::managers::ActionManager;
-use solx_surface::{secret_names, secret_scope, ActionSecrets, ExecContext, Principal};
 use solx_surface::path::{full_ref, normalize_path, validate_name};
 use solx_surface::query::{
     ActionSearchQuery, ExcludeMode, ListOptions, ListSchema, ListSql, Page, PathFacet, SortOrder,
 };
+use solx_surface::{secret_names, secret_scope, ActionSecrets, ExecContext, Principal};
 use uuid::Uuid;
 
 use crate::db::map_db;
 use crate::row::{
-    action_type_to_str, delete_scope_key_if_unused, ensure_scope_key, get_row, row_to_action, SELECT,
+    action_type_to_str, delete_scope_key_if_unused, ensure_scope_key, get_row, row_to_action,
+    SELECT,
 };
-use crate::{lock, secret_config, LocalActionManager};
+use crate::{lock, secrets, LocalActionManager};
 
 const DEFAULT_LIMIT: usize = 50;
 
@@ -222,10 +223,10 @@ impl ActionManager for LocalActionManager {
         // `secrets` is stored as a list of names (whatever an older install
         // script put in its values is dropped), and inline credentials are
         // refused, so the stored config holds no secret material — see
-        // `crate::secret_config`. The key belongs to the action's scope.
+        // `crate::secrets::config`. The key belongs to the action's scope.
         let action_config = match input.action_config {
             Some(mut incoming) => {
-                secret_config::normalize(&mut incoming).map_err(SolxError::Invalid)?;
+                secrets::config::normalize(&mut incoming).map_err(SolxError::Invalid)?;
                 Some(incoming)
             }
             None => existing.as_ref().and_then(|a| a.action_config.clone()),
@@ -491,7 +492,8 @@ impl ActionManager for LocalActionManager {
     /// `TokenAuthority::authenticate`, so both caller and principal are
     /// `None`; see [`LocalActionManager::exec_as`].
     async fn exec(&self, path: &str, name: &str, params: Value) -> Result<ActionExecResult> {
-        self.exec_as(path, name, params, &ExecContext::local()).await
+        self.exec_as(path, name, params, &ExecContext::local())
+            .await
     }
 
     /// Entry point for authenticated routes — the HTTP REST exec and the
@@ -526,7 +528,7 @@ mod tests {
     use super::*;
     use crate::db::{map_db, Db};
     use crate::schema::DDL;
-    use crate::test_support::*;
+    use crate::testing::support::*;
 
     /// The key `secrets` would open `name` with, if it may use it.
     fn key_of(secrets: &ActionSecrets, name: &str) -> Option<String> {
@@ -1215,10 +1217,7 @@ mod tests {
 
         // Exact pattern: the folder and the entity of that full ref only.
         let page = m.list(list(&["/agent/skills"], &[])).await.unwrap();
-        assert_eq!(
-            refs(page),
-            vec!["/agent/skills", "/agent/skills/one"],
-        );
+        assert_eq!(refs(page), vec!["/agent/skills", "/agent/skills/one"],);
 
         // Several patterns OR together; an exclusion still wins.
         let page = m
@@ -1328,17 +1327,29 @@ mod tests {
     async fn a_packages_actions_share_one_key() {
         let (_d, _c, m) = setup().await;
         let names = serde_json::json!({ "secrets": ["API_TOKEN"] });
-        m.save("/packages/p", "a", with_secret(names.clone())).await.unwrap();
-        m.save("/packages/p/sub", "b", with_secret(names.clone())).await.unwrap();
+        m.save("/packages/p", "a", with_secret(names.clone()))
+            .await
+            .unwrap();
+        m.save("/packages/p/sub", "b", with_secret(names.clone()))
+            .await
+            .unwrap();
         m.save("/packages/p", "added", with_secret(cfg_with_secret("***")))
             .await
             .unwrap();
-        m.save("/packages/q", "a", with_secret(names.clone())).await.unwrap();
+        m.save("/packages/q", "a", with_secret(names.clone()))
+            .await
+            .unwrap();
         m.save("/tools", "s", with_secret(names)).await.unwrap();
 
         let key = run_key(&m, "/packages/p", "a").await.unwrap();
-        assert_eq!(run_key(&m, "/packages/p/sub", "b").await.as_ref(), Some(&key));
-        assert_eq!(run_key(&m, "/packages/p", "added").await.as_ref(), Some(&key));
+        assert_eq!(
+            run_key(&m, "/packages/p/sub", "b").await.as_ref(),
+            Some(&key)
+        );
+        assert_eq!(
+            run_key(&m, "/packages/p", "added").await.as_ref(),
+            Some(&key)
+        );
         assert_ne!(run_key(&m, "/packages/q", "a").await.as_ref(), Some(&key));
         assert_ne!(run_key(&m, "/tools", "s").await.as_ref(), Some(&key));
         assert_eq!(stored_scope_keys(&m).await, 3);
@@ -1350,10 +1361,16 @@ mod tests {
     async fn the_scopes_last_action_takes_its_key() {
         let (_d, _c, m) = setup().await;
         let names = serde_json::json!({ "secrets": ["API_TOKEN"] });
-        m.save("/packages/p", "a", with_secret(names.clone())).await.unwrap();
-        m.save("/packages/p/sub", "b", with_secret(names.clone())).await.unwrap();
+        m.save("/packages/p", "a", with_secret(names.clone()))
+            .await
+            .unwrap();
+        m.save("/packages/p/sub", "b", with_secret(names.clone()))
+            .await
+            .unwrap();
         // Another package whose name starts the same way stays unrelated.
-        m.save("/packages/p-extra", "a", with_secret(names.clone())).await.unwrap();
+        m.save("/packages/p-extra", "a", with_secret(names.clone()))
+            .await
+            .unwrap();
         let old = run_key(&m, "/packages/p", "a").await.unwrap();
 
         m.delete("/packages/p", "a").await.unwrap();
@@ -1361,7 +1378,9 @@ mod tests {
         m.delete("/packages/p/sub", "b").await.unwrap();
         assert_eq!(stored_scope_keys(&m).await, 1, "only p-extra's key is left");
 
-        m.save("/packages/p", "a", with_secret(names.clone())).await.unwrap();
+        m.save("/packages/p", "a", with_secret(names.clone()))
+            .await
+            .unwrap();
         assert_ne!(run_key(&m, "/packages/p", "a").await, Some(old));
 
         // A standalone action's key goes with it.
@@ -1382,7 +1401,10 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("isn't a valid secret name"), "{err}");
+        assert!(
+            err.to_string().contains("isn't a valid secret name"),
+            "{err}"
+        );
     }
 
     #[tokio::test]

@@ -112,7 +112,7 @@ mod tests {
     use super::{NAME, PATH};
     use crate::caller::Caller;
     use crate::set_long_lived_host;
-    use crate::test_support::setup_wired;
+    use crate::testing::support::setup_wired;
     use crate::LocalActionManager;
 
     async fn save_script(m: &LocalActionManager, name: &str, source: &str) {

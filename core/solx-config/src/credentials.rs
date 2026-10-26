@@ -27,7 +27,8 @@ use base64::Engine as _;
 use serde_json::Value;
 use solx_surface::auth::{constant_time_eq, ActionCredential, Principal, TokenAuthority};
 use solx_surface::error::{Result, SolxError};
-use solx_surface::scope::ScopeSet;
+use solx_surface::path::split_ref;
+use solx_surface::scope::{action_scopes, ScopeSet};
 
 use crate::ConfigService;
 
@@ -502,15 +503,20 @@ impl TokenAuthority for SingleTokenAuthority {
 
     /// Every credential is the root token, so an action that declares scopes
     /// gets none at all rather than one its scopes would not hold: scopes
-    /// need the token registry.
+    /// need the token registry. An action that declares none (its scopes are
+    /// at most the implicit `exec` on its own package) gets the root token,
+    /// as before scopes existed.
     async fn issue_action_token(
         &self,
-        _action_ref: &str,
+        action_ref: &str,
         _invocation_id: &str,
         _ttl: std::time::Duration,
         scopes: &ScopeSet,
     ) -> Option<ActionCredential> {
-        if !scopes.is_empty() {
+        let path = split_ref(action_ref)
+            .map(|(path, _)| path)
+            .unwrap_or_default();
+        if !action_scopes(&path, None).covers(scopes) {
             return None;
         }
         Some(ActionCredential::new(
@@ -930,6 +936,18 @@ mod tests {
         let scopes = ScopeSet::parse(["exec:/builtin/web/http-request"]).unwrap();
         assert!(auth
             .issue_action_token("/a", "inv", ttl, &scopes)
+            .await
+            .is_none());
+
+        // A package action's implicit `exec` on its own package isn't a
+        // declaration: it still gets the token.
+        let own = ScopeSet::parse(["exec:/packages/p/*"]).unwrap();
+        assert!(auth
+            .issue_action_token("/packages/p/a", "inv", ttl, &own)
+            .await
+            .is_some());
+        assert!(auth
+            .issue_action_token("/packages/q/a", "inv", ttl, &own)
             .await
             .is_none());
     }

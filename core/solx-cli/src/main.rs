@@ -8,10 +8,12 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 
+use solx_actions::guard::scope as scope_gate;
 use solx_cli::{run_command, Commands};
 use solx_config::credentials::{self, ConnectCredential};
 use solx_manager::App;
 use solx_surface::managers::Solx;
+use solx_surface::scope::{declared_scopes, PathFilter, Scope, ScopeSet};
 use solx_surface::Principal;
 
 /// The `solx` binary's command line: every [`Commands`] verb, plus
@@ -61,17 +63,61 @@ enum BinCommand {
         #[command(subcommand)]
         op: ActionOp,
     },
+    /// Scope reports. See `solx action scopes` to grant an action scopes.
+    Scopes {
+        #[command(subcommand)]
+        op: ScopesOp,
+    },
     #[command(flatten)]
     Core(Commands),
 }
 
-/// Not in `Commands`, so no `.solx` script can lock or unlock anything.
+/// Not in `Commands`, so no `.solx` script can lock or unlock anything, or
+/// grant an action scopes beyond what its package's manifest lists.
 #[derive(Subcommand)]
 enum ActionOp {
     /// Lock an action (`/path/name`), pinning its artifact.
     Lock { reference: String },
     /// Unlock an action, dropping its pin.
     Unlock { reference: String },
+    /// Show or change the scopes an action declares (`action_config.scopes`):
+    /// what it may do when it calls anything. Declaring scopes locks the
+    /// action. With no option, shows them.
+    Scopes {
+        reference: String,
+        /// Replace the declared scopes with these. Repeatable.
+        #[arg(long, value_name = "SCOPE", conflicts_with_all = ["add", "remove", "clear"])]
+        set: Vec<String>,
+        /// Declare this scope too. Repeatable.
+        #[arg(long, value_name = "SCOPE")]
+        add: Vec<String>,
+        /// Stop declaring this scope. Repeatable.
+        #[arg(long, value_name = "SCOPE")]
+        remove: Vec<String>,
+        /// Drop the declaration: the action may then call nothing (but its
+        /// own package's actions). It stays locked.
+        #[arg(long, conflicts_with_all = ["add", "remove"])]
+        clear: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ScopesOp {
+    /// What `scope_enforcement: "audit"` recorded on this machine: calls
+    /// that `enforce` would refuse, grouped by the action or client making
+    /// them, with the `solx action scopes` command that would allow an
+    /// action's. Needs that an action's current scopes grant are left out.
+    Audit {
+        /// Only this action's findings.
+        #[arg(long, value_name = "REF")]
+        action: Option<String>,
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Delete the recorded findings instead.
+        #[arg(long)]
+        clear: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -138,6 +184,7 @@ async fn main() -> Result<()> {
             print,
         } => run_connect(target, credential, print).await?,
         BinCommand::Action { op } => run_action(op).await?,
+        BinCommand::Scopes { op } => run_scopes(op).await?,
         BinCommand::Core(command) => {
             let app = build_app().await?;
             run_command(&app, command, None).await?
@@ -154,6 +201,13 @@ async fn run_action(op: ActionOp) -> Result<Value> {
     let (reference, locked) = match op {
         ActionOp::Lock { reference } => (reference, true),
         ActionOp::Unlock { reference } => (reference, false),
+        ActionOp::Scopes {
+            reference,
+            set,
+            add,
+            remove,
+            clear,
+        } => return action_scopes(reference, set, add, remove, clear).await,
     };
     let (path, name) = solx_surface::path::split_ref(&reference).map_err(solx_cli::to_anyhow)?;
     let app = build_app().await?;
@@ -174,6 +228,243 @@ async fn run_action(op: ActionOp) -> Result<Value> {
         "locked": action.locked,
         "artifactPin": action.artifact_pin,
     }))
+}
+
+/// `solx action scopes`: show, or change and show, what `reference`
+/// declares.
+async fn action_scopes(
+    reference: String,
+    set: Vec<String>,
+    add: Vec<String>,
+    remove: Vec<String>,
+    clear: bool,
+) -> Result<Value> {
+    let (path, name) = solx_surface::path::split_ref(&reference).map_err(solx_cli::to_anyhow)?;
+    let parse = |scopes: &[String]| ScopeSet::parse(scopes).map_err(solx_cli::to_anyhow);
+    let app = build_app().await?;
+    let mut action = app
+        .actions()
+        .get(&path, &name)
+        .await
+        .map_err(solx_cli::to_anyhow)?;
+    let declared = declared_scopes(action.action_config.as_ref()).map_err(solx_cli::to_anyhow)?;
+
+    let next = if clear {
+        Some(None)
+    } else if !set.is_empty() {
+        Some(Some(parse(&set)?))
+    } else if !add.is_empty() || !remove.is_empty() {
+        let current = declared.unwrap_or_default();
+        let removing = parse(&remove)?;
+        if let Some(missing) = removing.iter().find(|s| !current.iter().any(|c| c == *s)) {
+            bail!("{reference} doesn't declare {missing}");
+        }
+        let kept = current.iter().filter(|s| !removing.iter().any(|r| r == *s));
+        Some(Some(ScopeSet::new(
+            kept.chain(parse(&add)?.iter()).cloned(),
+        )))
+    } else {
+        None
+    };
+    if let Some(next) = next {
+        let mut config = action.action_config.take().unwrap_or_else(|| json!({}));
+        let fields = config
+            .as_object_mut()
+            .context("action_config is not a JSON object")?;
+        match next {
+            Some(scopes) => {
+                fields.insert("scopes".into(), serde_json::to_value(scopes)?);
+            }
+            None => {
+                fields.remove("scopes");
+            }
+        }
+        action = app
+            .actions()
+            .save(
+                &path,
+                &name,
+                solx_surface::entities::ActionInput {
+                    action_config: Some(config),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(solx_cli::to_anyhow)?;
+    }
+
+    let config = action.action_config.as_ref();
+    Ok(json!({
+        "action": format!("{}/{}", action.path, action.name),
+        "declared": declared_scopes(config).map_err(solx_cli::to_anyhow)?,
+        "runsWith": solx_surface::action_scopes(&action.path, config),
+        "locked": action.locked,
+    }))
+}
+
+async fn run_scopes(op: ScopesOp) -> Result<Value> {
+    let ScopesOp::Audit {
+        action,
+        json: as_json,
+        clear,
+    } = op;
+    let app = build_app().await?;
+    if clear {
+        scope_gate::clear_audit_log(&app.config).map_err(solx_cli::to_anyhow)?;
+        return Ok(Value::String("cleared the scope audit log".into()));
+    }
+    let entries = scope_gate::read_audit_log(&app.config).map_err(solx_cli::to_anyhow)?;
+    let report = audit_report(&app, entries, action.as_deref()).await;
+    if as_json {
+        return Ok(serde_json::to_value(report)?);
+    }
+    Ok(Value::String(render_audit(&report)))
+}
+
+/// One party's findings in `solx scopes audit`.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditParty {
+    party: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action: Option<String>,
+    needs: Vec<AuditNeed>,
+    /// For an action: the scopes `solx action scopes --add` would declare.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    grant: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditNeed {
+    need: String,
+    /// For a list: what it would have been narrowed to, or empty if it
+    /// would have been refused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    list: Option<Vec<String>>,
+    count: usize,
+    last: String,
+}
+
+/// Group `entries` by party and need, dropping what an action's current
+/// scopes already grant (it was granted since) and, with `only`, other
+/// actions' findings.
+async fn audit_report(
+    app: &Arc<App>,
+    entries: Vec<scope_gate::AuditEntry>,
+    only: Option<&str>,
+) -> Vec<AuditParty> {
+    let mut parties: Vec<AuditParty> = Vec::new();
+    for entry in entries {
+        if only.is_some_and(|o| entry.action.as_deref() != Some(o)) {
+            continue;
+        }
+        let party = match parties.iter_mut().position(|p| p.party == entry.party) {
+            Some(i) => &mut parties[i],
+            None => {
+                parties.push(AuditParty {
+                    party: entry.party.clone(),
+                    action: entry.action.clone(),
+                    needs: Vec::new(),
+                    grant: Vec::new(),
+                });
+                parties.last_mut().unwrap()
+            }
+        };
+        match party
+            .needs
+            .iter_mut()
+            .find(|n| n.need == entry.need && n.list == entry.list)
+        {
+            Some(need) => {
+                need.count += 1;
+                need.last = entry.at;
+            }
+            None => party.needs.push(AuditNeed {
+                need: entry.need,
+                list: entry.list,
+                count: 1,
+                last: entry.at,
+            }),
+        }
+    }
+
+    for party in &mut parties {
+        let Some(reference) = party.action.clone() else {
+            continue;
+        };
+        let current = match solx_surface::path::split_ref(&reference) {
+            Ok((path, name)) => match app.actions().get(&path, &name).await {
+                Ok(action) => solx_surface::action_scopes(&path, action.action_config.as_ref()),
+                Err(_) => ScopeSet::default(),
+            },
+            Err(_) => ScopeSet::default(),
+        };
+        party.needs.retain(|n| match n.need.parse::<Scope>() {
+            // A list it would have refused is allowed once any of that
+            // read is granted.
+            Ok(Scope::Resource {
+                access, resource, ..
+            }) if n.list.as_ref().is_some_and(Vec::is_empty) => {
+                current.path_filter(access, resource) == PathFilter::Nothing
+            }
+            Ok(need) => !current.iter().any(|s| s.covers(&need)),
+            Err(_) => true,
+        });
+        party.grant = party
+            .needs
+            .iter()
+            .filter(|n| n.list.is_none())
+            .map(|n| n.need.clone())
+            .collect();
+    }
+    parties.retain(|p| !p.needs.is_empty());
+    parties
+}
+
+fn render_audit(report: &[AuditParty]) -> String {
+    if report.is_empty() {
+        return "no scope audit findings (scope_enforcement \"audit\" records them here as \
+                calls are made)"
+            .into();
+    }
+    let mut out = String::new();
+    for party in report {
+        out.push_str(&party.party);
+        out.push('\n');
+        for need in &party.needs {
+            let what = match &need.list {
+                None => need.need.clone(),
+                Some(paths) if paths.is_empty() => {
+                    format!("{} (a list; enforce would refuse it)", need.need)
+                }
+                Some(paths) => format!(
+                    "{} (a list; enforce would narrow it to {})",
+                    need.need,
+                    paths.join(", ")
+                ),
+            };
+            out.push_str(&format!("  {what}  x{}, last {}\n", need.count, need.last));
+        }
+        if let Some(action) = &party.action {
+            if !party.grant.is_empty() {
+                let adds: Vec<String> = party.grant.iter().map(|s| format!("--add {s}")).collect();
+                out.push_str(&format!(
+                    "  grant: solx action scopes {action} {}\n",
+                    adds.join(" ")
+                ));
+            }
+            if party.needs.iter().any(|n| n.list.is_some()) {
+                out.push_str("  (and, for each list, a read scope on the paths it should see)\n");
+            }
+            if let Some(package) = solx_surface::scope::package_of(action) {
+                out.push_str(&format!(
+                    "  (and list them in {package}'s solx-package.json \"scopes\")\n"
+                ));
+            }
+        }
+    }
+    out.trim_end().to_string()
 }
 
 async fn run_token(action: TokenAction) -> Result<Value> {

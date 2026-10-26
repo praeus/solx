@@ -61,6 +61,12 @@ pub struct InstalledPackage {
     /// Informational; empty for a record from before locking existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub locked_actions: Vec<String>,
+    /// The manifest's `scopes`, canonical: everything the package's
+    /// actions may declare (see `solx_packages`). Kept as strings so a
+    /// record from a later scope grammar still loads. Empty for a package
+    /// that declares none, or a record from before scopes existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub granted_scopes: Vec<String>,
 }
 
 /// Typed snapshot of the config. All fields are optional so a partial or

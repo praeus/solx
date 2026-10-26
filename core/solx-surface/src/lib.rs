@@ -34,6 +34,6 @@ pub use internal_actions::{
 pub use managers::{ActionManager, DocManager, FileStore, Solx, TypeManager};
 pub use query::{ExcludeMode, ListOptions, Page, PathFacet, SearchQuery, SortOrder};
 pub use scope::{
-    declared_scopes, Access, Enforcement, Grant, Need, PathFilter, Preset, Resource, Scope,
-    ScopeSet,
+    action_scopes, declared_scopes, Access, Enforcement, Grant, Need, PathFilter, Preset, Resource,
+    Scope, ScopeSet,
 };

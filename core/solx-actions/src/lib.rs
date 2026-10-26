@@ -11,10 +11,10 @@
 
 pub mod auth;
 pub mod caller;
-mod content;
 mod db;
 mod dispatch;
 mod exec;
+pub mod guard;
 pub mod internal;
 mod invocation;
 mod lock;
@@ -22,25 +22,19 @@ pub mod loopback;
 pub mod net;
 mod row;
 mod schema;
-pub mod scope_gate;
 pub mod script;
-mod secret_config;
 pub mod secrets;
 mod seed;
 mod store;
-#[cfg(test)]
-mod scope_tests;
-#[cfg(test)]
-mod test_support;
 #[cfg(any(test, feature = "test-probe"))]
-pub mod test_probe;
+pub mod testing;
 pub mod wasm;
 
-pub use content::{check_action_change, guard_package_namespace};
+pub use guard::content::{check_action_change, guard_package_namespace};
+pub use guard::scope::ScopeCheck;
 pub use invocation::set_long_lived_host;
 pub use lock::guard_locked_action;
-pub use scope_gate::ScopeCheck;
-pub use secret_config::guard_keyed_action;
+pub use secrets::config::guard_keyed_action;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -163,7 +157,7 @@ impl LocalActionManager {
         #[allow(unused_mut)]
         let mut seeds = solx_console::actions::seed_actions();
         #[cfg(any(test, feature = "test-probe"))]
-        seeds.extend(test_probe::seeds());
+        seeds.extend(testing::probe::seeds());
         seed::seed_builtins(&conn, &seeds).await?;
         seed::retire_internal_aliases(&conn).await?;
         let catalogue = seed::catalogue(&seed::builtin_actions())
@@ -248,7 +242,7 @@ impl LocalActionManager {
                 executor,
             );
             #[cfg(any(test, feature = "test-probe"))]
-            plugin.merge(test_probe::plugin());
+            plugin.merge(testing::probe::plugin());
             for extra in self.extra_plugins.lock().unwrap().drain(..) {
                 plugin.merge(extra);
             }

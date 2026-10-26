@@ -13,14 +13,25 @@
 //!   since the file store has no SQL to narrow.
 //!
 //! What a failed check does depends on [`Enforcement`]: nothing (`off`), a
-//! log line, once per party and need (`audit`), or a refusal with
-//! [`SolxError::Forbidden`] (`enforce`). The mode is read on every check, so
-//! a change to `solx-config.json` applies to the next call.
+//! finding recorded once per process, party and need (`audit`), or a
+//! refusal with [`SolxError::Forbidden`] (`enforce`). The mode is read on
+//! every check, so a change to `solx-config.json` applies to the next call.
+//!
+//! ## The audit log
+//!
+//! A finding goes to `tracing` (target `solx::scopes`, warn) and is
+//! appended, as one JSON line ([`AuditEntry`]), to `scope-audit.jsonl` in
+//! the logs directory, which every host on this machine shares.
+//! [`read_audit_log`] reads it back for `solx scopes audit`. Past
+//! [`AUDIT_LOG_MAX_BYTES`] the file is moved to `scope-audit.old.jsonl`
+//! (replacing the previous one) and a new one started.
 
 use std::collections::HashSet;
-use std::fmt;
+use std::io::Write as _;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
+use serde::{Deserialize, Serialize};
 use solx_config::{ConfigService, EntityKind};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::scope::{Access, Enforcement, Grant, Need, PathFilter, Resource};
@@ -33,6 +44,9 @@ pub struct ScopeCheck<'a> {
     /// Who the scopes belong to, for messages: `action /p/a`, `client
     /// 'laptop' (id)`, `the caller`.
     party: String,
+    /// The action whose scopes these are, if they are an action's, for the
+    /// audit log.
+    action: Option<String>,
 }
 
 impl<'a> ScopeCheck<'a> {
@@ -41,30 +55,48 @@ impl<'a> ScopeCheck<'a> {
             config,
             grant,
             party,
+            action: None,
+        }
+    }
+
+    /// Checks against `acting`'s scopes if it is set, else `principal`'s.
+    fn of(
+        config: &'a ConfigService,
+        grant: &'a Grant,
+        acting: Option<&str>,
+        principal: Option<&Principal>,
+    ) -> Self {
+        let action = acting.or(match principal {
+            Some(Principal::Action { action_ref, .. }) => Some(action_ref.as_str()),
+            _ => None,
+        });
+        ScopeCheck {
+            action: action.map(str::to_string),
+            ..Self::new(config, grant, describe(acting, principal))
         }
     }
 
     /// The checks for a call made from this frame: against the calling
     /// action's scopes, else the token's ([`ExecContext::grant`]).
     pub fn for_exec(config: &'a ConfigService, ctx: &'a ExecContext) -> Self {
-        let party = describe(ctx.caller().map(|c| c.action_ref()), ctx.principal());
-        Self::new(config, ctx.grant(), party)
+        let acting = ctx.caller().map(|c| c.action_ref());
+        Self::of(config, ctx.grant(), acting, ctx.principal())
     }
 
     /// [`Self::for_exec`] for a detached run that hasn't started yet.
     pub fn for_exec_info(config: &'a ConfigService, ctx: &'a ExecContextInfo) -> Self {
-        let party = describe(ctx.caller().map(|c| c.action_ref()), ctx.principal());
-        Self::new(config, ctx.grant(), party)
+        let acting = ctx.caller().map(|c| c.action_ref());
+        Self::of(config, ctx.grant(), acting, ctx.principal())
     }
 
     /// The checks for a change `actor` makes.
     pub fn for_actor(config: &'a ConfigService, actor: Actor<'a>) -> Self {
-        Self::new(config, actor.grant(), describe(actor.acting(), None))
+        Self::of(config, actor.grant(), actor.acting(), None)
     }
 
     /// The checks for a REST call made with `principal`'s token.
     pub fn for_principal(config: &'a ConfigService, principal: &'a Principal) -> Self {
-        Self::new(config, principal.grant(), describe(None, Some(principal)))
+        Self::of(config, principal.grant(), None, Some(principal))
     }
 
     /// The config these checks read their mode from.
@@ -80,7 +112,7 @@ impl<'a> ScopeCheck<'a> {
         match self.config.scope_enforcement() {
             Enforcement::Off => Ok(()),
             Enforcement::Audit => {
-                audit(&self.party, need);
+                self.audit(need.to_string(), None);
                 Ok(())
             }
             Enforcement::Enforce => Err(SolxError::Forbidden(format!(
@@ -107,7 +139,7 @@ impl<'a> ScopeCheck<'a> {
         match self.config.scope_enforcement() {
             Enforcement::Off => entries,
             Enforcement::Audit => {
-                audit(&self.party, &Need::file(Access::Read, first));
+                self.audit(Need::file(Access::Read, first).to_string(), None);
                 entries
             }
             Enforcement::Enforce => entries.into_iter().filter(readable).collect(),
@@ -126,11 +158,11 @@ impl<'a> ScopeCheck<'a> {
         match (filter, mode) {
             (PathFilter::Unrestricted, _) | (_, Enforcement::Off) => Ok(()),
             (PathFilter::Nothing, Enforcement::Audit) => {
-                audit_text(&self.party, &format!("{scope} (any path)"));
+                self.audit(scope.to_string(), Some(Vec::new()));
                 Ok(())
             }
             (PathFilter::Only(paths), Enforcement::Audit) => {
-                audit_text(&self.party, &format!("{scope} beyond {}", paths.join(", ")));
+                self.audit(scope.to_string(), Some(paths));
                 Ok(())
             }
             (PathFilter::Nothing, Enforcement::Enforce) => Err(SolxError::Forbidden(format!(
@@ -216,30 +248,123 @@ pub fn describe(acting: Option<&str>, principal: Option<&Principal>) -> String {
     }
 }
 
-/// Log, once per process, that `party` made a call its scopes don't allow.
-fn audit(party: &str, need: &Need<'_>) {
-    audit_text(party, &need.to_string());
-}
-
-fn audit_text(party: &str, needed: &dyn fmt::Display) {
-    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    // Bounded, so a long-lived host can't grow it without limit; past the
-    // bound a repeat is logged again, which is harmless.
-    const MAX_SEEN: usize = 10_000;
-    let key = format!("{party}\u{0}{needed}");
-    if let Ok(mut seen) = SEEN.get_or_init(Mutex::default).lock() {
-        if seen.len() >= MAX_SEEN {
-            seen.clear();
+impl ScopeCheck<'_> {
+    /// Record, once per process, that the party needed `need` (a scope
+    /// string) and its scopes don't grant it. `list` is set for a list:
+    /// what it would have been narrowed to, or empty if it would have been
+    /// refused.
+    fn audit(&self, need: String, list: Option<Vec<String>>) {
+        static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+        // Bounded, so a long-lived host can't grow it without limit; past
+        // the bound a repeat is recorded again, which is harmless.
+        const MAX_SEEN: usize = 10_000;
+        let key = format!("{}\u{0}{need}\u{0}{}", self.party, list.is_some());
+        if let Ok(mut seen) = SEEN.get_or_init(Mutex::default).lock() {
+            if seen.len() >= MAX_SEEN {
+                seen.clear();
+            }
+            if !seen.insert(key) {
+                return;
+            }
         }
-        if !seen.insert(key) {
-            return;
+        let what = match &list {
+            None => need.clone(),
+            Some(paths) if paths.is_empty() => format!("{need} for a list (any path)"),
+            Some(paths) => format!("{need} for a list beyond {}", paths.join(", ")),
+        };
+        tracing::warn!(
+            target: "solx::scopes",
+            "scope audit: {} needs {what}, which its scopes don't grant \
+             (allowed because scope_enforcement is \"audit\")",
+            self.party
+        );
+        let entry = AuditEntry {
+            at: chrono::Utc::now().to_rfc3339(),
+            party: self.party.clone(),
+            action: self.action.clone(),
+            need,
+            list,
+        };
+        if let Err(e) = append_audit(self.config, &entry) {
+            tracing::debug!(target: "solx::scopes", "recording a scope audit finding: {e}");
         }
     }
-    tracing::warn!(
-        target: "solx::scopes",
-        "scope audit: {party} needs {needed}, which its scopes don't grant \
-         (allowed because scope_enforcement is \"audit\")"
-    );
+}
+
+/// One audit finding: a call allowed under `audit` that `enforce` would
+/// refuse or narrow. See the module doc.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditEntry {
+    /// When it was recorded, RFC 3339.
+    pub at: String,
+    /// Whose scopes fell short: `action /p/a`, `client 'laptop' (id)`.
+    pub party: String,
+    /// The action, when the party is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    /// The narrowest scope that grants the call (`exec:/builtin/web/
+    /// http-request`); for a list, the kind of read (`read:document`).
+    pub need: String,
+    /// For a list: the paths it would have been narrowed to, or empty if it
+    /// would have been refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list: Option<Vec<String>>,
+}
+
+/// Past this size the audit log is rotated (see the module doc).
+pub const AUDIT_LOG_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Where the audit log lives.
+pub fn audit_log_path(config: &ConfigService) -> PathBuf {
+    config.logs_dir().join("scope-audit.jsonl")
+}
+
+fn old_audit_log_path(config: &ConfigService) -> PathBuf {
+    config.logs_dir().join("scope-audit.old.jsonl")
+}
+
+fn append_audit(config: &ConfigService, entry: &AuditEntry) -> std::io::Result<()> {
+    let path = audit_log_path(config);
+    std::fs::create_dir_all(config.logs_dir())?;
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() >= AUDIT_LOG_MAX_BYTES) {
+        std::fs::rename(&path, old_audit_log_path(config))?;
+    }
+    let mut line = serde_json::to_string(entry)?;
+    line.push('\n');
+    // One write of one line, appended: lines from several processes don't
+    // interleave.
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?
+        .write_all(line.as_bytes())
+}
+
+/// Every finding in the audit log, oldest first, the rotated file's
+/// included. A line that doesn't parse is skipped.
+pub fn read_audit_log(config: &ConfigService) -> Result<Vec<AuditEntry>> {
+    let mut entries = Vec::new();
+    for path in [old_audit_log_path(config), audit_log_path(config)] {
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(SolxError::Io(format!("read {}: {e}", path.display()))),
+        };
+        entries.extend(text.lines().filter_map(|l| serde_json::from_str(l).ok()));
+    }
+    Ok(entries)
+}
+
+/// Delete the audit log, the rotated file included.
+pub fn clear_audit_log(config: &ConfigService) -> Result<()> {
+    for path in [old_audit_log_path(config), audit_log_path(config)] {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(SolxError::Io(format!("remove {}: {e}", path.display()))),
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -344,6 +469,32 @@ mod tests {
             let check = ScopeCheck::new(&cfg, &g, "c".into());
             assert_eq!(check.filter_file_reads(entries()).len(), kept, "{mode}");
         }
+    }
+
+    /// A finding is recorded once, with the action it belongs to, and read
+    /// back; a list records what it would have been narrowed to.
+    #[test]
+    fn audit_findings_are_recorded_once_and_read_back() {
+        let (_d, cfg) = config("audit");
+        let g = grant(&["read:document:/a/*"]);
+        let check = ScopeCheck::of(&cfg, &g, Some("/t/recorder"), None);
+        for _ in 0..2 {
+            check.require(&read_doc("/b", "x")).unwrap();
+        }
+        check
+            .narrow_reads(Resource::Document, &mut Vec::new())
+            .unwrap();
+        let entries = read_audit_log(&cfg).unwrap();
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        assert_eq!(entries[0].party, "action /t/recorder");
+        assert_eq!(entries[0].action.as_deref(), Some("/t/recorder"));
+        assert_eq!(entries[0].need, "read:document:/b/x");
+        assert_eq!(entries[0].list, None);
+        assert_eq!(entries[1].need, "read:document");
+        assert_eq!(entries[1].list, Some(vec!["/a/*".to_string()]));
+
+        clear_audit_log(&cfg).unwrap();
+        assert!(read_audit_log(&cfg).unwrap().is_empty());
     }
 
     #[test]

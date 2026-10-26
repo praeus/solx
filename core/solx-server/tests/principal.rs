@@ -1,6 +1,6 @@
 //! The authenticated `Principal` reaches action execution from both of
 //! solx-server's entry points — REST exec and the `/mcp` transport — rather
-//! than stopping at `require_bearer`. Uses `solx_actions::test_probe`, a
+//! than stopping at `require_bearer`. Uses `solx_actions::testing::probe`, a
 //! handler that echoes what its `InternalCallCtx` carries.
 
 use std::sync::Arc;

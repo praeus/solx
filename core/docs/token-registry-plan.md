@@ -287,7 +287,7 @@ than in a task-local, because task-locals don't cross `tokio::spawn` and
 - Guards use `InternalCallCtx::external_principal()`, which fails closed. It
   returns `None` if an action is in the chain, if the principal is
   `Principal::Action`, or if there is no principal.
-- `solx_actions::test_probe` echoes what a handler receives, for tests
+- `solx_actions::testing::probe` echoes what a handler receives, for tests
   (`solx-server/tests/principal.rs`).
 
 Policy for every auth builtin:
@@ -323,7 +323,7 @@ Use the plugin pattern `solx-console` uses (`plugin()` plus
 cycle through solx-manager, so add `LocalActionManager::add_plugin(
 InternalActionRegistry)`. solx-manager calls it before `set_self_ref` when
 the feature is on, and `set_self_ref` merges it the way it merges
-`test_probe::plugin()`. Seeds are registered only with the feature on.
+`testing::probe::plugin()`. Seeds are registered only with the feature on.
 
 - `/builtin/auth/create-connect-code` `{ label?, code_ttl_secs?,
   token_ttl_secs? }` returns `{ display_code, url, expires_at }`.

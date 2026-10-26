@@ -270,7 +270,7 @@ async fn handle_save(
                     "`locked` can't be set with `save`; use `solx action lock` or `solx action unlock`"
                 );
             }
-            solx_packages::guard_package_script_action(&path).map_err(to_anyhow)?;
+            solx_packages::guard_package_script_action(&path, Some(&input)).map_err(to_anyhow)?;
             Ok(serde_json::to_value(
                 app.actions()
                     .save(&path, &name, input)
@@ -334,7 +334,7 @@ async fn handle_delete(
         let (path, name) = split_ref(&reference).map_err(to_anyhow)?;
         match entity {
             Entity::Doc => app.docs().delete(&path, &name).await,
-            Entity::Action => match solx_packages::guard_package_script_action(&path) {
+            Entity::Action => match solx_packages::guard_package_script_action(&path, None) {
                 Ok(()) => app.actions().delete(&path, &name).await,
                 Err(e) => Err(e),
             },

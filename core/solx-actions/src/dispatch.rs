@@ -238,6 +238,13 @@ impl LocalActionManager {
             timeout_secs(&action.action_config)
         };
 
+        let invoke = exec::ActionInvoke {
+            action_ref: &action_ref,
+            invocation_id,
+            action_config: &action.action_config,
+            params: &params,
+        };
+
         let result = match action.action_type {
             Some(ActionType::Command) => {
                 let fn_name = action.fn_name.as_deref().ok_or_else(|| {
@@ -248,11 +255,8 @@ impl LocalActionManager {
                     self.token_authority(),
                     self.console.clone(),
                     self.invocations.clone(),
-                    &action_ref,
-                    invocation_id,
+                    &invoke,
                     fn_name,
-                    &action.action_config,
-                    &params,
                     effective_timeout,
                 )
                 .await?
@@ -265,14 +269,11 @@ impl LocalActionManager {
                 exec::run_webhook(
                     &self.config,
                     self.console.clone(),
-                    &action_ref,
-                    invocation_id,
+                    &invoke,
                     &action.path,
                     &action.name,
                     url,
-                    &action.action_config,
                     &secrets,
-                    &params,
                 )
                 .await?
             }
@@ -318,7 +319,10 @@ impl LocalActionManager {
                 // so behavior is unchanged from before this method existed.
                 let frame = ctx.enter(
                     Caller::with_invocation(&action_ref, Some(secrets.clone()), invocation_id)
-                        .with_grant(Grant::for_action(action.action_config.as_ref())),
+                        .with_grant(Grant::for_action(
+                            &action.path,
+                            action.action_config.as_ref(),
+                        )),
                 );
                 // WASM execution reports its own success/message (a guest can
                 // report a handled failure without erroring the host call), so
@@ -339,7 +343,9 @@ impl LocalActionManager {
                 let bin_name = action.bin_name.as_deref().ok_or_else(|| {
                     SolxError::Exec("script action has no bin_name (artifact)".into())
                 })?;
-                let source = self.load_script_source(&action, &action_ref, bin_name).await?;
+                let source = self
+                    .load_script_source(&action, &action_ref, bin_name)
+                    .await?;
                 // Same reasoning as the Wasm arm above: a fresh caller frame
                 // for this action's own identity, not the incoming one — a
                 // script's nested `exec` calls must never reach an outer
@@ -348,7 +354,10 @@ impl LocalActionManager {
                     actions: self.self_arc()?,
                     ctx: ctx.enter(
                         Caller::with_invocation(&action_ref, Some(secrets.clone()), invocation_id)
-                            .with_grant(Grant::for_action(action.action_config.as_ref())),
+                            .with_grant(Grant::for_action(
+                                &action.path,
+                                action.action_config.as_ref(),
+                            )),
                     ),
                 };
                 let initial =
@@ -381,7 +390,7 @@ impl LocalActionManager {
 mod tests {
     use super::*;
     use crate::seed;
-    use crate::test_support::*;
+    use crate::testing::support::*;
     use solx_config::ConfigService;
     use solx_docs::LocalDocManager;
     use solx_files::LocalFileStore;
@@ -701,11 +710,7 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("use the solx CLI"), "{err}");
         assert_eq!(
-            m.get("/tools", "safe")
-                .await
-                .unwrap()
-                .fn_name
-                .as_deref(),
+            m.get("/tools", "safe").await.unwrap().fn_name.as_deref(),
             Some("echo 42")
         );
     }
@@ -783,7 +788,10 @@ mod tests {
     async fn entity_save_action_refuses_to_modify_a_keyed_action() {
         let (_d, _cfg, m) = setup_wired().await;
         m.files
-            .put(&solx_files::shared_action_file_path("good.wasm"), b"\0asm".to_vec())
+            .put(
+                &solx_files::shared_action_file_path("good.wasm"),
+                b"\0asm".to_vec(),
+            )
             .await
             .unwrap();
         m.save(

@@ -177,7 +177,7 @@ fn reject_inline_credentials(cfg: &Value) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::TEST_KEY;
+    use crate::testing::support::TEST_KEY;
     use serde_json::json;
 
     #[test]
@@ -218,8 +218,8 @@ mod tests {
 
     #[test]
     fn inline_credentials_are_refused() {
-        let err = normalize(&mut json!({ "auth": { "type": "bearer", "token": "t" } }))
-            .unwrap_err();
+        let err =
+            normalize(&mut json!({ "auth": { "type": "bearer", "token": "t" } })).unwrap_err();
         assert!(err.contains("auth.token is an inline credential"), "{err}");
     }
 
@@ -264,7 +264,9 @@ mod tests {
         });
         let err = guard_keyed_action(&input(keyring), "/p/w").unwrap_err();
         assert!(err.contains("keyring reference"), "{err}");
-        assert!(guard_keyed_action(&input(json!({ "auth": { "type": "bearer" } })), "/p/w").is_ok());
+        assert!(
+            guard_keyed_action(&input(json!({ "auth": { "type": "bearer" } })), "/p/w").is_ok()
+        );
     }
 
     /// Declared scopes are the authority an action runs with, so only root

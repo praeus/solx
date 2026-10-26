@@ -290,7 +290,7 @@ mod tests {
     use solx_surface::query::ListOptions;
 
     use super::*;
-    use crate::test_support::{setup, setup_wired};
+    use crate::testing::support::{setup, setup_wired};
 
     /// Insert an `Internal` row directly, as one saved before `save`
     /// refused them would be.
@@ -333,7 +333,10 @@ mod tests {
             (DOCUMENT_PATH, "entity-list-documents", retype),
         ] {
             let err = m.save(path, name, input).await.unwrap_err();
-            assert!(err.to_string().contains("built-ins"), "{path}/{name}: {err}");
+            assert!(
+                err.to_string().contains("built-ins"),
+                "{path}/{name}: {err}"
+            );
         }
     }
 
@@ -341,7 +344,12 @@ mod tests {
     #[tokio::test]
     async fn builtins_are_seeded_locked() {
         let (_d, _c, m) = setup_wired().await;
-        assert!(m.get(DOCUMENT_PATH, "entity-get-document").await.unwrap().locked);
+        assert!(
+            m.get(DOCUMENT_PATH, "entity-get-document")
+                .await
+                .unwrap()
+                .locked
+        );
         let err = m
             .exec(
                 ACTION_PATH,
@@ -389,7 +397,12 @@ mod tests {
 
         retire_internal_aliases(&conn).await.unwrap();
         assert!(!m.get("/t", "s").await.unwrap().trusted);
-        assert!(m.get(DOCUMENT_PATH, "entity-get-document").await.unwrap().trusted);
+        assert!(
+            m.get(DOCUMENT_PATH, "entity-get-document")
+                .await
+                .unwrap()
+                .trusted
+        );
 
         conn.execute("UPDATE actions SET trusted=1 WHERE path='/t'", ())
             .await
@@ -425,7 +438,10 @@ mod tests {
         assert_eq!(after.description, before.description);
         assert!(after.capabilities.is_empty());
         assert!(after.locked);
-        assert!(m.exec(DOCUMENT_PATH, "entity-list-documents", json!({})).await.is_ok());
+        assert!(m
+            .exec(DOCUMENT_PATH, "entity-list-documents", json!({}))
+            .await
+            .is_ok());
     }
 
     /// Re-seeding an untouched catalogue changes nothing.
@@ -433,7 +449,9 @@ mod tests {
     async fn reseeding_leaves_builtins_alone() {
         let (_d, _c, m) = setup().await;
         let before = m.get(DOCUMENT_PATH, "entity-list-documents").await.unwrap();
-        seed_builtins(&m.db.connect().await.unwrap(), &[]).await.unwrap();
+        seed_builtins(&m.db.connect().await.unwrap(), &[])
+            .await
+            .unwrap();
         let after = m.get(DOCUMENT_PATH, "entity-list-documents").await.unwrap();
         assert_eq!(after.updated_at, before.updated_at);
     }

@@ -13,7 +13,9 @@ use solx_packages::{
     guard_package_script_action, install_package, uninstall_package, PackageActions,
 };
 use solx_scripts::CommandRunner;
+use solx_surface::entities::ActionInput;
 use solx_surface::error::Result;
+use solx_surface::ScopeSet;
 
 struct NoopRunner;
 
@@ -32,6 +34,8 @@ struct FakeActions {
     keyed: Vec<String>,
     /// `path/name` of the actions that can't be locked (artifact missing).
     unlockable: Vec<String>,
+    /// `path/name` and declared scopes of the actions that declare some.
+    scoped: Vec<(String, ScopeSet)>,
     log: Mutex<Vec<String>>,
 }
 
@@ -41,6 +45,7 @@ impl FakeActions {
             actions: refs.iter().map(|(p, n)| (p.to_string(), n.to_string())).collect(),
             keyed: Vec::new(),
             unlockable: Vec::new(),
+            scoped: Vec::new(),
             log: Mutex::new(Vec::new()),
         }
     }
@@ -52,6 +57,12 @@ impl FakeActions {
 
     fn unlockable(mut self, full: &str) -> Self {
         self.unlockable.push(full.to_string());
+        self
+    }
+
+    fn scoped(mut self, full: &str, scopes: &[&str]) -> Self {
+        self.scoped
+            .push((full.to_string(), ScopeSet::parse(scopes).unwrap()));
         self
     }
 
@@ -86,6 +97,15 @@ impl PackageActions for FakeActions {
 
     async fn is_keyed(&self, path: &str, name: &str) -> Result<bool> {
         Ok(self.keyed.contains(&format!("{path}/{name}")))
+    }
+
+    async fn declared_scopes(&self, path: &str, name: &str) -> Result<Option<ScopeSet>> {
+        let full = format!("{path}/{name}");
+        Ok(self
+            .scoped
+            .iter()
+            .find(|(f, _)| *f == full)
+            .map(|(_, s)| s.clone()))
     }
 }
 
@@ -251,15 +271,25 @@ async fn a_failed_reinstall_relocks_what_was_locked() {
     );
 }
 
-/// Stands in for the CLI's `save action <ref>` and `delete action <ref>`,
-/// which apply `guard_package_script_action` to the action's path.
+/// Stands in for the CLI's `save action <ref> [--json <input>]` and `delete action
+/// <ref>`, which apply `guard_package_script_action` to the action's path
+/// and, for a save, its input.
 struct GuardingRunner;
 
 #[async_trait]
 impl CommandRunner for GuardingRunner {
     async fn run(&self, tokens: Vec<String>, _piped: Option<Value>) -> Result<Value> {
         let (path, _) = solx_surface::path::split_ref(&tokens[2])?;
-        guard_package_script_action(&path)?;
+        let body = tokens
+            .iter()
+            .position(|t| t == "--json")
+            .and_then(|i| tokens.get(i + 1));
+        let input: Option<ActionInput> = match (tokens[0].as_str(), body) {
+            ("save", Some(body)) => Some(serde_json::from_str(body)?),
+            ("save", None) => Some(ActionInput::default()),
+            _ => None,
+        };
+        guard_package_script_action(&path, input.as_ref())?;
         Ok(Value::Null)
     }
 }
@@ -333,7 +363,89 @@ async fn an_uninstall_script_is_confined_too() {
 /// Outside a package script the guard lets everything through.
 #[test]
 fn the_guard_is_a_no_op_outside_a_script() {
-    guard_package_script_action("/packages/other").unwrap();
+    guard_package_script_action("/packages/other", None).unwrap();
+}
+
+/// What a script saves may declare only scopes its manifest lists, besides
+/// the package's own `exec`. The manifest's list is recorded canonical.
+#[tokio::test]
+async fn a_script_may_declare_only_the_manifests_scopes() {
+    let save = |scopes: &str| {
+        format!("save action /packages/pkg/a --json {{\"actionConfig\": {{\"scopes\": {scopes}}}}}")
+    };
+    async fn install(script: String) -> (Result<()>, Vec<solx_config::InstalledPackage>) {
+        let appdata = tempfile::tempdir().unwrap();
+        let cfg = ConfigService::open_in(appdata.path()).unwrap();
+        let pkg = tempfile::tempdir().unwrap();
+        write_package(
+            pkg.path(),
+            "pkg",
+            json!({ "scopes": ["write:script", "exec:/builtin/web/*", "write:script"] }),
+        );
+        write_script(pkg.path(), "install.solx", &script);
+        let result = install_package(&GuardingRunner, &FakeActions::new(&[]), &cfg, pkg.path())
+            .await
+            .map(|_| ());
+        (result, cfg.list_packages())
+    }
+
+    for ok in [
+        r#"["exec:/builtin/web/http-request","write:script"]"#,
+        r#"["exec:/packages/pkg/*"]"#,
+        "[]",
+    ] {
+        let (result, packages) = install(save(ok)).await;
+        result.unwrap_or_else(|e| panic!("{ok}: {e}"));
+        assert_eq!(
+            packages[0].granted_scopes,
+            ["exec:/builtin/web/*", "write:script"],
+            "{ok}"
+        );
+    }
+    for (bad, names) in [
+        (r#"["exec:/builtin/env/get-env"]"#, "exec:/builtin/env/get-env"),
+        (r#"["exec:/packages/other/*"]"#, "exec:/packages/other/*"),
+        (r#"["all"]"#, "all"),
+    ] {
+        let (result, packages) = install(save(bad)).await;
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("manifest doesn't list") && err.contains(names),
+            "{bad}: {err}"
+        );
+        assert!(packages.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn a_manifest_with_a_bad_scope_is_refused() {
+    let appdata = tempfile::tempdir().unwrap();
+    let cfg = ConfigService::open_in(appdata.path()).unwrap();
+    let pkg = tempfile::tempdir().unwrap();
+    write_package(pkg.path(), "pkg", json!({ "scopes": ["exec:"] }));
+    let err = install_package(&NoopRunner, &FakeActions::new(&[]), &cfg, pkg.path())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("'scopes'"), "{err}");
+}
+
+/// An action the script didn't save keeps its stored scopes; one the
+/// manifest no longer covers is warned about.
+#[tokio::test]
+async fn a_leftover_action_beyond_the_manifest_is_warned_about() {
+    let appdata = tempfile::tempdir().unwrap();
+    let cfg = ConfigService::open_in(appdata.path()).unwrap();
+    let pkg = tempfile::tempdir().unwrap();
+    write_package(pkg.path(), "pkg", json!({ "scopes": ["write:script"] }));
+    let actions = FakeActions::new(&[("/packages/pkg", "old"), ("/packages/pkg", "new")])
+        .scoped("/packages/pkg/old", &["write:command"])
+        .scoped("/packages/pkg/new", &["write:script"]);
+    let outcome = install_package(&NoopRunner, &actions, &cfg, pkg.path())
+        .await
+        .unwrap();
+    assert_eq!(outcome.warnings.len(), 1, "{:?}", outcome.warnings);
+    assert!(outcome.warnings[0].contains("/packages/pkg/old"));
+    assert!(outcome.warnings[0].contains("write:command"));
 }
 
 /// A nested install would run its script under another package's name.

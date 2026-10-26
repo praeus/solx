@@ -17,7 +17,7 @@
 //! user's lists must not break it.
 
 use serde::Deserialize;
-use solx_actions::scope_gate::resource_of;
+use solx_actions::guard::scope::resource_of;
 use solx_actions::ScopeCheck;
 use solx_config::EntityKind;
 use solx_surface::query::{ExcludeMode, ListOptions, SearchQuery};

@@ -154,9 +154,13 @@ pub async fn run_internal(
         "entity-list-types" => entity::type_list(params, &ctx.types, &scopes).await,
         "entity-list-type-paths" => entity::type_paths(params, &ctx.types, &scopes).await,
 
-        "entity-save-action" => entity::action_save(params, &ctx.actions, &ctx.local, Actor::builtin(&ctx.exec)).await,
+        "entity-save-action" => {
+            entity::action_save(params, &ctx.actions, &ctx.local, Actor::builtin(&ctx.exec)).await
+        }
         "entity-get-action" => entity::action_get(params, &ctx.actions).await,
-        "entity-delete-action" => entity::action_delete(params, &ctx.actions, &ctx.local, Actor::builtin(&ctx.exec)).await,
+        "entity-delete-action" => {
+            entity::action_delete(params, &ctx.actions, &ctx.local, Actor::builtin(&ctx.exec)).await
+        }
         "entity-list-actions" => entity::action_list(params, &ctx.actions, &scopes).await,
         "entity-list-action-paths" => entity::action_paths(params, &ctx.actions, &scopes).await,
 
@@ -165,13 +169,30 @@ pub async fn run_internal(
         "search-actions" => entity::search_actions(params, &ctx.actions, &scopes).await,
 
         // ── file store ───────────────────────────────────────────────────
-        "file-put" => file::file_put(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await,
+        "file-put" => {
+            file::file_put(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await
+        }
         "file-get" => file::file_get(params, &ctx.files).await,
-        "file-delete" => file::file_delete(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await,
+        "file-delete" => {
+            file::file_delete(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await
+        }
         "file-list" => file::file_list(params, &ctx.files, &scopes).await,
-        "file-copy" => file::file_copy(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await,
-        "dir-copy" => file::dir_copy(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec), &scopes).await,
-        "dir-delete" => file::dir_delete(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await,
+        "file-copy" => {
+            file::file_copy(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await
+        }
+        "dir-copy" => {
+            file::dir_copy(
+                params,
+                &ctx.files,
+                &ctx.local,
+                Actor::builtin(&ctx.exec),
+                &scopes,
+            )
+            .await
+        }
+        "dir-delete" => {
+            file::dir_delete(params, &ctx.files, &ctx.local, Actor::builtin(&ctx.exec)).await
+        }
 
         // ── document field ops (flat and path-style) ─────────────────────
         "get-field" => doc_fields::get_field(params, &ctx.docs).await,
@@ -1133,7 +1154,9 @@ mod tests {
             )),
         ));
 
-        crate::secrets::set_secret_backend_for_tests(Some(crate::test_support::fake_secret_backend()));
+        crate::secrets::set_secret_backend_for_tests(Some(
+            crate::testing::support::fake_secret_backend(),
+        ));
         run_internal(
             "set-secret",
             &json!({"name": "FOO", "value": "s3cret"}),
@@ -2310,7 +2333,8 @@ mod tests {
         let (_d, mut ctx) = test_ctx(None).await;
         // A fixed id (not `Caller::from_action`'s random mint) so the test
         // can seed and cancel exactly this invocation's row.
-        ctx.exec = ExecContext::local().enter(Caller::with_invocation("/pkg/foo", None, "inv-fixed"));
+        ctx.exec =
+            ExecContext::local().enter(Caller::with_invocation("/pkg/foo", None, "inv-fixed"));
 
         // No row exists yet for "inv-fixed" — must fail closed to `false`,
         // not error, mirroring the loopback's `/cancelled` route.

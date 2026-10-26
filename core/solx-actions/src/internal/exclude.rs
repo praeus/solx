@@ -19,7 +19,7 @@ use solx_surface::query::{ActionSearchQuery, ExcludeMode, ListOptions, SearchQue
 use solx_surface::scope::Resource;
 
 use super::{doc_path_or_root, path_or_root, InternalCtx};
-use crate::scope_gate::resource_of;
+use crate::guard::scope::resource_of;
 use crate::ScopeCheck;
 
 /// The mode a builtin call asked for. `run_internal` has already aliased

@@ -157,7 +157,7 @@ async fn has_column(conn: &Connection, column: &str) -> Result<bool> {
 }
 
 /// Strip secret material from rows saved before it was kept out of
-/// `action_config` — see `crate::secret_config::scrub_legacy`. Runs at every
+/// `action_config` — see `crate::secrets::config::scrub_legacy`. Runs at every
 /// startup, but a row it has already fixed has nothing left to change.
 async fn migrate_secret_material(conn: &Connection) -> Result<()> {
     let mut rows = conn
@@ -177,7 +177,7 @@ async fn migrate_secret_material(conn: &Connection) -> Result<()> {
         let Ok(mut cfg) = serde_json::from_str::<serde_json::Value>(&raw) else {
             continue;
         };
-        let out = crate::secret_config::scrub_legacy(&mut cfg);
+        let out = crate::secrets::config::scrub_legacy(&mut cfg);
         for note in &out.notes {
             tracing::warn!("action {path}/{name}: {note}");
         }

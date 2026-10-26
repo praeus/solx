@@ -28,6 +28,13 @@ impl solx_packages::PackageActions for NoActions {
     async fn is_keyed(&self, _p: &str, _n: &str) -> solx_surface::error::Result<bool> {
         Ok(false)
     }
+    async fn declared_scopes(
+        &self,
+        _p: &str,
+        _n: &str,
+    ) -> solx_surface::error::Result<Option<solx_surface::ScopeSet>> {
+        Ok(None)
+    }
 }
 
 struct NoopRunner;

@@ -98,7 +98,9 @@ pub(crate) async fn pin_artifact(
     reference: &str,
 ) -> Result<ArtifactPin> {
     let bin_name = bin_name.ok_or_else(|| {
-        SolxError::Invalid(format!("cannot lock {reference}: it has no bin_name (artifact)"))
+        SolxError::Invalid(format!(
+            "cannot lock {reference}: it has no bin_name (artifact)"
+        ))
     })?;
     let (rel_path, bytes) = resolve_artifact(files, action_id, bin_name, "locked")
         .await
@@ -184,12 +186,19 @@ pub(crate) async fn lock_keyed_actions(
         let reference = solx_surface::path::full_ref(&action.path, &action.name)?;
         let pin = match action.action_type {
             Some(ActionType::Script | ActionType::Wasm) => {
-                match pin_artifact(files, &action.id.to_string(), action.bin_name.as_deref(), &reference)
-                    .await
+                match pin_artifact(
+                    files,
+                    &action.id.to_string(),
+                    action.bin_name.as_deref(),
+                    &reference,
+                )
+                .await
                 {
                     Ok(pin) => Some(pin),
                     Err(e) => {
-                        tracing::warn!("{e}; locked without a pin, so it won't run until re-locked");
+                        tracing::warn!(
+                            "{e}; locked without a pin, so it won't run until re-locked"
+                        );
                         None
                     }
                 }
@@ -261,7 +270,9 @@ mod tests {
             ..locked()
         };
         assert!(guard_locked_action(Some(&locked()), None, "/p/a").is_err());
-        assert!(guard_locked_action(Some(&locked()), Some(&ActionInput::default()), "/p/a").is_err());
+        assert!(
+            guard_locked_action(Some(&locked()), Some(&ActionInput::default()), "/p/a").is_err()
+        );
         for flag in [true, false] {
             let input = ActionInput {
                 locked: Some(flag),
@@ -270,7 +281,9 @@ mod tests {
             assert!(guard_locked_action(Some(&unlocked), Some(&input), "/p/a").is_err());
             assert!(guard_locked_action(None, Some(&input), "/p/a").is_err());
         }
-        assert!(guard_locked_action(Some(&unlocked), Some(&ActionInput::default()), "/p/a").is_ok());
+        assert!(
+            guard_locked_action(Some(&unlocked), Some(&ActionInput::default()), "/p/a").is_ok()
+        );
         assert!(guard_locked_action(None, None, "/p/a").is_ok());
     }
 
@@ -299,7 +312,7 @@ mod lifecycle_tests {
     use solx_surface::{ExecContext, Principal};
 
     use crate::seed::{ACTION_PATH, FILE_PATH};
-    use crate::test_support::setup_wired;
+    use crate::testing::support::setup_wired;
     use crate::LocalActionManager;
 
     const BIN: &str = "locked.solx";
@@ -374,7 +387,10 @@ mod lifecycle_tests {
         for (name, params) in [
             ("file-put", evil),
             ("file-delete", json!({"rel_path": shared()})),
-            ("file-copy", json!({"source": shared(), "dest": "files/actions/SHARED/Locked.solx."})),
+            (
+                "file-copy",
+                json!({"source": shared(), "dest": "files/actions/SHARED/Locked.solx."}),
+            ),
             ("dir-delete", json!({"rel_path": "files/actions"})),
         ] {
             let err = builtin(&m, FILE_PATH, name, params).await;
@@ -389,21 +405,38 @@ mod lifecycle_tests {
             json!({"source": "files/staging", "dest": "files/actions/shared"}),
         )
         .await;
-        assert!(err.contains("artifact of a locked action"), "dir-copy: {err}");
+        assert!(
+            err.contains("artifact of a locked action"),
+            "dir-copy: {err}"
+        );
         // A refused directory operation touched nothing.
-        assert!(m.files.get("files/actions/shared/other.solx").await.is_err());
+        assert!(m
+            .files
+            .get("files/actions/shared/other.solx")
+            .await
+            .is_err());
         assert_eq!(run(&m).await.unwrap(), json!(42));
 
         // Anything that gets past the built-ins (a direct disk edit) stops
         // the action rather than running as it.
         put(&m, &shared(), "json 666").await;
         let err = run(&m).await.unwrap_err();
-        assert!(err.to_string().contains("changed since it was locked"), "{err}");
+        assert!(
+            err.to_string().contains("changed since it was locked"),
+            "{err}"
+        );
 
         // The operator re-locks, which re-pins.
-        m.save("/p", "s", ActionInput { locked: Some(true), ..Default::default() })
-            .await
-            .unwrap();
+        m.save(
+            "/p",
+            "s",
+            ActionInput {
+                locked: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(run(&m).await.unwrap(), json!(666));
     }
 
@@ -424,10 +457,25 @@ mod lifecycle_tests {
             .unwrap();
         let owned = solx_files::action_file_path(&action.id.to_string(), BIN);
         put(&m, &owned, "json 42").await;
-        m.save("/p", "s", ActionInput { locked: Some(true), ..Default::default() })
-            .await
-            .unwrap();
-        assert_eq!(m.get("/p", "s").await.unwrap().artifact_pin.unwrap().rel_path, owned);
+        m.save(
+            "/p",
+            "s",
+            ActionInput {
+                locked: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            m.get("/p", "s")
+                .await
+                .unwrap()
+                .artifact_pin
+                .unwrap()
+                .rel_path,
+            owned
+        );
 
         // Unpinned, the shared location would win.
         put(&m, &shared(), "json 666").await;
@@ -516,7 +564,14 @@ mod lifecycle_tests {
         assert_eq!(action.artifact_pin.expect("pinned").rel_path, shared());
 
         let err = m
-            .save("/p", "s", ActionInput { locked: Some(false), ..Default::default() })
+            .save(
+                "/p",
+                "s",
+                ActionInput {
+                    locked: Some(false),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap_err();
         assert!(err.to_string().contains("cannot unlock"), "{err}");
@@ -530,8 +585,13 @@ mod lifecycle_tests {
         )
         .await;
         assert!(err.contains("artifact of a locked action"), "{err}");
-        let err = builtin(&m, ACTION_PATH, "entity-delete-action", json!({"path": "/p", "name": "s"}))
-            .await;
+        let err = builtin(
+            &m,
+            ACTION_PATH,
+            "entity-delete-action",
+            json!({"path": "/p", "name": "s"}),
+        )
+        .await;
         assert!(err.contains("is locked"), "{err}");
 
         // Dropping its secrets is what lets an operator unlock it.
@@ -572,15 +632,21 @@ mod lifecycle_tests {
         )
         .await
         .unwrap();
-        conn.execute("UPDATE actions SET bin_name='nope.solx' WHERE name='gone'", ())
-            .await
-            .unwrap();
+        conn.execute(
+            "UPDATE actions SET bin_name='nope.solx' WHERE name='gone'",
+            (),
+        )
+        .await
+        .unwrap();
 
         super::lock_keyed_actions(&conn, &m.files).await.unwrap();
 
         let action = m.get("/p", "s").await.unwrap();
         assert!(action.locked);
-        assert_eq!(action.artifact_pin.expect("pinned").sha256, super::sha256_hex(b"json 42"));
+        assert_eq!(
+            action.artifact_pin.expect("pinned").sha256,
+            super::sha256_hex(b"json 42")
+        );
         assert_eq!(run(&m).await.unwrap(), json!(42));
 
         let gone = m.get("/p", "gone").await.unwrap();
@@ -595,16 +661,27 @@ mod lifecycle_tests {
     async fn unlocking_clears_the_pin_and_frees_the_artifact() {
         let (_d, _cfg, m) = setup_wired().await;
         locked_script(&m).await;
-        m.save("/p", "s", ActionInput { locked: Some(false), ..Default::default() })
-            .await
-            .unwrap();
+        m.save(
+            "/p",
+            "s",
+            ActionInput {
+                locked: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         let action = m.get("/p", "s").await.unwrap();
         assert!(!action.locked);
         assert!(action.artifact_pin.is_none());
 
-        m.exec(FILE_PATH, "file-put", json!({"rel_path": shared(), "content": "json 7"}))
-            .await
-            .unwrap();
+        m.exec(
+            FILE_PATH,
+            "file-put",
+            json!({"rel_path": shared(), "content": "json 7"}),
+        )
+        .await
+        .unwrap();
         assert_eq!(run(&m).await.unwrap(), json!(7));
     }
 }

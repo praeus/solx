@@ -60,7 +60,10 @@ impl LocalActionManager {
             incoming.and_then(|i| i.action_type),
             existing.as_ref().and_then(|a| a.action_type),
         ];
-        let kinds = types.into_iter().flatten().filter_map(Kind::for_action_type);
+        let kinds = types
+            .into_iter()
+            .flatten()
+            .filter_map(Kind::for_action_type);
         for kind in kinds {
             scopes.require(&Need::Kind(kind))?;
         }
@@ -118,7 +121,11 @@ pub fn check_action_change(
             existing.and_then(|a| a.action_type),
             incoming.and_then(|i| i.action_type),
             &reference,
-            if incoming.is_some() { "create or modify" } else { "delete" },
+            if incoming.is_some() {
+                "create or modify"
+            } else {
+                "delete"
+            },
         )?;
     }
     guard_package_namespace(path, name, actor.acting())?;
@@ -219,7 +226,10 @@ mod tests {
         for actor in [builtin, content] {
             assert!(check_action_change(actor, None, None, "/packages/p", "a").is_err());
         }
-        assert!(check_action_change(Actor::Operator, None, Some(&command()), "/packages/p", "a").is_ok());
+        assert!(
+            check_action_change(Actor::Operator, None, Some(&command()), "/packages/p", "a")
+                .is_ok()
+        );
     }
 
     #[test]
