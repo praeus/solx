@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use solx_surface::internal_actions::{
     InternalActionHandler, InternalActionRegistry, InternalCallCtx, SeedAction,
 };
-use solx_surface::Principal;
+use solx_surface::{Grant, Principal};
 
 pub const FN_NAME: &str = "test-principal-probe";
 /// Where the probe is seeded.
@@ -49,19 +49,55 @@ impl InternalActionHandler for Probe {
     }
 }
 
+pub const GRANT_FN_NAME: &str = "test-grant-probe";
+/// Where the grant probe is seeded, beside [`NAME`].
+pub const GRANT_NAME: &str = "grant";
+
+/// Stable form of a grant, for assertions: `"unlimited"`, or the scopes.
+pub fn describe_grant(grant: &Grant) -> Value {
+    match grant {
+        Grant::Unlimited => json!("unlimited"),
+        Grant::Scoped(scopes) => json!(scopes),
+    }
+}
+
+/// Reports what a call made where it runs would be checked against.
+struct GrantProbe;
+
+#[async_trait]
+impl InternalActionHandler for GrantProbe {
+    async fn call(
+        &self,
+        _params: &Value,
+        ctx: &InternalCallCtx,
+    ) -> std::result::Result<Value, String> {
+        Ok(describe_grant(ctx.exec.grant()))
+    }
+}
+
 pub(crate) fn seeds() -> Vec<SeedAction> {
-    vec![SeedAction {
-        path: PATH,
-        name: NAME,
-        fn_name: FN_NAME,
-        description: "Test only: report the principal, caller and exclusion mode.",
-        param_type: None,
-    }]
+    vec![
+        SeedAction {
+            path: PATH,
+            name: NAME,
+            fn_name: FN_NAME,
+            description: "Test only: report the principal, caller and exclusion mode.",
+            param_type: None,
+        },
+        SeedAction {
+            path: PATH,
+            name: GRANT_NAME,
+            fn_name: GRANT_FN_NAME,
+            description: "Test only: report the scopes a call from here is checked against.",
+            param_type: None,
+        },
+    ]
 }
 
 pub(crate) fn plugin() -> InternalActionRegistry {
     let mut registry = InternalActionRegistry::new();
     registry.register(&[FN_NAME], Arc::new(Probe));
+    registry.register(&[GRANT_FN_NAME], Arc::new(GrantProbe));
     registry
 }
 
@@ -89,6 +125,26 @@ mod tests {
         source: &str,
         capabilities: Vec<String>,
     ) {
+        save_script_with(m, name, source, capabilities, None).await;
+    }
+
+    async fn save_script_declaring(
+        m: &LocalActionManager,
+        name: &str,
+        source: &str,
+        scopes: &[&str],
+    ) {
+        let config = json!({ "scopes": scopes });
+        save_script_with(m, name, source, vec![], Some(config)).await;
+    }
+
+    async fn save_script_with(
+        m: &LocalActionManager,
+        name: &str,
+        source: &str,
+        capabilities: Vec<String>,
+        action_config: Option<serde_json::Value>,
+    ) {
         let bin = format!("{name}.solx");
         m.files
             .put(
@@ -104,6 +160,7 @@ mod tests {
                 action_type: Some(ActionType::Script),
                 bin_name: Some(bin),
                 capabilities,
+                action_config,
                 ..Default::default()
             },
         )
@@ -223,6 +280,69 @@ mod tests {
             json!({"principal": null, "caller": "/t/starter", "external": null, "excludeMode": "tooling"})
         );
 
+        set_long_lived_host(false);
+    }
+
+    /// A call is checked against whoever makes it: the entry point's or
+    /// token's grant on the first frame, the calling action's declared
+    /// scopes on a nested one (nothing when it declares none), and the
+    /// same across a detached run.
+    #[tokio::test]
+    #[serial]
+    async fn each_frame_is_held_to_its_own_action() {
+        use solx_surface::{Grant, ScopeSet};
+
+        let (_d, _cfg, m) = setup_wired().await;
+
+        let local = m.exec(PATH, "grant", json!({})).await.unwrap();
+        assert_eq!(local.result, json!("unlimited"));
+
+        let client = Principal::Client {
+            id: "c".into(),
+            label: None,
+            grant: Grant::scoped(ScopeSet::parse(["exec:/t/*"]).unwrap()),
+        };
+        let direct = m.exec_for(&client, PATH, "grant", json!({})).await.unwrap();
+        assert_eq!(direct.result, json!(["exec:/t/*"]));
+
+        save_script_declaring(
+            &m,
+            "scoped",
+            "exec /builtin/test/grant",
+            &["exec:/builtin/test/*"],
+        )
+        .await;
+        save_script(&m, "bare", "exec /builtin/test/grant").await;
+        for principal in [&Principal::Root, &client] {
+            let ran = m
+                .exec_for(principal, "/t", "scoped", json!({}))
+                .await
+                .unwrap();
+            assert_eq!(ran.result["result"], json!(["exec:/builtin/test/*"]));
+            let ran = m
+                .exec_for(principal, "/t", "bare", json!({}))
+                .await
+                .unwrap();
+            assert_eq!(ran.result["result"], json!([]));
+        }
+
+        // A detached run rebuilds the starting action's frame from its row,
+        // scopes included.
+        set_long_lived_host(true);
+        save_script_declaring(
+            &m,
+            "starter",
+            r#"exec /builtin/action/start --json '{"path": "/builtin/test", "name": "grant"}'"#,
+            &["exec:/builtin/*"],
+        )
+        .await;
+        let ran = m.exec("/t", "starter", json!({})).await.unwrap();
+        let id = ran.result["result"]["invocation_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let polled = m.poll_invocation(&id, Some(10)).await.unwrap();
+        assert_eq!(polled["result"], json!(["exec:/builtin/*"]), "{polled}");
         set_long_lived_host(false);
     }
 

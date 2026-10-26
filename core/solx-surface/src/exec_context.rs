@@ -1,22 +1,27 @@
 //! What a call chain runs as, carried from where it enters solx to every
 //! nested frame.
 //!
-//! An execution has three facts about it that every re-entrant path must
+//! An execution has four facts about it that every re-entrant path must
 //! carry together: the calling action ([`Caller`]), who authenticated the
-//! chain ([`Principal`]), and which exclusions it is held to
-//! ([`ExcludeMode`]). Dropping one is a security bug: without the caller an
+//! chain ([`Principal`]), which exclusions it is held to ([`ExcludeMode`]),
+//! and the scopes the chain entered with ([`Grant`]). Dropping one is a security bug: without the caller an
 //! action's call looks external, and without the mode a model reaches
 //! actions excluded from tooling. Bundling them means a new path can't
 //! forget one, and a new fact has one place to go.
 //!
-//! The three don't travel the same way:
+//! They don't all travel the same way:
 //!
-//! * `principal` and `exclude_mode` are fixed where the chain enters
-//!   ([`ExecContext::local`], [`ExecContext::for_principal`],
+//! * `principal`, `exclude_mode` and the entry grant are fixed where the
+//!   chain enters ([`ExecContext::local`], [`ExecContext::for_principal`],
 //!   [`ExecContext::tooling`]) and inherited unchanged by every frame.
 //! * `caller` is *replaced* at each frame that runs as an action (a Script
 //!   or WASM action): [`ExecContext::enter`]. Anything that action invokes is
-//!   invoked by it, with its own secrets, never the outer action's.
+//!   invoked by it, with its own secrets and its own scopes, never the outer
+//!   action's.
+//!
+//! So a call is checked against whoever makes it ([`ExecContext::grant`]):
+//! the calling action's scopes on a nested frame, the token's on the first,
+//! and nothing at a local entry point.
 //!
 //! [`ExecContext`] holds the full [`Caller`], secrets included, so it never
 //! leaves the host. Handlers and the detached-run seam get
@@ -25,6 +30,7 @@
 use crate::auth::Principal;
 use crate::internal_actions::{Caller, CallerInfo};
 use crate::query::ExcludeMode;
+use crate::scope::Grant;
 
 /// The host-side context of one frame of a call chain — see the module doc.
 /// Built only by the entry-point constructors and [`Self::enter`].
@@ -33,16 +39,20 @@ pub struct ExecContext {
     caller: Option<Caller>,
     principal: Option<Principal>,
     exclude_mode: ExcludeMode,
+    /// What a call with no calling action is checked against: the
+    /// principal's scopes, or everything at a local entry point.
+    grant: Grant,
 }
 
 impl ExecContext {
     /// A local entry point (the CLI, Tauri, in-process hosts): no caller, no
-    /// principal, no exclusions.
+    /// principal, no exclusions, no scope limit.
     pub fn local() -> Self {
         ExecContext {
             caller: None,
             principal: None,
             exclude_mode: ExcludeMode::None,
+            grant: Grant::Unlimited,
         }
     }
 
@@ -50,24 +60,30 @@ impl ExecContext {
     /// who `TokenAuthority::authenticate` just identified.
     pub fn for_principal(principal: Principal) -> Self {
         ExecContext {
+            grant: principal.grant().clone(),
             principal: Some(principal),
             ..Self::local()
         }
     }
 
     /// The MCP server (`ActionManager::exec_tooling`): the whole chain is
-    /// held to the tooling exclusions.
+    /// held to the tooling exclusions, and to `principal`'s scopes when
+    /// there is one (stdio MCP has none: it is a local entry point).
     pub fn tooling(principal: Option<Principal>) -> Self {
         ExecContext {
             caller: None,
+            grant: principal
+                .as_ref()
+                .map_or(Grant::Unlimited, |p| p.grant().clone()),
             principal,
             exclude_mode: ExcludeMode::Tooling,
         }
     }
 
     /// The context for a frame that runs as an action: `frame` becomes the
-    /// caller of everything it invokes; the principal and exclusion mode
-    /// carry over.
+    /// caller of everything it invokes, and what it invokes is checked
+    /// against `frame`'s scopes; the principal and exclusion mode carry
+    /// over.
     pub fn enter(&self, frame: Caller) -> Self {
         ExecContext {
             caller: Some(frame),
@@ -84,6 +100,12 @@ impl ExecContext {
         self.principal.as_ref()
     }
 
+    /// What a call made from this frame is checked against: the calling
+    /// action's scopes when there is one, else the entry grant.
+    pub fn grant(&self) -> &Grant {
+        self.caller.as_ref().map_or(&self.grant, Caller::grant)
+    }
+
     /// The exclusions the chain is held to. Only [`ExcludeMode::Tooling`] is
     /// enforced along the chain; `User` exclusions are a display
     /// convenience, not access control, so `User` acts as `None` here. No
@@ -98,6 +120,7 @@ impl ExecContext {
             caller: self.caller.as_ref().map(Caller::info),
             principal: self.principal.clone(),
             exclude_mode: self.exclude_mode,
+            grant: self.grant.clone(),
         }
     }
 }
@@ -110,6 +133,9 @@ pub struct ExecContextInfo {
     caller: Option<CallerInfo>,
     principal: Option<Principal>,
     exclude_mode: ExcludeMode,
+    /// The entry grant, for [`Self::resume`]. The caller's own comes back
+    /// with the frame the host rebuilds from its row.
+    grant: Grant,
 }
 
 impl ExecContextInfo {
@@ -129,6 +155,11 @@ impl ExecContextInfo {
     /// See [`ExecContext::exclude_mode`].
     pub fn exclude_mode(&self) -> ExcludeMode {
         self.exclude_mode
+    }
+
+    /// See [`ExecContext::grant`].
+    pub fn grant(&self) -> &Grant {
+        self.caller.as_ref().map_or(&self.grant, CallerInfo::grant)
     }
 
     /// The principal to authorize against, failing closed: `None` when an
@@ -154,6 +185,7 @@ impl ExecContextInfo {
             caller,
             principal: self.principal.clone(),
             exclude_mode: self.exclude_mode,
+            grant: self.grant.clone(),
         }
     }
 }
@@ -173,6 +205,7 @@ fn external_principal(has_caller: bool, principal: Option<&Principal>) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scope::ScopeSet;
 
     #[test]
     fn entering_a_frame_replaces_only_the_caller() {
@@ -190,6 +223,7 @@ mod tests {
         Principal::Client {
             id: "c1".into(),
             label: None,
+            grant: Grant::scoped(ScopeSet::parse(["read:document"]).unwrap()),
         }
     }
 
@@ -197,7 +231,54 @@ mod tests {
         Principal::Action {
             action_ref: "/pkg/a".into(),
             invocation_id: "i1".into(),
+            grant: Grant::none(),
         }
+    }
+
+    fn declaring(action_ref: &str, scopes: &[&str]) -> Caller {
+        Caller::from_action(action_ref, None)
+            .with_grant(Grant::scoped(ScopeSet::parse(scopes).unwrap()))
+    }
+
+    #[test]
+    fn a_call_is_checked_against_whoever_makes_it() {
+        assert_eq!(ExecContext::local().grant(), &Grant::Unlimited);
+        assert_eq!(ExecContext::tooling(None).grant(), &Grant::Unlimited);
+        assert_eq!(
+            ExecContext::for_principal(Principal::Root).grant(),
+            &Grant::Unlimited
+        );
+        let from_client = ExecContext::for_principal(client());
+        assert_eq!(from_client.grant(), client().grant());
+        assert_eq!(
+            ExecContext::tooling(Some(client())).grant(),
+            client().grant()
+        );
+
+        // A nested frame is checked against its own action, never against
+        // the token or an outer action.
+        let a = from_client.enter(declaring("/p/a", &["exec:/p/b"]));
+        assert_eq!(
+            a.grant(),
+            &Grant::scoped(ScopeSet::parse(["exec:/p/b"]).unwrap())
+        );
+        let b = a.enter(Caller::from_action("/p/b", None));
+        assert_eq!(b.grant(), &Grant::none());
+        // Even when the chain entered locally.
+        let local = ExecContext::local().enter(Caller::from_action("/p/a", None));
+        assert_eq!(local.grant(), &Grant::none());
+    }
+
+    #[test]
+    fn resume_keeps_the_entry_grant() {
+        let ctx = ExecContext::for_principal(client());
+        assert_eq!(ctx.info().resume(None).grant(), client().grant());
+        let nested = ctx.enter(declaring("/p/a", &["exec:/p/b"]));
+        assert_eq!(nested.info().grant(), nested.grant());
+        let resumed = nested
+            .info()
+            .resume(Some(declaring("/p/a", &["exec:/p/b"])));
+        assert_eq!(resumed.grant(), nested.grant());
     }
 
     #[test]

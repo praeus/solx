@@ -1,7 +1,8 @@
 # Scoped tokens — design plan
 
-Status: **In progress.** Step 1 (the scope types, `solx_surface::scope`) has
-landed; nothing calls it yet. This is the follow-on that
+Status: **In progress.** Steps 1 (the scope types, `solx_surface::scope`)
+and 2 (plumbing: every principal, frame and actor carries its grant) have
+landed; nothing checks a grant yet. This is the follow-on that
 [token-registry-plan.md](token-registry-plan.md) calls "authorization that the
 principal makes possible", and it closes the first gap in SECURITY.md's "What
 is not enforced": *client and action tokens aren't scoped*.
@@ -203,24 +204,31 @@ preset later never widens an existing token.
 - **`solx-surface/src/scope.rs`** (step 1, done): `Scope`, `ScopeSet` (parse,
   display, serde, `grants`, `covers`, `path_filter`), `Need`, `PathFilter`,
   `Grant` (`Unlimited` | `Scoped`), `Preset` and `declared_scopes`.
-- **`Principal`**: `Client` and `Action` gain `scopes: Arc<ScopeSet>`. `Root`
-  stays scope-less and means everything.
-- **`Caller`**: gains the action's `Grant`, built from `declared_scopes` when
-  the caller is built from its row. No declared scopes means an empty set.
-  `resume` rebuilds the caller from the row, so `action-start` carries it
-  with no extra work.
-- **`ExecContext`**: gains the *entry* grant, fixed where the chain enters:
-  the token's scopes for `for_principal`, `Unlimited` for `local()`.
-  `ExecContext::grant()` returns the caller's grant when there is a caller,
-  and the entry grant otherwise. That is "who the call is checked against".
-- **`Actor`**: `Content` and `Builtin` gain `grant: &Grant`.
+- **`Principal`** (step 2, done): `Client` and `Action` carry `grant: Grant`,
+  and `Principal::grant()` returns it (`Unlimited` for `Root`).
+- **`Caller`** (step 2, done): carries its action's grant
+  (`Caller::with_grant(Grant::for_action(config))`), set by dispatch for
+  Script and WASM frames and by `rebuild_caller` for a detached run. A frame
+  built without one, or for an action that declares nothing, has
+  `Grant::none()`. `CallerInfo` carries it too: scopes aren't secret, so
+  pluggable handlers may see them.
+- **`ExecContext`** (step 2, done): gains the *entry* grant, fixed where the
+  chain enters: the token's for `for_principal` and `tooling(Some(..))`,
+  `Unlimited` for `local()` and `tooling(None)`. `ExecContext::grant()` (and
+  `ExecContextInfo::grant()`) returns the caller's grant when there is a
+  caller, and the entry grant otherwise. That is "who the call is checked
+  against".
+- **`Actor`** (step 2, done): `Content` and `Builtin` carry `grant: &Grant`,
+  and `Actor::grant()` returns it (`UNLIMITED` for `Operator`).
   `Actor::for_principal` takes it from the token, `Actor::builtin` from
-  `ExecContext::grant()`, and the Tauri `CONTENT` constant uses
-  `&scope::UNLIMITED` (the desktop app is unlimited).
-- **`solx-registry.db`**: `tokens.scopes TEXT` and `connect_codes.scopes
-  TEXT`, holding a JSON array. The migration adds both columns as nullable. A
-  `NULL` row means `all` (`Grant::from_stored(None)`), so existing client
-  tokens keep working. `list-clients` returns each token's scopes.
+  `ExecContext::grant()`, and the Tauri `CONTENT` constant is
+  `Actor::LOCAL_CONTENT` (the desktop app is unlimited).
+- **`solx-registry.db`** (step 2, done): `tokens.scopes TEXT` and
+  `connect_codes.scopes TEXT`, holding a JSON array, added as nullable on
+  open. A `NULL` row means `all` (`Grant::from_stored(None)`), so existing
+  client tokens keep working; a value that no longer parses grants nothing.
+  `redeem` copies a code's scopes onto its token, action tokens store the
+  action's declared scopes, and `list-clients` returns each token's scopes.
 - **`action_config.scopes`**: a list of scope strings, validated and
   normalised in `secret_config::normalize` beside `secrets` (rename the module
   `config_guard` or similar while there). Anything but a list of valid scope
@@ -375,10 +383,14 @@ turns `X-Solx-Principal: none` into `actions.exec(...)`, which is
 `local()` means unlimited, **a client token sending that header would escape
 its scopes.**
 
-The fix: the entry grant comes from the authenticated token, not from the
-principal, and the header drops only the principal (attribution and
-auth-builtin access). Add `ExecContext::anonymous(grant)`, and make the REST
-route use it instead of `local()`. Test this explicitly.
+The same goes for `X-Solx-Principal: none` with `X-Solx-Scope: tooling`,
+which reaches `exec_tooling(None)`: also a local, unlimited context.
+
+The fix (step 2, done): the route honours the header **for the root token
+only**. Only root has anything to drop: every other token is already
+refused by the auth builtins, so keeping its principal costs it nothing and
+keeps its scopes. `solx_server`'s `only_root_can_drop_its_principal` test
+covers both header combinations.
 
 ## What stays root-only
 
@@ -498,14 +510,17 @@ default; audit mode is how they're found.
 1. **Scope types.** ✅ `solx-surface::scope`: grammar, matching, `covers`,
    `path_filter`, presets, `Grant` and `declared_scopes`, with unit tests. No
    behaviour change.
-2. **Plumbing.**
-   - `Principal` gets scopes; `Caller` gets its grant from its row;
+2. **Plumbing.** ✅
+   - `Principal` gets its grant; `Caller` gets its grant from its row;
      `ExecContext` gets the entry grant and `grant()`.
    - `Actor` gets the grant; `Actor::for_principal`, `Actor::builtin` and the
      Tauri `CONTENT` constant fill it in.
-   - Registry columns and migration, scopes on `issue_action_token`.
-   - `ExecContext::anonymous` and the `X-Solx-Principal: none` fix.
-   - Everything runs with `scope_enforcement = "off"`.
+   - Registry columns and migration, scopes on `issue_action_token`; the
+     single-token authority issues no credential to an action that declares
+     scopes.
+   - The `X-Solx-Principal: none` fix.
+   - Nothing checks a grant yet, so behaviour is unchanged. The
+     `scope_enforcement` key arrives with the checks in step 3.
 3. **Checks.**
    - `scopes` validated in `normalize` and made root-only in
      `guard_keyed_action`.

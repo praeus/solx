@@ -74,6 +74,45 @@ async fn rest_exec_honors_the_tooling_scope_header() {
     assert_eq!(body["result"], root_probe("tooling"));
 }
 
+/// `X-Solx-Principal: none` drops only the root token's principal. Any other
+/// token keeps its own: with none, the call would be a local one, which no
+/// scope limits.
+#[tokio::test]
+async fn only_root_can_drop_its_principal() {
+    let (_dir, app, base, root) = spawn_server().await;
+    let client = app
+        .registry()
+        .unwrap()
+        .issue_client(None, None)
+        .await
+        .unwrap();
+
+    for scope in [None, Some("tooling")] {
+        let principal = |token: String| {
+            let base = base.clone();
+            async move {
+                let mut req = reqwest::Client::new()
+                    .post(format!("{base}/actions/builtin/test/probe"))
+                    .bearer_auth(token)
+                    .header(solx_surface::auth::NO_PRINCIPAL_HEADER, "none");
+                if let Some(scope) = scope {
+                    req = req.header(solx_surface::auth::EXEC_SCOPE_HEADER, scope);
+                }
+                let res = req.send().await.unwrap();
+                assert!(res.status().is_success(), "{}", res.status());
+                let body: Value = res.json().await.unwrap();
+                body["result"]["principal"].clone()
+            }
+        };
+        assert_eq!(principal(root.clone()).await, Value::Null, "{scope:?}");
+        assert_eq!(
+            principal(client.token.clone()).await,
+            json!(format!("client:{}", client.client_id)),
+            "{scope:?}"
+        );
+    }
+}
+
 /// Confirms the rmcp streamable HTTP transport hands the request's
 /// `http::request::Parts` — and so `require_bearer`'s `Principal` — to
 /// `call_tool`, even though tool calls run on rmcp's own session tasks.

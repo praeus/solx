@@ -215,6 +215,45 @@ async fn an_action_token_works_while_the_command_runs_and_not_after() {
     assert!(token_lives_exactly_as_long_as_the_run(&s).await);
 }
 
+/// The child's token carries exactly the scopes its action declares, and
+/// none when it declares none.
+#[tokio::test]
+async fn an_action_token_carries_the_declared_scopes() {
+    use solx_surface::{Grant, ScopeSet};
+
+    async fn child_grant(s: &RegistrySetup) -> Grant {
+        let run = {
+            let actions = s.actions.clone();
+            tokio::spawn(async move { actions.exec("/t", "token", json!({})).await })
+        };
+        let token = child_token(&s.token_file).await;
+        let principal = s.registry.authenticate(&token).await.unwrap();
+        run.await.unwrap().unwrap();
+        std::fs::remove_file(&s.token_file).unwrap();
+        principal.grant().clone()
+    }
+
+    let s = registry_setup(1, 0, None).await;
+    assert_eq!(child_grant(&s).await, Grant::none());
+
+    let declared = ["exec:/builtin/web/http-request", "write:document:/media/*"];
+    s.actions
+        .save(
+            "/t",
+            "token",
+            ActionInput {
+                action_config: Some(json!({ "scopes": declared })),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        child_grant(&s).await,
+        Grant::scoped(ScopeSet::parse(declared).unwrap())
+    );
+}
+
 #[tokio::test]
 async fn a_failing_command_releases_its_token() {
     let s = registry_setup(1, 3, None).await;

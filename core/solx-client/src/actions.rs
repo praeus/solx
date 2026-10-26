@@ -90,7 +90,8 @@ impl ActionManager for RemoteActionManager {
 
     /// `POST` on the action's own URL, with the params as the body, asking
     /// the server to run it with no principal ([`NO_PRINCIPAL_HEADER`]), as
-    /// `exec` means locally.
+    /// `exec` means locally. The server drops only the root token's
+    /// principal; a client token keeps its own, and with it its scopes.
     async fn exec(&self, path: &str, name: &str, params: Value) -> Result<ActionExecResult> {
         let url = entity_url(&self.base_url, "actions", path, name)?;
         let resp = self

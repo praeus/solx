@@ -256,7 +256,12 @@ async fn client_and_action_tokens_are_refused_over_rest() {
     let registry = s.app.registry().unwrap();
     let client = registry.issue_client(None, None).await.unwrap();
     let action = registry
-        .issue_action_token("/pkg/a", "inv", std::time::Duration::from_secs(60))
+        .issue_action_token(
+            "/pkg/a",
+            "inv",
+            std::time::Duration::from_secs(60),
+            &solx_surface::ScopeSet::default(),
+        )
         .await
         .unwrap();
 

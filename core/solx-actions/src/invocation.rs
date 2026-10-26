@@ -10,7 +10,7 @@ use solx_surface::error::{Result, SolxError};
 use solx_surface::internal_actions::CallerInfo;
 use solx_surface::managers::ActionManager;
 use solx_surface::path::{full_ref, split_ref};
-use solx_surface::{ExcludeMode, ExecContextInfo};
+use solx_surface::{ExcludeMode, ExecContextInfo, Grant};
 use uuid::Uuid;
 
 use crate::caller::Caller;
@@ -255,15 +255,21 @@ impl LocalActionManager {
     /// its row can't be read (it was deleted), the frame has no secrets but is still a caller — so
     /// the detached run is never mistaken for an external call.
     async fn rebuild_caller(&self, info: &CallerInfo) -> Caller {
-        let secrets = match split_ref(info.action_ref()) {
-            Ok((path, name)) => self
-                .get_with_secrets(&path, &name)
-                .await
-                .ok()
-                .map(|(_, secrets)| secrets),
+        let row = match split_ref(info.action_ref()) {
+            Ok((path, name)) => self.get_with_secrets(&path, &name).await.ok(),
             Err(_) => None,
         };
-        Caller::with_invocation(info.action_ref(), secrets, info.invocation_id())
+        // A row that has gone since leaves a frame with no secrets and no
+        // scopes, so the detached run can do nothing it couldn't before.
+        let grant = row.as_ref().map_or_else(Grant::none, |(action, _)| {
+            Grant::for_action(action.action_config.as_ref())
+        });
+        Caller::with_invocation(
+            info.action_ref(),
+            row.map(|(_, secrets)| secrets),
+            info.invocation_id(),
+        )
+        .with_grant(grant)
     }
 }
 

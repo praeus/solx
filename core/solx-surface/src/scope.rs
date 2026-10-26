@@ -502,17 +502,34 @@ pub enum Grant {
 }
 
 /// A `'static` [`Grant::Unlimited`], for constants that borrow a grant.
-pub static UNLIMITED: Grant = Grant::Unlimited;
+pub const UNLIMITED: &Grant = &Grant::Unlimited;
 
 impl Grant {
     pub fn scoped(set: ScopeSet) -> Self {
         Grant::Scoped(Arc::new(set))
     }
 
+    /// A grant of nothing at all.
+    pub fn none() -> Self {
+        Self::scoped(ScopeSet::default())
+    }
+
     /// The grant for a token row's stored scopes. `None` is a row from
     /// before scopes existed, which keeps working as `all`.
     pub fn from_stored(stored: Option<ScopeSet>) -> Self {
         Self::scoped(stored.unwrap_or_else(ScopeSet::all))
+    }
+
+    /// The grant an action runs with: the scopes it declares in
+    /// `action_config.scopes`, or nothing. A malformed declaration, which a
+    /// save refuses, grants nothing too.
+    pub fn for_action(action_config: Option<&Value>) -> Self {
+        Self::scoped(
+            declared_scopes(action_config)
+                .ok()
+                .flatten()
+                .unwrap_or_default(),
+        )
     }
 
     pub fn is_unlimited(&self) -> bool {
@@ -1036,7 +1053,19 @@ mod tests {
         let narrow = Grant::scoped(set(&["exec:/builtin/web/http-request"]));
         assert!(narrow.grants(&exec("/builtin/web/http-request")));
         assert!(!narrow.grants(&exec("/builtin/env/get-env")));
-        assert!(!Grant::scoped(ScopeSet::default()).grants(&exec("/a")));
+        assert!(!Grant::none().grants(&exec("/a")));
+    }
+
+    #[test]
+    fn an_action_is_granted_what_it_declares_or_nothing() {
+        let declared = json!({ "scopes": ["exec:/builtin/web/http-request"] });
+        let grant = Grant::for_action(Some(&declared));
+        assert!(grant.grants(&exec("/builtin/web/http-request")));
+        assert!(!grant.grants(&exec("/builtin/env/get-env")));
+
+        for config in [None, Some(json!({})), Some(json!({ "scopes": "all" }))] {
+            assert_eq!(Grant::for_action(config.as_ref()), Grant::none());
+        }
     }
 
     #[test]

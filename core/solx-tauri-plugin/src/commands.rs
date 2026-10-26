@@ -49,9 +49,10 @@ fn entity(path: &str, name: &str) -> Result<(String, String)> {
 const DEFAULT_MODE: ExcludeMode = ExcludeMode::User;
 
 /// Who the main window's commands act as when they change an action or a
-/// file: content, since package widgets run there. The Settings window's
-/// `config_*` commands are the operator path and don't authorize.
-const CONTENT: Actor<'static> = Actor::Content { acting: None };
+/// file: content, since package widgets run there, but limited by no scope:
+/// the desktop app is a local entry point. The Settings window's `config_*`
+/// commands are the operator path and don't authorize.
+const CONTENT: Actor<'static> = Actor::LOCAL_CONTENT;
 
 /// Expand `opts`' mode (or [`DEFAULT_MODE`]) into its `exclude_paths`.
 fn scoped(app: &solx_manager::App, kind: EntityKind, opts: Option<ListOptions>) -> ListOptions {

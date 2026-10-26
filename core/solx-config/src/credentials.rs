@@ -27,6 +27,7 @@ use base64::Engine as _;
 use serde_json::Value;
 use solx_surface::auth::{constant_time_eq, ActionCredential, Principal, TokenAuthority};
 use solx_surface::error::{Result, SolxError};
+use solx_surface::scope::ScopeSet;
 
 use crate::ConfigService;
 
@@ -499,12 +500,19 @@ impl TokenAuthority for SingleTokenAuthority {
         constant_time_eq(bearer.as_bytes(), self.token.as_bytes()).then_some(Principal::Root)
     }
 
+    /// Every credential is the root token, so an action that declares scopes
+    /// gets none at all rather than one its scopes would not hold: scopes
+    /// need the token registry.
     async fn issue_action_token(
         &self,
         _action_ref: &str,
         _invocation_id: &str,
         _ttl: std::time::Duration,
+        scopes: &ScopeSet,
     ) -> Option<ActionCredential> {
+        if !scopes.is_empty() {
+            return None;
+        }
         Some(ActionCredential::new(
             self.server_url.get(),
             self.token.clone(),
@@ -897,13 +905,33 @@ mod tests {
     async fn action_credential_carries_token_and_bound_url() {
         let auth = SingleTokenAuthority::new("secret");
         let ttl = std::time::Duration::from_secs(60);
-        let cred = auth.issue_action_token("/a", "inv", ttl).await.unwrap();
+        let none = ScopeSet::default();
+        let cred = auth
+            .issue_action_token("/a", "inv", ttl, &none)
+            .await
+            .unwrap();
         assert_eq!(cred.token, "secret");
         assert_eq!(cred.server_url, None);
 
         auth.set_server_url("http://127.0.0.1:1".into());
-        let cred = auth.issue_action_token("/a", "inv", ttl).await.unwrap();
+        let cred = auth
+            .issue_action_token("/a", "inv", ttl, &none)
+            .await
+            .unwrap();
         assert_eq!(cred.server_url.as_deref(), Some("http://127.0.0.1:1"));
+    }
+
+    /// Handing the root token to an action that declares scopes would give
+    /// it everything, so it gets no credential.
+    #[tokio::test]
+    async fn no_root_token_for_an_action_that_declares_scopes() {
+        let auth = SingleTokenAuthority::new("secret");
+        let ttl = std::time::Duration::from_secs(60);
+        let scopes = ScopeSet::parse(["exec:/builtin/web/http-request"]).unwrap();
+        assert!(auth
+            .issue_action_token("/a", "inv", ttl, &scopes)
+            .await
+            .is_none());
     }
 
     /// A process serving no HTTP of its own (stdio `solx-mcp`) still gives
@@ -912,7 +940,7 @@ mod tests {
     async fn from_config_defaults_to_the_sibling_server_url() {
         async fn url(auth: &SingleTokenAuthority) -> Option<String> {
             let ttl = std::time::Duration::from_secs(60);
-            auth.issue_action_token("/a", "inv", ttl)
+            auth.issue_action_token("/a", "inv", ttl, &ScopeSet::default())
                 .await
                 .unwrap()
                 .server_url

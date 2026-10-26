@@ -38,6 +38,7 @@ use solx_config::credentials::{self, ServerUrlSlot};
 use solx_config::ConfigService;
 use solx_surface::auth::{constant_time_eq, ActionCredential, Principal, TokenAuthority};
 use solx_surface::error::{Result, SolxError};
+use solx_surface::scope::{Grant, ScopeSet};
 use uuid::Uuid;
 
 use db::{map_db, Db};
@@ -110,6 +111,9 @@ pub struct ClientInfo {
     pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
     pub last_used_at: Option<DateTime<Utc>>,
+    /// What the token may do. A token issued before scopes existed has
+    /// `all`.
+    pub scopes: ScopeSet,
 }
 
 impl Registry {
@@ -365,7 +369,7 @@ impl Registry {
         }
         let mut rows = tx
             .query(
-                "SELECT label, token_ttl_secs FROM connect_codes WHERE code_hash = ?1",
+                "SELECT label, token_ttl_secs, scopes FROM connect_codes WHERE code_hash = ?1",
                 [hash],
             )
             .await
@@ -373,9 +377,11 @@ impl Registry {
         let row = rows.next().await.map_err(map_db)?.ok_or_else(invalid)?;
         let label: Option<String> = row.get(0).map_err(map_db)?;
         let token_ttl: Option<i64> = row.get(1).map_err(map_db)?;
+        // The token is issued exactly the code's scopes, `NULL` included.
+        let scopes: Option<String> = row.get(2).map_err(map_db)?;
         drop(rows);
         let ttl = token_ttl.map(|s| Duration::from_secs(s.max(1) as u64));
-        let issued = self.insert_client(&tx, label, ttl).await?;
+        let issued = self.insert_client(&tx, label, ttl, scopes).await?;
         tx.commit().await.map_err(map_db)?;
         tracing::info!(
             client_id = %issued.client_id,
@@ -406,7 +412,9 @@ impl Registry {
             ));
         }
         let conn = self.db.connect().await?;
-        let issued = self.insert_client(&conn, clean_label(label), ttl).await?;
+        let issued = self
+            .insert_client(&conn, clean_label(label), ttl, None)
+            .await?;
         tracing::info!(
             client_id = %issued.client_id,
             label = ?issued.label,
@@ -415,11 +423,14 @@ impl Registry {
         Ok(issued)
     }
 
+    /// `scopes` is the stored JSON for the token's `scopes` column; `None`
+    /// issues `all`, as every client token was before scopes existed.
     async fn insert_client(
         &self,
         conn: &Connection,
         label: Option<String>,
         ttl: Option<Duration>,
+        scopes: Option<String>,
     ) -> Result<IssuedClient> {
         let ttl = ttl.unwrap_or_else(|| {
             Duration::from_secs(
@@ -431,14 +442,15 @@ impl Registry {
         let token = credentials::generate_token();
         let id = Uuid::new_v4().to_string();
         conn.execute(
-            "INSERT INTO tokens (id, kind, token_hash, label, created_at, expires_at) \
-             VALUES (?1, 'client', ?2, ?3, ?4, ?5)",
+            "INSERT INTO tokens (id, kind, token_hash, label, created_at, expires_at, scopes) \
+             VALUES (?1, 'client', ?2, ?3, ?4, ?5, ?6)",
             libsql::params![
                 id.clone(),
                 hash_secret(&token),
                 label.clone(),
                 now,
-                expires_at
+                expires_at,
+                scopes
             ],
         )
         .await
@@ -456,7 +468,7 @@ impl Registry {
         let conn = self.db.connect().await?;
         let mut rows = conn
             .query(
-                "SELECT id, label, created_at, expires_at, last_used_at FROM tokens \
+                "SELECT id, label, created_at, expires_at, last_used_at, scopes FROM tokens \
                  WHERE kind = 'client' AND revoked_at IS NULL \
                  AND (expires_at IS NULL OR expires_at > ?1) \
                  ORDER BY created_at, id",
@@ -472,6 +484,7 @@ impl Registry {
                 created_at: to_datetime(row.get(2).map_err(map_db)?),
                 expires_at: row.get::<Option<i64>>(3).map_err(map_db)?.map(to_datetime),
                 last_used_at: row.get::<Option<i64>>(4).map_err(map_db)?.map(to_datetime),
+                scopes: stored_scopes(row.get(5).map_err(map_db)?).unwrap_or_else(ScopeSet::all),
             });
         }
         Ok(clients)
@@ -502,7 +515,7 @@ impl Registry {
         let conn = self.db.connect().await?;
         let mut rows = conn
             .query(
-                "SELECT id, kind, label, action_ref, invocation_id FROM tokens \
+                "SELECT id, kind, label, action_ref, invocation_id, scopes FROM tokens \
                  WHERE token_hash = ?1 AND revoked_at IS NULL \
                  AND (expires_at IS NULL OR expires_at > ?2)",
                 libsql::params![hash_secret(bearer), now_secs()],
@@ -514,10 +527,12 @@ impl Registry {
         };
         let id: String = row.get(0).map_err(map_db)?;
         let kind: String = row.get(1).map_err(map_db)?;
+        let grant = Grant::from_stored(stored_scopes(row.get(5).map_err(map_db)?));
         let principal = match kind.as_str() {
             "client" => Principal::Client {
                 id: id.clone(),
                 label: row.get(2).map_err(map_db)?,
+                grant,
             },
             _ => Principal::Action {
                 action_ref: row
@@ -528,6 +543,7 @@ impl Registry {
                     .get::<Option<String>>(4)
                     .map_err(map_db)?
                     .unwrap_or_default(),
+                grant,
             },
         };
         Ok(Some((id, principal)))
@@ -592,6 +608,7 @@ impl TokenAuthority for Registry {
         action_ref: &str,
         invocation_id: &str,
         ttl: Duration,
+        scopes: &ScopeSet,
     ) -> Option<ActionCredential> {
         self.release_pending().await;
         let token = credentials::generate_token();
@@ -602,15 +619,17 @@ impl TokenAuthority for Registry {
             let conn = self.db.connect().await?;
             conn.execute(
                 "INSERT INTO tokens \
-                 (id, kind, token_hash, action_ref, invocation_id, created_at, expires_at) \
-                 VALUES (?1, 'action', ?2, ?3, ?4, ?5, ?6)",
+                 (id, kind, token_hash, action_ref, invocation_id, created_at, expires_at, \
+                  scopes) \
+                 VALUES (?1, 'action', ?2, ?3, ?4, ?5, ?6, ?7)",
                 libsql::params![
                     id.clone(),
                     hash_secret(&token),
                     action_ref.to_string(),
                     invocation_id.to_string(),
                     now,
-                    expires_at
+                    expires_at,
+                    scopes_column(scopes)
                 ],
             )
             .await
@@ -689,6 +708,22 @@ impl Drop for ReleaseGuard {
             }
         }
     }
+}
+
+/// A scope set as its `scopes` column stores it: a JSON array of strings.
+fn scopes_column(scopes: &ScopeSet) -> String {
+    serde_json::to_string(scopes).expect("a scope set serializes")
+}
+
+/// A `scopes` column read back. `None` for `NULL`, a row from before scopes
+/// existed. A value that no longer parses grants nothing: a row this
+/// process can't read must not fall back to `all`.
+fn stored_scopes(raw: Option<String>) -> Option<ScopeSet> {
+    let raw = raw?;
+    Some(serde_json::from_str(&raw).unwrap_or_else(|e| {
+        tracing::warn!("token registry: unreadable token scopes {raw:?}: {e}");
+        ScopeSet::default()
+    }))
 }
 
 async fn delete_action_tokens(db: &Db, ids: &[String]) -> Result<()> {

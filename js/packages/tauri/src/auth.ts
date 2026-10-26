@@ -33,6 +33,9 @@ export interface ClientInfo {
   created_at: string;
   expires_at: string | null;
   last_used_at: string | null;
+  /** What the token may do, as scope strings; `["all"]` for a token issued
+   *  before scopes existed. */
+  scopes: string[];
 }
 
 /** A newly minted client token. Shown once; the host keeps only its hash. */

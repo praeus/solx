@@ -151,10 +151,13 @@ struct SearchTerm {
 ///
 /// Runs as the [`Principal`] `require_bearer` authenticated — the route
 /// layer always inserts one before this handler runs — unless the caller
-/// sends `X-Solx-Principal: none` ([`NO_PRINCIPAL_HEADER`]), which runs it
-/// with no principal, like a local `exec`. `solx-client`'s `exec` does, so
-/// the CLI and its scripts can't reach root-only built-ins just because
-/// they present the loopback root token.
+/// sends `X-Solx-Principal: none` ([`NO_PRINCIPAL_HEADER`]) with the root
+/// token, which runs it with no principal, like a local `exec`.
+/// `solx-client`'s `exec` does, so the CLI and its scripts can't reach
+/// root-only built-ins just because they present the loopback root token.
+/// Any other token ignores the header: with no principal the call would be
+/// a local one, which no scope limits, and such a token reaches nothing
+/// root-only anyway.
 ///
 /// `X-Solx-Scope: tooling` ([`EXEC_SCOPE_HEADER`]) runs it in the tooling
 /// scope: `solx-client`'s `exec_tooling` sends it for an MCP server that
@@ -174,7 +177,8 @@ async fn exec_action(
             .and_then(|v| v.to_str().ok())
             .is_some_and(|v| v.trim().eq_ignore_ascii_case(value))
     };
-    let principal = (!header_is(NO_PRINCIPAL_HEADER, "none")).then_some(principal);
+    let drop_principal = principal == Principal::Root && header_is(NO_PRINCIPAL_HEADER, "none");
+    let principal = (!drop_principal).then_some(principal);
     let actions = state.app.actions();
     let result = match (principal, header_is(EXEC_SCOPE_HEADER, "tooling")) {
         (principal, true) => {

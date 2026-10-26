@@ -173,8 +173,15 @@ mod tests {
     /// operator is held to the package namespace.
     #[test]
     fn each_actor_gets_its_own_checks() {
-        let builtin = Actor::Builtin { acting: None };
-        let content = Actor::Content { acting: None };
+        let grant = solx_surface::scope::UNLIMITED;
+        let builtin = Actor::Builtin {
+            acting: None,
+            grant,
+        };
+        let content = Actor::Content {
+            acting: None,
+            grant,
+        };
         let err = check_action_change(builtin, None, Some(&command()), "/t", "a").unwrap_err();
         assert!(err.contains("'command' actions"), "{err}");
         assert!(check_action_change(content, None, Some(&command()), "/t", "a").is_ok());

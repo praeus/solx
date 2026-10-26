@@ -8,7 +8,7 @@ use serde_json::Value;
 use solx_surface::entities::{Action, ActionExecResult, ActionType};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::path::full_ref;
-use solx_surface::{ExcludeMode, ExecContext};
+use solx_surface::{ExcludeMode, ExecContext, Grant};
 use uuid::Uuid;
 
 use crate::caller::Caller;
@@ -300,11 +300,10 @@ impl LocalActionManager {
                 // already committed to the `invocations` row — for a plain
                 // `exec_as` call this is exactly the freshly-minted id above,
                 // so behavior is unchanged from before this method existed.
-                let frame = ctx.enter(Caller::with_invocation(
-                    &action_ref,
-                    Some(secrets.clone()),
-                    invocation_id,
-                ));
+                let frame = ctx.enter(
+                    Caller::with_invocation(&action_ref, Some(secrets.clone()), invocation_id)
+                        .with_grant(Grant::for_action(action.action_config.as_ref())),
+                );
                 // WASM execution reports its own success/message (a guest can
                 // report a handled failure without erroring the host call), so
                 // it returns a full ActionExecResult directly rather than
@@ -331,11 +330,10 @@ impl LocalActionManager {
                 // action's secret keys.
                 let runner = script::ActionCommandRunner {
                     actions: self.self_arc()?,
-                    ctx: ctx.enter(Caller::with_invocation(
-                        &action_ref,
-                        Some(secrets.clone()),
-                        invocation_id,
-                    )),
+                    ctx: ctx.enter(
+                        Caller::with_invocation(&action_ref, Some(secrets.clone()), invocation_id)
+                            .with_grant(Grant::for_action(action.action_config.as_ref())),
+                    ),
                 };
                 let initial =
                     std::collections::HashMap::from([("params".to_string(), params.clone())]);

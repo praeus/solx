@@ -31,6 +31,7 @@ use crate::auth::Principal;
 use crate::exec_context::ExecContextInfo;
 use crate::error::Result;
 use crate::managers::{ActionManager, DocManager, FileStore, TypeManager};
+use crate::scope::Grant;
 
 // ── Caller ───────────────────────────────────────────────────────────────────
 
@@ -61,7 +62,8 @@ use crate::managers::{ActionManager, DocManager, FileStore, TypeManager};
 ///
 /// ## What it carries, and what it must not
 ///
-/// Only the calling action's [`ActionSecrets`], behind a private field. The
+/// Only the calling action's [`ActionSecrets`], behind a private field, and
+/// the scopes it declares ([`Caller::grant`]), which aren't secret. The
 /// caller's `cwd`, `auth`, and `headers` are never in scope, so there is no
 /// way for a downstream handler to reach them even by accident.
 ///
@@ -80,17 +82,34 @@ pub struct Caller {
     /// console.
     invocation_id: String,
     secrets: ActionSecrets,
+    /// The scopes this action declares, which everything it calls is
+    /// checked against. Nothing until [`Self::with_grant`] says otherwise.
+    grant: Grant,
 }
 
 impl Caller {
     /// Build a caller frame for an action. `secrets` is `None` for a frame
-    /// that should resolve no secrets at all.
+    /// that should resolve no secrets at all. It is granted no scopes; the
+    /// host adds the action's own with [`Self::with_grant`].
     pub fn from_action(action_ref: impl Into<String>, secrets: Option<ActionSecrets>) -> Self {
         Caller {
             action_ref: action_ref.into(),
             invocation_id: Uuid::new_v4().to_string(),
             secrets: secrets.unwrap_or_default(),
+            grant: Grant::none(),
         }
+    }
+
+    /// This frame with `grant`, the scopes its action declares (see
+    /// [`Grant::for_action`]).
+    pub fn with_grant(mut self, grant: Grant) -> Self {
+        self.grant = grant;
+        self
+    }
+
+    /// What everything this action calls is checked against.
+    pub fn grant(&self) -> &Grant {
+        &self.grant
     }
 
     /// Like [`Self::from_action`], but stamped with a caller-chosen
@@ -135,6 +154,7 @@ impl Caller {
         CallerInfo {
             action_ref: self.action_ref.clone(),
             invocation_id: self.invocation_id.clone(),
+            grant: self.grant.clone(),
         }
     }
 }
@@ -323,9 +343,16 @@ impl fmt::Display for Caller {
 pub struct CallerInfo {
     action_ref: String,
     invocation_id: String,
+    grant: Grant,
 }
 
 impl CallerInfo {
+    /// See [`Caller::grant`]. Scopes aren't secret, so a handler may see
+    /// them.
+    pub fn grant(&self) -> &Grant {
+        &self.grant
+    }
+
     /// Full reference of the calling action, e.g. `/pkg/summarize`.
     pub fn action_ref(&self) -> &str {
         &self.action_ref

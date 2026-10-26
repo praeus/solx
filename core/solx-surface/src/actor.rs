@@ -10,6 +10,7 @@
 
 use crate::auth::Principal;
 use crate::exec_context::ExecContext;
+use crate::scope::{Grant, UNLIMITED};
 
 /// Who is asking to change an action or a file — see the module doc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,24 +21,39 @@ pub enum Actor<'a> {
     /// on purpose.
     Operator,
     /// Content on a direct route: REST with a client or action token, the
-    /// desktop app's main window. `acting` is the action it acts as, if any.
-    Content { acting: Option<&'a str> },
+    /// desktop app's main window. `acting` is the action it acts as, if any;
+    /// `grant` is what its changes are checked against.
+    Content {
+        acting: Option<&'a str>,
+        grant: &'a Grant,
+    },
     /// Content arriving through a built-in (`entity-save-action`,
     /// `entity-delete-action`, the file built-ins): an MCP tool call, a WASM
     /// guest, a script. Held to everything [`Actor::Content`] is, and may
     /// not create, change or delete Command or Webhook actions.
-    Builtin { acting: Option<&'a str> },
+    Builtin {
+        acting: Option<&'a str>,
+        grant: &'a Grant,
+    },
 }
 
 impl<'a> Actor<'a> {
+    /// Content acting as no action and limited by no scope: the desktop
+    /// app's main window.
+    pub const LOCAL_CONTENT: Actor<'static> = Actor::Content {
+        acting: None,
+        grant: UNLIMITED,
+    };
+
     /// The actor behind an authenticated REST request: the root token is an
     /// operator; any other token is content, acting as the action an action
-    /// token was issued to.
+    /// token was issued to, and held to the token's scopes.
     pub fn for_principal(principal: &'a Principal) -> Self {
         match principal {
             Principal::Root => Actor::Operator,
             principal => Actor::Content {
                 acting: principal_action(principal),
+                grant: principal.grant(),
             },
         }
     }
@@ -45,13 +61,15 @@ impl<'a> Actor<'a> {
     /// The actor behind a built-in: always content, whatever principal the
     /// chain carries. It acts as the calling action on a re-entrant hop (a
     /// Script or WASM action), else as the Command action whose token
-    /// authenticated the chain.
+    /// authenticated the chain, and is held to the scopes of the same party
+    /// ([`ExecContext::grant`]).
     pub fn builtin(ctx: &'a ExecContext) -> Self {
         Actor::Builtin {
             acting: ctx
                 .caller()
                 .map(|c| c.action_ref())
                 .or_else(|| ctx.principal().and_then(principal_action)),
+            grant: ctx.grant(),
         }
     }
 
@@ -59,7 +77,16 @@ impl<'a> Actor<'a> {
     pub fn acting(&self) -> Option<&'a str> {
         match *self {
             Actor::Operator => None,
-            Actor::Content { acting } | Actor::Builtin { acting } => acting,
+            Actor::Content { acting, .. } | Actor::Builtin { acting, .. } => acting,
+        }
+    }
+
+    /// What this actor's changes are checked against. Everything for an
+    /// operator.
+    pub fn grant(&self) -> &'a Grant {
+        match *self {
+            Actor::Operator => UNLIMITED,
+            Actor::Content { grant, .. } | Actor::Builtin { grant, .. } => grant,
         }
     }
 }
@@ -75,6 +102,12 @@ fn principal_action(principal: &Principal) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::internal_actions::Caller;
+    use crate::scope::ScopeSet;
+
+    fn scopes(scopes: &[&str]) -> Grant {
+        Grant::scoped(ScopeSet::parse(scopes).unwrap())
+    }
 
     #[test]
     fn root_is_an_operator_and_tokens_are_content() {
@@ -82,27 +115,49 @@ mod tests {
         let client = Principal::Client {
             id: "c".into(),
             label: None,
+            grant: scopes(&["read:document"]),
         };
         assert_eq!(
             Actor::for_principal(&client),
-            Actor::Content { acting: None }
+            Actor::Content {
+                acting: None,
+                grant: &scopes(&["read:document"]),
+            }
         );
         let action = Principal::Action {
             action_ref: "/packages/p/a".into(),
             invocation_id: "i".into(),
+            grant: Grant::none(),
         };
         assert_eq!(
             Actor::for_principal(&action),
             Actor::Content {
-                acting: Some("/packages/p/a")
+                acting: Some("/packages/p/a"),
+                grant: &Grant::none(),
             }
         );
+        assert_eq!(Actor::Operator.grant(), UNLIMITED);
     }
 
     #[test]
     fn a_builtin_is_content_even_for_root() {
         let ctx = ExecContext::for_principal(Principal::Root);
-        assert_eq!(Actor::builtin(&ctx), Actor::Builtin { acting: None });
+        assert_eq!(
+            Actor::builtin(&ctx),
+            Actor::Builtin {
+                acting: None,
+                grant: UNLIMITED,
+            }
+        );
         assert_eq!(Actor::builtin(&ExecContext::local()).acting(), None);
+    }
+
+    #[test]
+    fn a_builtin_is_held_to_the_calling_action() {
+        let caller = Caller::from_action("/p/a", None).with_grant(scopes(&["read:type"]));
+        let ctx = ExecContext::for_principal(Principal::Root).enter(caller);
+        let actor = Actor::builtin(&ctx);
+        assert_eq!(actor.acting(), Some("/p/a"));
+        assert_eq!(actor.grant(), &scopes(&["read:type"]));
     }
 }

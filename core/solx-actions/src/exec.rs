@@ -33,7 +33,7 @@ use serde_json::{json, Value};
 use solx_config::ConfigService;
 use solx_surface::auth::TokenAuthority;
 use solx_surface::error::{Result, SolxError};
-use solx_surface::ActionSecrets;
+use solx_surface::{declared_scopes, ActionSecrets};
 use tokio::io::AsyncWriteExt;
 
 use solx_console::loopback as console_loopback;
@@ -176,11 +176,18 @@ pub async fn run_command(
     // action to get a token. Valid for the invocation's timeout, and
     // released below once the child is done. Kept bound like
     // `registration`: an authority's guard on it revokes the token on drop,
-    // as a fallback for early returns and panics.
+    // as a fallback for early returns and panics. It carries exactly the
+    // scopes the action declares, so the child can do what its action asked
+    // for and nothing more; one that declares none (or a malformed list,
+    // which a save refuses) gets a token that can do nothing.
+    let scopes = declared_scopes(action_config.as_ref())
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     let credential = match authority {
         Some(authority) => {
             authority
-                .issue_action_token(action_ref, invocation_id, timeout)
+                .issue_action_token(action_ref, invocation_id, timeout, &scopes)
                 .await
         }
         None => None,

@@ -17,18 +17,39 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
+use crate::scope::{Grant, ScopeSet, UNLIMITED};
+
 /// Who a presented bearer token belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Principal {
     /// The root token (today's single `server_token`), or an in-process host.
+    /// Holds every scope.
     Root,
-    /// A client issued its own token (not issued by the single-token authority).
-    Client { id: String, label: Option<String> },
-    /// One external action invocation (not issued by the single-token authority).
+    /// A client issued its own token (not issued by the single-token
+    /// authority), with the scopes it was issued.
+    Client {
+        id: String,
+        label: Option<String>,
+        grant: Grant,
+    },
+    /// One external action invocation (not issued by the single-token
+    /// authority), with the scopes its action declares.
     Action {
         action_ref: String,
         invocation_id: String,
+        grant: Grant,
     },
+}
+
+impl Principal {
+    /// What this principal's calls are checked against: everything for
+    /// root, else the token's scopes.
+    pub fn grant(&self) -> &Grant {
+        match self {
+            Principal::Root => UNLIMITED,
+            Principal::Client { grant, .. } | Principal::Action { grant, .. } => grant,
+        }
+    }
 }
 
 /// What a spawned Command action is handed so it can call back into
@@ -91,13 +112,14 @@ pub trait TokenAuthority: Send + Sync {
     async fn authenticate(&self, bearer: &str) -> Option<Principal>;
 
     /// Credential for one external action invocation, valid for at least
-    /// `ttl` (the invocation's own timeout). `None` means the action gets no
-    /// server access.
+    /// `ttl` (the invocation's own timeout), carrying `scopes`: what the
+    /// action declares. `None` means the action gets no server access.
     async fn issue_action_token(
         &self,
         action_ref: &str,
         invocation_id: &str,
         ttl: Duration,
+        scopes: &ScopeSet,
     ) -> Option<ActionCredential>;
 
     /// Revoke `credential` now that its invocation has finished. A no-op for
@@ -116,8 +138,11 @@ pub trait TokenAuthority: Send + Sync {
 /// `exec` keeps that meaning across the wire with this header. Without it,
 /// the CLI in remote mode, and every `.solx` script it runs, would act as
 /// `Root` (it presents the loopback root token) and could reach the
-/// root-only built-ins. A client can only drop its principal this way,
-/// never raise it.
+/// root-only built-ins.
+///
+/// Only the root token's principal is dropped. Running with no principal
+/// is a local entry point, which no scope limits, so any other token keeps
+/// its principal, and with it its scopes: it had nothing root-only to drop.
 pub const NO_PRINCIPAL_HEADER: &str = "x-solx-principal";
 
 /// Request header a client sends (with the value `tooling`) to run an action

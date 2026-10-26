@@ -49,7 +49,7 @@ async fn root_token_authenticates_as_root() {
 async fn action_token_lives_until_released() {
     let (_d, r) = setup().await;
     let cred = r
-        .issue_action_token("/pkg/a", "inv-1", MINUTE)
+        .issue_action_token("/pkg/a", "inv-1", MINUTE, &ScopeSet::default())
         .await
         .unwrap();
     assert!(cred.id.is_some());
@@ -59,6 +59,7 @@ async fn action_token_lives_until_released() {
         Some(Principal::Action {
             action_ref: "/pkg/a".into(),
             invocation_id: "inv-1".into(),
+            grant: Grant::none(),
         })
     );
     r.release(&cred).await;
@@ -66,10 +67,77 @@ async fn action_token_lives_until_released() {
 }
 
 #[tokio::test]
+async fn an_action_token_carries_its_scopes() {
+    let (_d, r) = setup().await;
+    let scopes = ScopeSet::parse(["exec:/builtin/web/http-request", "read:type"]).unwrap();
+    let cred = r
+        .issue_action_token("/pkg/a", "inv-1", MINUTE, &scopes)
+        .await
+        .unwrap();
+    let principal = r.authenticate(&cred.token).await.unwrap();
+    assert_eq!(principal.grant(), &Grant::scoped(scopes));
+}
+
+#[tokio::test]
+async fn client_tokens_get_all_and_keep_it_across_redemption() {
+    let (_d, r) = setup().await;
+    let issued = r.issue_client(None, None).await.unwrap();
+    let principal = r.authenticate(&issued.token).await.unwrap();
+    assert_eq!(principal.grant(), &Grant::scoped(ScopeSet::all()));
+    assert_eq!(r.list_clients().await.unwrap()[0].scopes, ScopeSet::all());
+
+    // A code's scopes are copied onto the token it redeems for.
+    let code = r.create_connect_code(None, None, None, None).await.unwrap();
+    exec(
+        &r,
+        r#"UPDATE connect_codes SET scopes = '["read:document:/notes/*"]'"#,
+    )
+    .await;
+    let redeemed = r.redeem(&code.code).await.unwrap();
+    let principal = r.authenticate(&redeemed.token).await.unwrap();
+    assert_eq!(
+        principal.grant(),
+        &Grant::scoped(ScopeSet::parse(["read:document:/notes/*"]).unwrap())
+    );
+}
+
+/// A row written before the `scopes` column existed (`NULL`) works as
+/// `all`; one that no longer parses grants nothing.
+#[tokio::test]
+async fn stored_scopes_fall_back_safely() {
+    let (_d, r) = setup().await;
+    let issued = r.issue_client(None, None).await.unwrap();
+    exec(&r, "UPDATE tokens SET scopes = NULL").await;
+    let principal = r.authenticate(&issued.token).await.unwrap();
+    assert_eq!(principal.grant(), &Grant::scoped(ScopeSet::all()));
+
+    exec(&r, "UPDATE tokens SET scopes = 'not json'").await;
+    let principal = r.authenticate(&issued.token).await.unwrap();
+    assert_eq!(principal.grant(), &Grant::none());
+}
+
+/// Opening a registry made before scopes existed adds the columns, and the
+/// tokens already in it keep working.
+#[tokio::test]
+async fn migrates_a_registry_without_scopes() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = open_in(dir.path()).await;
+    let issued = r.issue_client(None, None).await.unwrap();
+    exec(&r, "ALTER TABLE tokens DROP COLUMN scopes").await;
+    exec(&r, "ALTER TABLE connect_codes DROP COLUMN scopes").await;
+    drop(r);
+
+    let r = open_in(dir.path()).await;
+    let principal = r.authenticate(&issued.token).await.unwrap();
+    assert_eq!(principal.grant(), &Grant::scoped(ScopeSet::all()));
+    r.create_connect_code(None, None, None, None).await.unwrap();
+}
+
+#[tokio::test]
 async fn dropping_an_action_credential_releases_it() {
     let (_d, r) = setup().await;
     let cred = r
-        .issue_action_token("/pkg/a", "inv-1", MINUTE)
+        .issue_action_token("/pkg/a", "inv-1", MINUTE, &ScopeSet::default())
         .await
         .unwrap();
     let token = cred.token.clone();
@@ -85,7 +153,10 @@ async fn dropping_an_action_credential_releases_it() {
 #[tokio::test]
 async fn a_credential_dropped_off_the_runtime_is_still_released() {
     let (_d, r) = setup().await;
-    let cred = r.issue_action_token("/pkg/a", "inv", MINUTE).await.unwrap();
+    let cred = r
+        .issue_action_token("/pkg/a", "inv", MINUTE, &ScopeSet::default())
+        .await
+        .unwrap();
     let token = cred.token.clone();
     std::thread::spawn(move || drop(cred)).join().unwrap();
     assert_eq!(count(&r, "SELECT COUNT(*) FROM tokens").await, 1);
@@ -97,7 +168,10 @@ async fn a_credential_dropped_off_the_runtime_is_still_released() {
 #[tokio::test]
 async fn a_released_credential_queues_nothing_when_dropped() {
     let (_d, r) = setup().await;
-    let cred = r.issue_action_token("/pkg/a", "inv", MINUTE).await.unwrap();
+    let cred = r
+        .issue_action_token("/pkg/a", "inv", MINUTE, &ScopeSet::default())
+        .await
+        .unwrap();
     r.release(&cred).await;
     drop(cred);
     let pending = r.pending.lock().unwrap();
@@ -108,7 +182,10 @@ async fn a_released_credential_queues_nothing_when_dropped() {
 async fn set_server_url_overrides_the_sibling_default() {
     let (_d, r) = setup().await;
     r.set_server_url("http://127.0.0.1:1".into());
-    let cred = r.issue_action_token("/a", "i", MINUTE).await.unwrap();
+    let cred = r
+        .issue_action_token("/a", "i", MINUTE, &ScopeSet::default())
+        .await
+        .unwrap();
     assert_eq!(cred.server_url.as_deref(), Some("http://127.0.0.1:1"));
 }
 
@@ -116,7 +193,10 @@ async fn set_server_url_overrides_the_sibling_default() {
 async fn expired_tokens_are_rejected_and_swept() {
     let (_d, r) = setup().await;
     let client = r.issue_client(Some("laptop"), None).await.unwrap();
-    let action = r.issue_action_token("/a", "i", MINUTE).await.unwrap();
+    let action = r
+        .issue_action_token("/a", "i", MINUTE, &ScopeSet::default())
+        .await
+        .unwrap();
     exec(&r, "UPDATE tokens SET expires_at = 1").await;
     assert_eq!(r.authenticate(&client.token).await, None);
     assert_eq!(r.authenticate(&action.token).await, None);
@@ -148,6 +228,7 @@ async fn clients_are_listed_without_secrets_and_revoked() {
         Some(Principal::Client {
             id: issued.client_id.clone(),
             label: Some("laptop".into()),
+            grant: Grant::scoped(ScopeSet::all()),
         })
     );
 
@@ -398,7 +479,10 @@ async fn two_registries_on_one_appdata_dir_agree() {
 
     // An action token minted by one is accepted by the other: the
     // sibling-server case.
-    let cred = a.issue_action_token("/a", "i", MINUTE).await.unwrap();
+    let cred = a
+        .issue_action_token("/a", "i", MINUTE, &ScopeSet::default())
+        .await
+        .unwrap();
     assert!(matches!(
         b.authenticate(&cred.token).await,
         Some(Principal::Action { .. })

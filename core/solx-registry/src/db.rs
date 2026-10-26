@@ -64,5 +64,29 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
     )
     .await
     .map_err(map_db)?;
+    // Added after the first release. `scopes` is a JSON array of scope
+    // strings; `NULL` is a row from before scopes existed, which keeps
+    // working as `all`.
+    for table in ["tokens", "connect_codes"] {
+        if !has_column(conn, table, "scopes").await? {
+            conn.execute(&format!("ALTER TABLE {table} ADD COLUMN scopes TEXT"), ())
+                .await
+                .map_err(map_db)?;
+        }
+    }
     Ok(())
+}
+
+async fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    Ok(conn
+        .query(
+            "SELECT 1 FROM pragma_table_info(?1) WHERE name=?2",
+            libsql::params![table.to_string(), column.to_string()],
+        )
+        .await
+        .map_err(map_db)?
+        .next()
+        .await
+        .map_err(map_db)?
+        .is_some())
 }
