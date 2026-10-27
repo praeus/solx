@@ -77,11 +77,11 @@ incoming payload, because `save` is a merge-upsert — otherwise a payload
 carrying only `fn_name` could silently repoint an existing command action.
 
 The CLI reaches `ActionManager::save` directly and is unaffected; package
-installs depend on that. The HTTP `/actions/save` route does not apply this
-particular check, deliberately: anyone holding the server token can already
-execute command actions, so gating it there would buy nothing and would
-break the CLI in remote mode. The checks below on `/packages/`, keyed and
-locked actions do apply there.
+installs depend on that. The HTTP `/actions` route doesn't apply this
+particular refusal: there, a client or action token needs the kind scope
+instead (`write:command`, `write:webhook`; see "Tokens and actions are held
+to their scopes"), which `solx-mcp-actions` uses to import MCP tools. The
+checks below on `/packages/`, keyed and locked actions apply there too.
 
 **Built-ins can't be added, aliased or edited.** Built-in actions come only
 from solx's own catalogue. No one, operators included, can save a built-in
@@ -192,7 +192,44 @@ Only the root token can create codes or manage client tokens.
 
 **Command actions get a token that dies with them.** Each external Command
 invocation is handed its own token as `SOLX_SERVER_TOKEN`, revoked as soon
-as the invocation ends.
+as the invocation ends. It holds the action's scopes.
+
+**Tokens and actions are held to their scopes.** Every call is checked
+against the scopes of whoever makes it, and only the immediate caller
+counts:
+
+- an action's call (a Script or WASM frame, or a Command action calling back
+  with its token) against the action's own `action_config.scopes`;
+- a client token's call against the scopes the token was issued with;
+- the CLI, the desktop app and stdio `solx-mcp` against nothing: they're
+  local, and unlimited.
+
+A scope names what may be done and where: `read:document:/notes/*`,
+`write:file:/files/docs/*`, `exec:/builtin/web/http-request`,
+`write:script`. A connect code or `solx token issue` takes scopes or a
+preset (`read-only`, `tools`, `editor`, `full`). A token given neither holds
+`all`, which is everything a client token could do before scopes. A list,
+search or path facet is narrowed to what the scopes admit, rather than
+refused, and a file listing is filtered.
+
+An action with no scopes can call nothing. Content with `write:action` and a
+kind scope may save one, but it stays inert until an operator grants it
+scopes (`solx action scopes <ref> --add ...`). Declaring scopes is root-only
+and locks the action, like declaring secrets, so content can't swap its code
+in under someone else's grant. A package's actions get the scopes its
+manifest declares, checked at install, plus `exec` on their own package.
+
+Scopes never grant what stays root-only: managing devices and connect codes,
+changing locked or keyed actions, the allowlists, and writing under another
+package's `/packages/` path.
+
+`scope_enforcement` in `solx-config.json` decides what a call outside its
+scopes gets. `enforce`, the default, refuses it with a 403 `forbidden`.
+`audit` allows it and records it, to find the scopes an action needs, and
+`off` doesn't check. Both refusals and audit findings go to
+`<appdata>/logs/scope-audit.jsonl`, and `solx scopes audit` prints them
+with the `solx action scopes` command that would allow each action's. `GET
+/auth/whoami` tells a token what it holds.
 
 **Connect codes are guarded against guessing.** A code is 8 random digits,
 works once, and expires after 10 minutes. Every failed attempt, from any
@@ -219,10 +256,30 @@ everything running through solx today is trusted by construction.
 
 - **Anything saved to the actions database is executable.** There is no
   approval or confirmation step at execution time.
-- **Client and action tokens aren't scoped.** A client token, or a Command
-  action's own token, can do everything the root token can except create
-  connect codes and manage client tokens. What they add is expiry,
-  revocation and knowing who is calling.
+- **An action's scopes serve whoever may run it.** A client holding only
+  `exec:/packages/solx-media/*` can run a media action that writes
+  documents, because its scopes say it may. That is the point of granting an
+  action scopes, but it makes every action a deputy for its callers: declare
+  no more than it needs (`write:document:/media/*`, not `write:document`),
+  and don't let its parameters aim it anywhere else.
+- **Delegating tools pass on their scopes.** `solx-agent` runs whatever
+  tools its model picks, so it holds broad scopes (`exec:/*`,
+  `read:document`, `write:document`, `read:type`, `read:action`), and
+  `solx-inquiry` reads documents anywhere. Granting a client `exec` on either
+  grants it what they hold.
+- **Scopes need the token registry.** Built without it, solx has no client
+  tokens, and a Command action is handed the root token: unlimited, unless it
+  declares scopes, in which case it gets no token at all.
+- **File scopes match case-sensitively; Windows doesn't.** `FILES/docs/x`
+  is the same file as `files/docs/x` on Windows, but `write:file:/files/docs/*`
+  refuses it. This fails closed, but a scope should be written in the case
+  the files really have.
+- **A document's links show outside its scope.** Reading a document returns
+  the references it links to, even ones the token can't read (never their
+  contents).
+- **New client tokens default to full access.** A code or `solx token issue`
+  given no scopes or preset makes an `all` token; choose narrower access
+  when the device doesn't need everything.
 - **A reverse proxy on the same machine hides remote callers.** Every
   request then arrives from loopback, so the root token is accepted through
   the proxy. solx doesn't support running behind one; it serves TLS itself.
@@ -250,7 +307,8 @@ everything running through solx today is trusted by construction.
   consoles, and HTTP streams are reachable by anyone who knows the
   unguessable id, without a further caller check.
 - **`solx-server` has no general rate limiting or audit log.** Only connect
-  code exchanges are throttled. `solx token rotate` exists, but running hosts
+  code exchanges are throttled, and only calls outside their scopes are
+  logged. `solx token rotate` exists, but running hosts
   keep accepting the old root token until they restart.
 
 See [docs/security-design.md](docs/security-design.md) for how each control
@@ -274,8 +332,9 @@ is implemented, the full list of known gaps, and the intended direction.
   `SOLX_MCP_PATH_PREFIX` only sets which actions a model *discovers* by
   default. It doesn't restrict what can be called, so don't rely on it for
   access control.
-- **Treat every token as a credential.** The root token and each client
-  token are full access to the instance, including command execution. solx
+- **Treat every token as a credential.** The root token is full access to
+  the instance, including command execution, and so is a client token with
+  `all`. A scoped client token is as much as its scopes allow. solx
   keeps them in the OS credential manager rather than `solx-config.json`;
   `solx token show` prints the root token and `solx token rotate` replaces
   it. Don't commit tokens, and don't put them in a shared config file.
@@ -285,6 +344,16 @@ is implemented, the full list of known gaps, and the intended direction.
   connect code per device rather than copying the root token around, and
   revoke a device's token (`solx token revoke`) when you stop using it or
   lose it.
+- **Give each device only the access it needs.** A phone that reads notes
+  needs `read-only`, and an MCP client usually needs `tools`, not `full`.
+  Choose it when you make the code ("What the device may do" in the desktop
+  app, or `--preset`/`--scope` on `solx token connect-code`).
+- **Grant your own actions their scopes.** An action you wrote has no scopes
+  until you give it some, so under `enforce` its calls are refused. Run it,
+  then `solx scopes audit` lists what was refused and the `solx action scopes
+  <ref> --add ...` command that allows it. Grant the narrowest paths that
+  work. Setting `scope_enforcement` to `audit` while you do this lets the
+  actions run and still records what they need.
 - **Treat a connect code like a password while it's live.** Anyone who has
   it can connect until it is used or expires. Share it over a channel you
   trust, or read it off the screen.

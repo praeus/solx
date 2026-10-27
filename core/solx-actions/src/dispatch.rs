@@ -928,6 +928,9 @@ mod tests {
             ActionInput {
                 action_type: Some(ActionType::Script),
                 bin_name: Some("hello.solx".into()),
+                action_config: Some(serde_json::json!({
+                    "scopes": ["exec:/builtin/action/entity-list-actions", "read:action"],
+                })),
                 ..Default::default()
             },
         )
@@ -968,6 +971,9 @@ mod tests {
             ActionInput {
                 action_type: Some(ActionType::Script),
                 bin_name: Some("count.solx".into()),
+                action_config: Some(serde_json::json!({
+                    "scopes": ["exec:/builtin/*", "read:action", "read:document"],
+                })),
                 ..Default::default()
             },
         )

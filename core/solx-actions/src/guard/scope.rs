@@ -14,8 +14,9 @@
 //!
 //! What a failed check does depends on [`Enforcement`]: nothing (`off`), a
 //! finding recorded once per process, party and need (`audit`), or a
-//! refusal with [`SolxError::Forbidden`] (`enforce`). The mode is read on
-//! every check, so a change to `solx-config.json` applies to the next call.
+//! refusal with [`SolxError::Forbidden`] (`enforce`), recorded the same way
+//! and marked `refused`. The mode is read on every check, so a change to
+//! `solx-config.json` applies to the next call.
 //!
 //! ## The audit log
 //!
@@ -112,13 +113,16 @@ impl<'a> ScopeCheck<'a> {
         match self.config.scope_enforcement() {
             Enforcement::Off => Ok(()),
             Enforcement::Audit => {
-                self.audit(need.to_string(), None);
+                self.audit(need.to_string(), None, false);
                 Ok(())
             }
-            Enforcement::Enforce => Err(SolxError::Forbidden(format!(
-                "{} may not do this: it needs {need}",
-                self.party
-            ))),
+            Enforcement::Enforce => {
+                self.audit(need.to_string(), None, true);
+                Err(SolxError::Forbidden(format!(
+                    "{} may not do this: it needs {need}",
+                    self.party
+                )))
+            }
         }
     }
 
@@ -139,7 +143,7 @@ impl<'a> ScopeCheck<'a> {
         match self.config.scope_enforcement() {
             Enforcement::Off => entries,
             Enforcement::Audit => {
-                self.audit(Need::file(Access::Read, first).to_string(), None);
+                self.audit(Need::file(Access::Read, first).to_string(), None, false);
                 entries
             }
             Enforcement::Enforce => entries.into_iter().filter(readable).collect(),
@@ -150,7 +154,8 @@ impl<'a> ScopeCheck<'a> {
     /// writing `include_paths`. `scope` names the grant it needed (e.g.
     /// `read:document`), for messages. Under `enforce`, a filter that
     /// admits nothing refuses the call, since an empty `include_paths`
-    /// would mean everything; and `include_paths` already set by trusted
+    /// would mean everything (recorded like a refused call; a list that is
+    /// only narrowed isn't recorded); and `include_paths` already set by trusted
     /// code is refused rather than overwritten, since one list can't hold
     /// the intersection of two.
     pub fn narrow(&self, filter: PathFilter, scope: &str, include: &mut Vec<String>) -> Result<()> {
@@ -158,17 +163,20 @@ impl<'a> ScopeCheck<'a> {
         match (filter, mode) {
             (PathFilter::Unrestricted, _) | (_, Enforcement::Off) => Ok(()),
             (PathFilter::Nothing, Enforcement::Audit) => {
-                self.audit(scope.to_string(), Some(Vec::new()));
+                self.audit(scope.to_string(), Some(Vec::new()), false);
                 Ok(())
             }
             (PathFilter::Only(paths), Enforcement::Audit) => {
-                self.audit(scope.to_string(), Some(paths));
+                self.audit(scope.to_string(), Some(paths), false);
                 Ok(())
             }
-            (PathFilter::Nothing, Enforcement::Enforce) => Err(SolxError::Forbidden(format!(
-                "{} may not do this: it needs {scope}",
-                self.party
-            ))),
+            (PathFilter::Nothing, Enforcement::Enforce) => {
+                self.audit(scope.to_string(), Some(Vec::new()), true);
+                Err(SolxError::Forbidden(format!(
+                    "{} may not do this: it needs {scope}",
+                    self.party
+                )))
+            }
             (PathFilter::Only(paths), Enforcement::Enforce) => {
                 if !include.is_empty() {
                     return Err(SolxError::Invalid(
@@ -252,13 +260,18 @@ impl ScopeCheck<'_> {
     /// Record, once per process, that the party needed `need` (a scope
     /// string) and its scopes don't grant it. `list` is set for a list:
     /// what it would have been narrowed to, or empty if it would have been
-    /// refused.
-    fn audit(&self, need: String, list: Option<Vec<String>>) {
+    /// refused. `refused` when `enforce` refused the call, rather than
+    /// `audit` allowing it.
+    fn audit(&self, need: String, list: Option<Vec<String>>, refused: bool) {
         static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
         // Bounded, so a long-lived host can't grow it without limit; past
         // the bound a repeat is recorded again, which is harmless.
         const MAX_SEEN: usize = 10_000;
-        let key = format!("{}\u{0}{need}\u{0}{}", self.party, list.is_some());
+        let key = format!(
+            "{}\u{0}{need}\u{0}{}\u{0}{refused}",
+            self.party,
+            list.is_some()
+        );
         if let Ok(mut seen) = SEEN.get_or_init(Mutex::default).lock() {
             if seen.len() >= MAX_SEEN {
                 seen.clear();
@@ -272,10 +285,14 @@ impl ScopeCheck<'_> {
             Some(paths) if paths.is_empty() => format!("{need} for a list (any path)"),
             Some(paths) => format!("{need} for a list beyond {}", paths.join(", ")),
         };
+        let outcome = if refused {
+            "refused"
+        } else {
+            "allowed because scope_enforcement is \"audit\""
+        };
         tracing::warn!(
             target: "solx::scopes",
-            "scope audit: {} needs {what}, which its scopes don't grant \
-             (allowed because scope_enforcement is \"audit\")",
+            "scope audit: {} needs {what}, which its scopes don't grant ({outcome})",
             self.party
         );
         let entry = AuditEntry {
@@ -284,6 +301,7 @@ impl ScopeCheck<'_> {
             action: self.action.clone(),
             need,
             list,
+            refused,
         };
         if let Err(e) = append_audit(self.config, &entry) {
             tracing::debug!(target: "solx::scopes", "recording a scope audit finding: {e}");
@@ -292,7 +310,7 @@ impl ScopeCheck<'_> {
 }
 
 /// One audit finding: a call allowed under `audit` that `enforce` would
-/// refuse or narrow. See the module doc.
+/// refuse or narrow, or one that `enforce` refused. See the module doc.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEntry {
     /// When it was recorded, RFC 3339.
@@ -309,6 +327,9 @@ pub struct AuditEntry {
     /// would have been refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub list: Option<Vec<String>>,
+    /// Refused under `enforce`, rather than allowed under `audit`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refused: bool,
 }
 
 /// Past this size the audit log is rotated (see the module doc).
@@ -495,6 +516,27 @@ mod tests {
 
         clear_audit_log(&cfg).unwrap();
         assert!(read_audit_log(&cfg).unwrap().is_empty());
+    }
+
+    /// Under enforce a refusal is recorded too, marked `refused`, so
+    /// `solx scopes audit` still says what to grant; a list that is only
+    /// narrowed is not recorded.
+    #[test]
+    fn enforce_records_what_it_refuses() {
+        let (_d, cfg) = config("enforce");
+        let g = grant(&["read:document:/a/*"]);
+        let check = ScopeCheck::of(&cfg, &g, Some("/t/refuser"), None);
+        assert!(check.require(&read_doc("/b", "x")).is_err());
+        check
+            .narrow_reads(Resource::Document, &mut Vec::new())
+            .unwrap();
+        assert!(check.require_some_reads(Resource::Type).is_err());
+        let entries = read_audit_log(&cfg).unwrap();
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        assert!(entries.iter().all(|e| e.refused), "{entries:?}");
+        assert_eq!(entries[0].need, "read:document:/b/x");
+        assert_eq!(entries[1].need, "read:type");
+        assert_eq!(entries[1].list, Some(Vec::new()));
     }
 
     #[test]

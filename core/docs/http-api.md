@@ -31,8 +31,9 @@ options ride in the query string, and the HTTP method carries the verb.
   [token-scopes-plan.md](token-scopes-plan.md)). A client token holds the
   scopes it was issued with, `all` when none were given; an action token
   holds its action's declared scopes. A call they don't cover is a `403`
-  `forbidden` under `scope_enforcement: "enforce"`; under `"audit"`, the
-  default for now, it is allowed and recorded for `solx scopes audit`. A
+  `forbidden` under `scope_enforcement: "enforce"`, the default, and is
+  recorded for `solx scopes audit`; under `"audit"` it is allowed and
+  recorded. A
   list, search or path facet is narrowed to what the token may read rather
   than refused. The root token holds every scope. `GET /auth/whoami` says
   what the presented token holds.

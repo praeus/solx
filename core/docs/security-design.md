@@ -101,8 +101,9 @@ row.
   `get-secret` and `set-secret` refuse to run without an action caller.
 - **The auth built-ins.** `/builtin/auth/*` run only when
   `external_principal()` is `Root` (§3.4).
-- **Nothing else.** A `Client` or `Action` principal can do everything
-  except the auth built-ins. There is no per-entity permission check.
+- **Scopes.** Every call is held to the scopes of its immediate caller: the
+  calling action's declared scopes, else the token's (§8). Local entry
+  points (CLI, stdio MCP, Tauri) carry no principal and are unlimited.
 
 ### 2.4 Desktop app (Tauri capabilities)
 
@@ -212,10 +213,14 @@ rejected from the next authentication in that process. A row left by a
 crash, or by a process that never touches the registry again, dies at
 `expires_at`.
 
-An action token can still do everything except the auth built-ins,
-including saving Command rows (gap 7). What it adds is expiry, revocation
-and attribution. Without the registry, the token is the root token, which
-keeps working after the action exits.
+An action token holds the action's declared scopes (`action_scopes`: its
+`action_config.scopes`, plus `exec` on its own package for a package
+action), so a callback is held to exactly what the action may do in process
+(§8). An action that declares none gets a token that authenticates and is
+refused everything. Without the registry (`SingleTokenAuthority`), the token
+is the root token, which keeps working after the action exits; an action
+that declares scopes beyond its own package gets no token instead, rather
+than root.
 
 ### 3.4 The token registry (`solx-registry`)
 
@@ -365,8 +370,9 @@ merge-upsert. Without the stored-row check, a payload carrying only
 Routes that bypass this guard on purpose:
 
 - the CLI (local mode), which package installs depend on;
-- HTTP `/actions/save`. A root-token holder can already run Command actions,
-  and gating the route would break the CLI in remote mode;
+- HTTP `/actions`. The root token passes; a client or action token needs
+  the kind scope instead (`write:command`, `write:webhook`, §8), which is how
+  `solx-mcp-actions` imports MCP tools as Command rows;
 - Tauri `actions-save`, which is in the `default` permission set (§9).
 
 These routes can only *point* at registered `command_actions` keys and
@@ -655,15 +661,51 @@ These are bearer-style: holding the id or token is the only check.
   router call's own `path_prefix` overrides it, and it doesn't restrict
   `call_tool`. Use tooling exclusions for access control.
 
-## 8. Next: authorizing on the principal
+## 8. Scopes (`solx_surface::scope`, `solx-actions/src/guard/scope.rs`)
 
-The token registry ([token-registry-plan.md](token-registry-plan.md)) is in
-place (§3.4). Now that real `Client` and `Action` principals exist, the
-plan's "Follow-on" section uses them for two more things:
+Built on the token registry's principals (§3.4); the design and its
+decisions are in [token-scopes-plan.md](token-scopes-plan.md).
 
-- gating `command`/`webhook` saves on every route, not just the built-ins
-  (gap 7);
-- scoping `get-env`/`set-env` (gap 6).
+- **Grammar.** `all`; `read|write:<document|type|action|file>[:<path>]`;
+  `write:<script|wasm|command|webhook>` (kind scopes, needed with
+  `write:action` to save or delete that kind); `exec:<path>`. A path is
+  `/path/name` (that entity, and the folder's direct members) or `/path/*`
+  (the subtree). Matching is case-sensitive, like the stores' `GLOB`, and
+  scopes don't imply each other. Parsing is strict everywhere: issue,
+  save, install.
+- **Who is checked.** One set per call, the immediate caller's:
+  `ExecContext::grant()` is the calling action's grant when there is a
+  caller (`Caller::with_grant`, built from the stored row by dispatch and by
+  `rebuild_caller` for a detached run), else the entry grant (the token's,
+  or `Unlimited` for a local entry point). `Actor::grant()` gives the same
+  for the `authorize_*` entry points. `X-Solx-Principal: none` is honoured
+  for the root token only, so no token can drop into an unlimited local
+  context.
+- **Where it's checked.** `ScopeCheck::require` at dispatch on every frame
+  (`exec`), in `authorize_action_change`/`authorize_file_change` (writes, and
+  the kind scopes against both the payload and the stored row), and in the
+  exclusion helpers for single-entity reads. Lists, searches and path facets
+  are narrowed by writing `include_paths` from `Grant::path_filter`, so no
+  new SQL; a grant that admits nothing refuses the list (403), since an
+  empty `include_paths` means everything. File listings are filtered in
+  Rust.
+- **Actions.** `action_config.scopes` is validated by `normalize` and is
+  keyed like `secrets`: only an operator can create, change or delete an
+  action that declares it, and it locks the action (§5.2, §4.5a). An action
+  with none runs with the empty set and can call nothing. A package's
+  manifest `scopes` bound what its `install.solx` may grant
+  (`guard_package_script_action`), and its actions also get `exec` on their
+  own package. Operators grant with `solx action scopes` (binary-only).
+- **Tokens.** `tokens.scopes` and `connect_codes.scopes` hold a JSON array;
+  `NULL` (rows from before scopes, or none asked for) is `all`. Presets are
+  expanded at issue time. `GET /auth/whoami` reports a token's kind and
+  scopes. Scopes never grant the root-only operations: the auth built-ins,
+  locked and keyed actions, the allowlists, other packages' namespaces.
+- **Enforcement.** `scope_enforcement`, read live: `enforce` (default)
+  refuses with `SolxError::Forbidden` (403), `audit` allows, `off` skips.
+  Refusals and audit findings are recorded once per process, party and need
+  in `<appdata>/logs/scope-audit.jsonl` (rotated at 4 MB); `solx scopes
+  audit` groups them and prints the grant that would allow each action's.
 
 TLS serving is in place (§3.2), and solx clients pin the server's root
 ([tls-plan.md](tls-plan.md), "Pinning"). A connect link and an issued
@@ -679,13 +721,18 @@ These are accepted for now. Each one is a candidate for future hardening.
 1. **No approval step at execution time.** Any row in the actions database
    runs when called. The allowlists limit *what* a row can point at, not
    *whether* it runs.
-2. **Client and action tokens aren't scoped.** They expire and can be
-   revoked one by one (§3.4), but each can do everything the root token
-   can, apart from the auth built-ins. With the `registry` feature off, every
-   client and Command child shares the root token.
-3. **Little authorization on identity.** Only the auth built-ins check the
-   `Principal`. CLI, stdio MCP and Tauri are unauthenticated local entry
-   points.
+2. **Scopes are a confused deputy by design** (§8). An action's scopes
+   serve whoever may exec it, and delegating tools (`solx-agent`, broad;
+   `solx-inquiry`, document reads) hand their scopes to their callers. A
+   declared scope should be no wider than the action needs. With the
+   `registry` feature off there are no client tokens, and a Command child
+   gets the root token unless it declares scopes.
+3. **Local entry points are unlimited.** CLI, stdio MCP and Tauri (both
+   windows) are unauthenticated and carry no scopes. A client token issued
+   with no scopes or preset holds `all`. File scopes match
+   case-sensitively, so on Windows a differently cased path to an admitted
+   file is refused (fails closed); reading a document returns its link
+   references even outside the token's scopes.
 4. **No package signing.** Catalog checksums come from the same release as
    the zips. A local directory or zip is trusted unconditionally, including
    its declared grants.
@@ -695,12 +742,12 @@ These are accepted for now. Each one is a candidate for future hardening.
    they expose `env_mappings` and `env_vars` to all content (§5.3). Scoping
    is planned alongside the token registry, in that plan's "Follow-on"
    section.
-7. **Command/Webhook saves are open on HTTP and Tauri.** HTTP
-   `/actions/save` and Tauri `actions-save` (in the `default` set, so it
-   includes widget windows) can create *unlocked* rows that point at
-   existing grants. The guard in §4.5 doesn't apply; a locked row can't be
-   changed this way (§4.5a). Gating the rest on `Principal` is planned in
-   the token registry plan's "Follow-on" section.
+7. **Command/Webhook saves are open on Tauri.** Tauri `actions-save` (in
+   the `default` set, so it includes widget windows) can create *unlocked*
+   rows that point at existing grants; the desktop app is an unlimited local
+   entry point, and the guard in §4.5 doesn't apply. A locked row can't be
+   changed this way (§4.5a). Over HTTP a client or action token needs the
+   kind scope (§8).
 8. **Command children inherit solx's environment**, and timeouts don't kill
    process trees (§4.1).
 9. **Off-loopback TLS is opt-in** (automatic in the desktop app on
@@ -711,7 +758,8 @@ These are accepted for now. Each one is a candidate for future hardening.
    needs the root already trusted, or the pinned address.
 10. **Bearer-style loopback ids** for streams, consoles and OAuth (§6).
 11. **No general rate limiting or audit log** on `solx-server`. Only
-    `/auth/exchange` is throttled. Root-token rotation exists but only takes
+    `/auth/exchange` is throttled, and only calls outside their scopes are
+    logged (§8). Root-token rotation exists but only takes
     effect on restart.
 12. **The tooling scope doesn't cross a callback over HTTP** (§7). A
     Command or Webhook action that calls `solx-server` with its own token

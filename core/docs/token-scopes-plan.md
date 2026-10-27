@@ -1,13 +1,11 @@
 # Scoped tokens — design plan
 
-Status: **In progress.** Steps 1 (the scope types, `solx_surface::scope`),
-2 (plumbing: every principal, frame and actor carries its grant) and 3 (the
-checks, under `scope_enforcement`, default `audit`), 4 (packages: manifest
-scopes, the own-package `exec`, `solx action scopes`, `solx scopes audit`,
-and every package's declared scopes) and 5 (issuing scoped client tokens from
-the CLI and the desktop app, and `GET /auth/whoami`) have landed. Next is
-step 6, enforcing by default. This is the
-follow-on that
+Status: **Done.** All six steps have landed: the scope types, the
+plumbing, the checks, packages' declared scopes, issuing scoped client
+tokens (CLI, desktop app, `GET /auth/whoami`), and enforcing by default
+(`scope_enforcement: "enforce"`). What remains is under "Future work".
+
+This is the follow-on that
 [token-registry-plan.md](token-registry-plan.md) calls "authorization that the
 principal makes possible", and it closes the first gap in SECURITY.md's "What
 is not enforced": *client and action tokens aren't scoped*.
@@ -518,9 +516,8 @@ remains the way to find what an operator's own actions need.
 
 A config key, `scope_enforcement: "off" | "audit" | "enforce"`:
 
-- **`off`**: checks run but always pass. This is the state right after the
-  code lands.
-- **`audit`** (the default): a failed check is allowed but logged once per
+- **`off`**: checks run but always pass.
+- **`audit`**: a failed check is allowed but logged once per
   `(principal or calling action, need)`, naming the narrowest scope that
   would grant it. The log goes to `tracing` (target `solx::scopes`, level
   warn), which the hosts print only when asked: `RUST_LOG=solx::scopes=warn`.
@@ -538,7 +535,10 @@ A config key, `scope_enforcement: "off" | "audit" | "enforce"`:
   log only, so it's run on the solx host.
   Running an action's normal use under audit gives the exact scopes to
   grant it, or to paste into a package's manifest.
-- **`enforce`**: a failed check is refused with 403.
+- **`enforce`** (the default, since step 6): a failed check is refused with
+  403, and recorded in the same log, marked `refused`, so `solx scopes
+  audit` still says what to grant an action that gets refused. A list that
+  is only narrowed isn't recorded; one refused outright is.
 
 It is read live through `ConfigService`, like the allowlists, so no restart
 is needed. Because actions with no scopes can do nothing, every existing
@@ -641,10 +641,15 @@ default; audit mode is how they're found.
      may do, from `whoami` (`@solx/http`'s `whoami`). `@solx/tauri`'s
      `createConnectCode` and `issueClient` take `preset` and `scopes`.
 6. **Enforce and document.**
-   - Flip the default to `enforce`.
-   - Update SECURITY.md (remove the first known gap, add the confused-deputy
-     and delegating-tool notes, the registry requirement and the file-case
-     note), `security-design.md`, `http-api.md` and the README.
+   - ✅ The default is `enforce`. Refusals are recorded in the audit log
+     (`AuditEntry::refused`), so `solx scopes audit` serves an operator
+     granting their own actions after the flip. Tests that saved scriptless
+     actions calling others now declare the scopes they need.
+   - ✅ SECURITY.md (the first known gap replaced by the confused-deputy,
+     delegating-tool, registry, file-case, links and default-`all` notes,
+     plus a section on scopes and advice on granting), `security-design.md`
+     (§8 describes scopes; gaps 2, 3, 7 and 11), `http-api.md` and the
+     README.
 
 ## Tests
 
@@ -722,7 +727,7 @@ All of these exist, in `solx-surface/src/scope.rs`,
 ## Future work
 
 - **A narrower default** for client tokens issued without scopes, such as the
-  `tools` preset, once the UI has a preset picker.
+  `tools` preset. The UI's picker defaults to `full` today, to match.
 - **Scopes for stdio `solx-mcp`.** A config key (`mcp_scopes`, or
   `SOLX_MCP_SCOPES`) would run a stdio MCP server under the same grammar.
   That would make `SOLX_MCP_PATH_PREFIX`-style scoping real access control.

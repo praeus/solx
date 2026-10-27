@@ -119,13 +119,21 @@ mod tests {
         save_script_as(m, name, source, vec![]).await;
     }
 
+    /// Declaring `exec:/*`, so the calls it makes pass the scope check:
+    /// these tests are about what a frame carries, not about its scopes.
     async fn save_script_as(
         m: &LocalActionManager,
         name: &str,
         source: &str,
         capabilities: Vec<String>,
     ) {
-        save_script_with(m, name, source, capabilities, None).await;
+        let config = json!({ "scopes": ["exec:/*"] });
+        save_script_with(m, name, source, capabilities, Some(config)).await;
+    }
+
+    /// Declaring no scopes, so it can call nothing.
+    async fn save_script_bare(m: &LocalActionManager, name: &str, source: &str) {
+        save_script_with(m, name, source, vec![], None).await;
     }
 
     async fn save_script_declaring(
@@ -238,13 +246,18 @@ mod tests {
             json!({"principal": "root", "caller": null, "external": "root", "excludeMode": "none"})
         );
 
+        // The frame carries /t/outer's scopes, as a real nested call's does,
+        // and the detached run rebuilds it from the row, so both hold them.
+        save_script(&m, "outer", "exec /builtin/test/probe").await;
+        let outer_grant =
+            solx_surface::Grant::scoped(solx_surface::ScopeSet::parse(["exec:/*"]).unwrap());
         let from_action = m
             .start_invocation(
                 PATH,
                 NAME,
                 json!({}),
                 ExecContext::for_principal(Principal::Root)
-                    .enter(Caller::from_action("/t/outer", None))
+                    .enter(Caller::from_action("/t/outer", None).with_grant(outer_grant))
                     .info(),
             )
             .await
@@ -290,9 +303,9 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn each_frame_is_held_to_its_own_action() {
-        use solx_surface::{Grant, ScopeSet};
+        use solx_surface::{Grant, ScopeSet, SolxError};
 
-        let (_d, _cfg, m) = setup_wired().await;
+        let (_d, cfg, m) = setup_wired().await;
 
         let local = m.exec(PATH, "grant", json!({})).await.unwrap();
         assert_eq!(local.result, json!("unlimited"));
@@ -300,10 +313,10 @@ mod tests {
         let client = Principal::Client {
             id: "c".into(),
             label: None,
-            grant: Grant::scoped(ScopeSet::parse(["exec:/t/*"]).unwrap()),
+            grant: Grant::scoped(ScopeSet::parse(["exec:/t/*", "exec:/builtin/test/*"]).unwrap()),
         };
         let direct = m.exec_for(&client, PATH, "grant", json!({})).await.unwrap();
-        assert_eq!(direct.result, json!(["exec:/t/*"]));
+        assert_eq!(direct.result, json!(["exec:/builtin/test/*", "exec:/t/*"]));
 
         save_script_declaring(
             &m,
@@ -312,19 +325,28 @@ mod tests {
             &["exec:/builtin/test/*"],
         )
         .await;
-        save_script(&m, "bare", "exec /builtin/test/grant").await;
+        save_script_bare(&m, "bare", "exec /builtin/test/grant").await;
         for principal in [&Principal::Root, &client] {
             let ran = m
                 .exec_for(principal, "/t", "scoped", json!({}))
                 .await
                 .unwrap();
             assert_eq!(ran.result["result"], json!(["exec:/builtin/test/*"]));
-            let ran = m
+            // Under enforce, the default, an action with no scopes can't
+            // make the call at all, whoever runs it.
+            let refused = m
                 .exec_for(principal, "/t", "bare", json!({}))
                 .await
-                .unwrap();
-            assert_eq!(ran.result["result"], json!([]));
+                .unwrap_err();
+            assert!(
+                matches!(&refused, SolxError::Forbidden(m) if m.contains("action /t/bare")),
+                "{refused:?}"
+            );
         }
+        // Under audit it runs, and what it holds is nothing.
+        cfg.set("scope_enforcement", "audit".into()).unwrap();
+        let ran = m.exec_for(&client, "/t", "bare", json!({})).await.unwrap();
+        assert_eq!(ran.result["result"], json!([]));
 
         // A detached run rebuilds the starting action's frame from its row,
         // scopes included.

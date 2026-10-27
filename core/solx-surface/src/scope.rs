@@ -609,9 +609,9 @@ pub enum Enforcement {
     Off,
     /// A failed check is logged and allowed, so the scopes an action or a
     /// client really uses can be found before they are enforced.
-    #[default]
     Audit,
-    /// A failed check is refused with [`SolxError::Forbidden`].
+    /// A failed check is refused with [`SolxError::Forbidden`]. The default.
+    #[default]
     Enforce,
 }
 
@@ -1217,7 +1217,7 @@ mod tests {
         for e in [Enforcement::Off, Enforcement::Audit, Enforcement::Enforce] {
             assert_eq!(e.name().parse::<Enforcement>().unwrap(), e);
         }
-        assert_eq!(Enforcement::default(), Enforcement::Audit);
+        assert_eq!(Enforcement::default(), Enforcement::Enforce);
         assert!("strict".parse::<Enforcement>().is_err());
     }
 

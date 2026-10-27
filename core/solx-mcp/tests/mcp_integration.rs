@@ -130,6 +130,9 @@ async fn call_tool_streams_console_entries_as_progress_notifications() -> anyhow
             ActionInput {
                 action_type: Some(ActionType::Script),
                 bin_name: Some("count.solx".into()),
+                action_config: Some(serde_json::json!({
+                    "scopes": ["exec:/builtin/*", "read:action", "read:document"],
+                })),
                 ..Default::default()
             },
         )

@@ -90,10 +90,18 @@ here, so the boundaries are explicit:
 - **WASM guests are sandboxed by construction.** The `custom-action` world
   imports only action dispatch, artifact reads, and logging.
   No direct database, filesystem, or system access.
+- **Tokens and actions are held to their scopes.** Each device's token
+  carries scopes (`read:document:/notes/*`, `exec:/packages/solx-google/*`,
+  or a preset: `read-only`, `tools`, `editor`, `full`), and each action
+  declares the scopes it runs with; a call is checked against its immediate
+  caller's and refused with a `403` outside them. An action with no scopes
+  can call nothing until an operator grants it some (`solx action scopes`),
+  and `solx scopes audit` lists what was refused.
 
 **What is not enforced yet:** anything saved to the actions database is
-executable, and callers are undifferentiated beyond "is / isn't another
-action." There is no package signing and no general permission system.
+executable, and local entry points (the CLI, the desktop app, stdio MCP)
+are unlimited. An action's scopes serve anyone allowed to run it. There is
+no package signing.
 
 Treat a solx instance as running with your own privileges, and scope what you
 install accordingly. [SECURITY.md](SECURITY.md) has the full threat model,
@@ -184,6 +192,17 @@ solx connect https://server:8766 1234-5678 # on the laptop (or open the link in 
 solx token clients                        # on the server: list devices
 solx token revoke <id>                    #   ...and cut one off
 ```
+
+A code gives the device full access unless you narrow it:
+`--preset read-only` (or `tools`, `editor`), and `--scope` for specific
+scopes such as `--scope read:document:/notes/*`. The desktop app's
+"Connect another device" has the same choice.
+
+Your own actions run with the scopes they declare, and one with none can
+call nothing. After running one, `solx scopes audit` lists what it was
+refused and the `solx action scopes <ref> --add ...` command that allows
+it. Set `scope_enforcement` to `"audit"` in `solx-config.json` to let calls
+through while you find out what your actions need.
 
 With TLS on, the connect link carries the server's pin
 (`…/connect#code=…&pin=…`), so `solx connect '<link>'` needs no certificate

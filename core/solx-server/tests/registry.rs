@@ -311,6 +311,8 @@ fn refused(body: &Value) -> bool {
     body.to_string().contains("needs the root token")
 }
 
+/// Scopes never grant the auth builtins: a client token holding `all` and
+/// an action token holding exec on them are both refused, by the root rule.
 #[tokio::test]
 async fn client_and_action_tokens_are_refused_over_rest() {
     let s = spawn_server().await;
@@ -321,7 +323,7 @@ async fn client_and_action_tokens_are_refused_over_rest() {
             "/pkg/a",
             "inv",
             std::time::Duration::from_secs(60),
-            &solx_surface::ScopeSet::default(),
+            &solx_surface::ScopeSet::parse(["exec:/builtin/auth/*"]).unwrap(),
         )
         .await
         .unwrap();
@@ -409,6 +411,8 @@ async fn a_nested_script_caller_is_refused_even_under_root() {
             ActionInput {
                 action_type: Some(ActionType::Script),
                 bin_name: Some(bin.into()),
+                // Past the scope check, so the root rule is what refuses it.
+                action_config: Some(json!({ "scopes": ["exec:/builtin/auth/*"] })),
                 ..Default::default()
             },
         )

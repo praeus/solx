@@ -103,10 +103,11 @@ enum ActionOp {
 
 #[derive(Subcommand)]
 enum ScopesOp {
-    /// What `scope_enforcement: "audit"` recorded on this machine: calls
-    /// that `enforce` would refuse, grouped by the action or client making
-    /// them, with the `solx action scopes` command that would allow an
-    /// action's. Needs that an action's current scopes grant are left out.
+    /// The calls on this machine that went beyond their scopes: refused
+    /// under `scope_enforcement: "enforce"`, or allowed and recorded under
+    /// `"audit"`. Grouped by the action or client making them, with the
+    /// `solx action scopes` command that would allow an action's. Needs
+    /// that an action's current scopes grant are left out.
     Audit {
         /// Only this action's findings.
         #[arg(long, value_name = "REF")]
@@ -374,6 +375,9 @@ struct AuditNeed {
     list: Option<Vec<String>>,
     count: usize,
     last: String,
+    /// Whether `enforce` refused it (at least once), rather than `audit`
+    /// allowing it.
+    refused: bool,
 }
 
 /// Group `entries` by party and need, dropping what an action's current
@@ -409,12 +413,14 @@ async fn audit_report(
             Some(need) => {
                 need.count += 1;
                 need.last = entry.at;
+                need.refused |= entry.refused;
             }
             None => party.needs.push(AuditNeed {
                 need: entry.need,
                 list: entry.list,
                 count: 1,
                 last: entry.at,
+                refused: entry.refused,
             }),
         }
     }
@@ -454,8 +460,8 @@ async fn audit_report(
 
 fn render_audit(report: &[AuditParty]) -> String {
     if report.is_empty() {
-        return "no scope audit findings (scope_enforcement \"audit\" records them here as \
-                calls are made)"
+        return "no scope findings (calls beyond their scopes are recorded here as they are \
+                made: refused under scope_enforcement \"enforce\", allowed under \"audit\")"
             .into();
     }
     let mut out = String::new();
@@ -464,7 +470,11 @@ fn render_audit(report: &[AuditParty]) -> String {
         out.push('\n');
         for need in &party.needs {
             let what = match &need.list {
+                None if need.refused => format!("{} (refused)", need.need),
                 None => need.need.clone(),
+                Some(paths) if paths.is_empty() && need.refused => {
+                    format!("{} (a list; refused)", need.need)
+                }
                 Some(paths) if paths.is_empty() => {
                     format!("{} (a list; enforce would refuse it)", need.need)
                 }

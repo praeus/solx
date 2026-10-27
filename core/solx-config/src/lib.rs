@@ -459,8 +459,8 @@ impl ConfigService {
     }
 
     /// How a call outside its scopes is treated (`scope_enforcement`).
-    /// Defaults to audit. A value that isn't `off`, `audit` or `enforce`
-    /// enforces: a typo must not turn the checks off.
+    /// Defaults to enforce. A value that isn't `off`, `audit` or `enforce`
+    /// enforces too: a typo must not turn the checks off.
     pub fn scope_enforcement(&self) -> Enforcement {
         match self.snapshot().scope_enforcement.as_deref() {
             None => Enforcement::default(),
@@ -1132,14 +1132,15 @@ fn kind_of(v: &Value) -> &'static str {
 mod tests {
     use super::*;
 
-    /// Audit by default, read live, and a value it doesn't know enforces.
+    /// Enforce by default, read live, and a value it doesn't know enforces.
     #[test]
-    fn scope_enforcement_defaults_to_audit_and_fails_closed() {
+    fn scope_enforcement_defaults_to_enforce_and_fails_closed() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = ConfigService::open_in(dir.path()).unwrap();
-        assert_eq!(cfg.scope_enforcement(), Enforcement::Audit);
+        assert_eq!(cfg.scope_enforcement(), Enforcement::Enforce);
         for (value, expected) in [
             ("off", Enforcement::Off),
+            ("audit", Enforcement::Audit),
             ("enforce", Enforcement::Enforce),
             ("enforced", Enforcement::Enforce),
         ] {

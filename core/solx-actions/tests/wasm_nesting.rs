@@ -128,6 +128,8 @@ impl Harness {
                 ActionInput {
                     action_type: Some(ActionType::Wasm),
                     bin_name: Some("guest.wasm".into()),
+                    // The guest calls itself to nest.
+                    action_config: Some(json!({ "scopes": ["exec:/t/guest"] })),
                     ..Default::default()
                 },
             )
