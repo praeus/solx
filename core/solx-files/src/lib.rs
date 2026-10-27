@@ -173,6 +173,12 @@ pub fn normalize_rel_path(rel: &str) -> Result<String> {
     Ok(LocalFileStore::normalize_rel(rel)?.join("/"))
 }
 
+/// The store directory solx-server serves, without a token, as the web UI
+/// (`GET /ui/*` → `web/*`). Code there runs on the server's own origin, next
+/// to every browser user's token, so only an operator may write it (see
+/// `solx_actions::lock::web_ui_target`).
+pub const WEB_UI_DIR: &str = "web";
+
 /// Build the conventional relative path for a shared action file.
 pub fn shared_action_file_path(file_name: &str) -> String {
     format!("files/actions/shared/{}", sanitize_segment(file_name))

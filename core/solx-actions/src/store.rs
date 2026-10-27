@@ -126,14 +126,22 @@ impl LocalActionManager {
     }
 
     /// Refuse when any of `targets` (store-relative paths about to be
-    /// written or deleted) is a locked action's pinned artifact. Every
-    /// surface that writes or deletes files on content's behalf calls this:
-    /// the file built-ins, REST `/files` for anything but the root token,
-    /// and the desktop app's main window. See `crate::lock`.
+    /// written or deleted) is a locked action's pinned artifact, or inside
+    /// the web UI's directory. Every surface that writes or deletes files on
+    /// content's behalf calls this: the file built-ins, REST `/files` for
+    /// anything but the root token, and the desktop app's main window. See
+    /// `crate::lock`.
     pub async fn guard_pinned_files<'a>(
         &self,
         targets: impl IntoIterator<Item = &'a str>,
     ) -> Result<()> {
+        let targets: Vec<&str> = targets.into_iter().collect();
+        if let Some(path) = lock::web_ui_target(targets.iter().copied()) {
+            return Err(SolxError::Invalid(format!(
+                "'{path}' is part of the web UI solx-server serves; only an operator can \
+                 replace or remove it (publish the UI with the root token)"
+            )));
+        }
         let pinned = self.pinned_paths().await?;
         match lock::pinned_target(&pinned, targets) {
             Some(path) => Err(SolxError::Invalid(format!(

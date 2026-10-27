@@ -48,6 +48,12 @@ pub(crate) const DEFAULT_TIMEOUT_SECS: u64 = 300;
 /// [`run_command`].
 const ENV_SERVER_URL: &str = "SOLX_SERVER_URL";
 const ENV_SERVER_TOKEN: &str = "SOLX_SERVER_TOKEN";
+/// Set on every spawned Command action: the `/path/name` of the action
+/// being run. Lets one allowlisted command serve many actions (as
+/// `solx-mcp-actions invoke` does for every imported MCP tool) and tell
+/// them apart. solx sets it, not the action, so content can't claim to be
+/// another action; it's a name, not a secret.
+const ENV_ACTION_REF: &str = "SOLX_ACTION_REF";
 
 /// Turn an action ref into a filesystem-safe path segment for
 /// [`ConfigService::logs_dir`] — `/packages/solx-omniparse/process-file` ->
@@ -61,9 +67,10 @@ fn log_dir_slug(action_ref: &str) -> String {
 }
 
 /// `action_config.env` used to be forwarded to the child. It was removed:
-/// every package used it only to set `SOLX_SERVER_URL`, which solx now
-/// injects itself, and it was readable by anyone who could `get` the action
-/// (`crate::mask` doesn't cover it). Rows saved before the removal still
+/// packages used it to set `SOLX_SERVER_URL`, which solx now injects
+/// itself, and to tell a shared command which action it was running, which
+/// `SOLX_ACTION_REF` now does; and it was readable by anyone who could `get`
+/// the action (`crate::mask` doesn't cover it). Rows saved before the removal still
 /// carry the map, so it's ignored — and only a key other than that one is
 /// worth a warning, since that's the only case whose behavior changed.
 fn warn_on_removed_env(action_ref: &str, action_config: &Option<Value>) {
@@ -191,6 +198,7 @@ pub async fn run_command(
         .arg(command)
         .current_dir(&cwd)
         .env("SOL_LOG_DIR", &log_dir)
+        .env(ENV_ACTION_REF, action_ref)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

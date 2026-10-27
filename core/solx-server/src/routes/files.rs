@@ -85,7 +85,13 @@ async fn get_file(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let bytes = state.app.files().get(&rel_path).await?;
+    Ok(serve_bytes(&rel_path, bytes, &headers))
+}
 
+/// `bytes` (the file at `rel_path`) as a response with the validators
+/// described on `get_file`, or a bodiless `304` when `headers` already
+/// hold its tag. Shared with `routes::ui`, which serves the same store.
+pub fn serve_bytes(rel_path: &str, bytes: Vec<u8>, headers: &HeaderMap) -> Response {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
     let etag = format!("\"{:016x}\"", hasher.finish());
@@ -96,17 +102,17 @@ async fn get_file(
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.split(',').any(|c| c.trim() == etag || c.trim() == "*"));
     if fresh {
-        return Ok((
+        return (
             StatusCode::NOT_MODIFIED,
             [(ETAG, etag), (CACHE_CONTROL, "no-cache".to_string())],
         )
-            .into_response());
+            .into_response();
     }
 
-    let content_type = mime_guess::from_path(&rel_path)
+    let content_type = mime_guess::from_path(rel_path)
         .first_or_octet_stream()
         .to_string();
-    Ok((
+    (
         [
             (CONTENT_TYPE, content_type),
             (ETAG, etag),
@@ -114,7 +120,7 @@ async fn get_file(
         ],
         bytes,
     )
-        .into_response())
+        .into_response()
 }
 
 /// Only the root token may remove a locked action's pinned artifact.

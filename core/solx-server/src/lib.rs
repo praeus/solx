@@ -42,9 +42,9 @@ use state::AppState;
 pub const BUILD_COMMIT: &str = env!("SOLX_BUILD_COMMIT");
 pub const BUILD_COMMIT_DATE: &str = env!("SOLX_BUILD_COMMIT_DATE");
 
-/// Build the full router: an unauthenticated `/health` (and, with the
-/// token registry, `/auth/exchange` and `/connect`), plus every data
-/// route behind the bearer-auth middleware.
+/// Build the full router: an unauthenticated `/health` and `/ui/*` (and,
+/// with the token registry, `/auth/exchange` and `/connect`), plus every
+/// data route behind the bearer-auth middleware.
 ///
 /// Serve it with `into_make_service_with_connect_info::<SocketAddr>()`
 /// (as [`serve`] does): with the registry on, the root token is accepted
@@ -95,6 +95,9 @@ pub fn build_router_with_cors(state: AppState, cors: CorsLayer) -> Router {
                 }))
             }),
         )
+        // The web UI, when one has been published to the file store; see
+        // `routes::ui` for why it is outside the bearer gate.
+        .merge(routes::ui::router())
         .merge(public)
         .merge(protected)
         .layer(cors)

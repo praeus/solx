@@ -54,6 +54,8 @@ tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { workspace = true }
 serde = { workspace = true }
+# `WEB_UI_DIR`, the store directory `GET /ui/*` serves.
+solx-files = { workspace = true }
 # Content-Type for `GET /files/{*rel_path}`, guessed from the extension —
 # the `FileStore` trait doesn't persist one.
 mime_guess = { workspace = true }
@@ -81,8 +83,5 @@ tempfile = "3"
 # of the shipped `solx-server` binary (which only needs `solx-mcp`'s server
 # side, pulled in as a normal dependency above).
 rmcp = { version = "3.0.0", features = ["client", "transport-streamable-http-client-reqwest"] }
-# Test-only, to register a Script action's artifact directly for the
-# progress-notification test — same use as `solx-mcp`'s own dev-dependency.
-solx-files = { workspace = true }
 # TLS tests: a file-backend CA and server certificate in a tempdir.
 solx-certs = { workspace = true }

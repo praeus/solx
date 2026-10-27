@@ -24,6 +24,11 @@
 //!
 //! Every operator save of a locked action re-pins it, which is how a
 //! reinstall (or `solx action lock`) picks up a new artifact.
+//!
+//! The web UI's directory ([`solx_files::WEB_UI_DIR`]) is guarded the same
+//! way, as a whole: solx-server serves it as a page on its own origin, so
+//! content that could write it could read every browser user's token
+//! ([`web_ui_target`]).
 
 use std::sync::Arc;
 
@@ -161,6 +166,17 @@ pub(crate) fn pinned_target<'a>(
     })
 }
 
+/// The first of `targets` inside the web UI's directory, if any. Compared
+/// as [`pinned_target`] compares, so `Web/x` and `web./x` count too.
+pub(crate) fn web_ui_target<'a>(targets: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    targets.into_iter().find_map(|target| {
+        let normalized = solx_files::normalize_rel_path(target).ok()?;
+        let first = comparable(&normalized);
+        let first = first.split('/').next().unwrap_or_default();
+        (first == solx_files::WEB_UI_DIR).then_some(normalized)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,6 +221,16 @@ mod tests {
         assert!(!hit("files/actions/shared/login.solx2"));
         assert!(!hit("files/actions/shared"));
         assert!(pinned_target(&pinned, ["a.txt", "files/actions/shared/login.solx"]).is_some());
+    }
+
+    #[test]
+    fn the_web_ui_directory_is_guarded_however_it_is_spelled() {
+        for target in ["web/index.html", "Web/assets/a.js", "./web./x", r"web\x", "web"] {
+            assert!(web_ui_target([target]).is_some(), "{target}");
+        }
+        for target in ["widgets/web.js", "webby/x", "docs/web/x", "../web/x"] {
+            assert!(web_ui_target([target]).is_none(), "{target}");
+        }
     }
 }
 

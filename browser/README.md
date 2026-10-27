@@ -48,6 +48,10 @@ so both apps can be installed side by side.
 - solx-web loads widget bundles and files from `blob:` URLs. `csp` is
   `null` today; any CSP you add must allow `blob:` in `script-src` and
   `img-src`.
+- The webview gets the UI from Tauri, not over HTTP. For other browsers to
+  use it, publish it to the file store (`bun run publish-ui` in `web/web`).
+  The embedded server then serves it at `<server>/ui/`, and a connect link
+  (`/connect#code=…`) signs a browser straight into it.
 - Command actions that call back into solx-server over HTTP (e.g.
   solx-quickjs builds) need the embedded server, so keep `server_embedded`
   on unless you know you don't use them.

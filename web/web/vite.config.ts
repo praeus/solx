@@ -27,6 +27,9 @@ export default defineConfig({
       ),
     },
   },
+  // Relative asset URLs, so one build works wherever `index.html` is served:
+  // `/` in the desktop app and dev server, `/ui/` from solx-server.
+  base: "./",
   // Don't clear the terminal over `tauri dev`'s Rust output.
   clearScreen: false,
   server: {

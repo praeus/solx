@@ -42,6 +42,7 @@ const ACTION_TYPES = [
   { value: "webhook", label: "Webhook" },
   { value: "command", label: "Command" },
   { value: "internal", label: "Internal" },
+  { value: "script", label: "Script" },
 ];
 
 interface Props {

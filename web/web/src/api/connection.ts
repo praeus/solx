@@ -29,7 +29,13 @@ export const IN_TAURI = isTauri();
 const STORAGE_KEY_URL = "solx.serverUrl";
 const STORAGE_KEY_TOKEN = "solx.serverToken";
 
-const DEFAULT_SERVER_URL = "http://127.0.0.1:8766";
+/**
+ * The server to use when none is stored: the one that served this page, if
+ * solx-server did (its `/ui/`), else the default local one. The `/connect`
+ * page stores that same origin, so a connect link signs this UI straight in.
+ */
+const DEFAULT_SERVER_URL =
+  !IN_TAURI && location.pathname.startsWith("/ui/") ? location.origin : "http://127.0.0.1:8766";
 
 type Listener = () => void;
 const listeners = new Set<Listener>();
