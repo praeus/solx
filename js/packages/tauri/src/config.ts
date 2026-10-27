@@ -86,8 +86,8 @@ export interface SolxConfigFile {
   /** Lifetime of a client token, in days (default 90). */
   client_token_ttl_days?: number;
   /**
-   * How a call outside its scopes is treated: allowed, allowed and logged
-   * (the default), or refused with a `Forbidden` error.
+   * How a call outside its scopes is treated: allowed, allowed and logged,
+   * or refused with a `Forbidden` error and logged (the default).
    */
   scope_enforcement?: 'off' | 'audit' | 'enforce';
   server_embedded?: boolean;

@@ -736,3 +736,29 @@ All of these exist, in `solx-surface/src/scope.rs`,
   its nested calls against the intersection of the two. Not needed for the
   first cut.
 - **A general trailing `*`** (`/path*`) in scope paths, if a use appears.
+
+From the review of the finished branch, noted rather than fixed:
+
+- **Saves return what they merged.** `write:*` without `read:*` still sees
+  the stored entity, since a save is a merge-upsert that returns the whole
+  row (REST and the `entity-save-*`/`set-field` built-ins). Requiring the
+  read scope too would break package manifests that write without reading.
+  Documented in SECURITY.md.
+- **WASM artifact reads skip `read:file`.** `artifact-read` in
+  `wasm/host.rs` reads the whole store; a package's guest reads its own
+  artifacts this way, so checking it needs those paths in each manifest
+  first. Already SECURITY.md's "Artifact reads are unrestricted".
+- **Console and invocation built-ins.** `console-read`/`tail`/`clear`/`list`
+  and `action-poll`/`stop` are gated by `exec` only; the console ones could
+  require `read:action` (or `write:action`) on the target action. The
+  resource gate (`internal/scopes.rs`) is an allowlist that lets unlisted
+  built-ins through, so a new data-reading built-in must be added to it.
+- **Package upgrades keep wider scopes.** An installed action whose stored
+  scopes exceed a newer manifest's is only warned about; a reinstall could
+  narrow or refuse it instead.
+- **`scopes: []` without the registry.** `SingleTokenAuthority` can't tell
+  an explicit empty declaration from none, so such a Command action still
+  gets the root token.
+- **Audit log writes block.** `append_audit` writes synchronously on the
+  request path (once per process, party and need), and two processes
+  rotating at once can lose the rotated file.

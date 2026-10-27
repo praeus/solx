@@ -496,3 +496,33 @@ async fn mcp_discovery_follows_exec_scopes() -> anyhow::Result<()> {
     client.cancel().await?;
     Ok(())
 }
+
+/// Out of scope reads the same whether the action exists or not, so a
+/// scoped token can't probe for actions it may not call. (`action-start`
+/// is covered in solx-actions' scope tests, which run as a long-lived host.)
+#[tokio::test]
+async fn an_out_of_scope_action_is_refused_whether_or_not_it_exists() {
+    let s = spawn_server("enforce").await;
+    let token = s.token(&["exec:/builtin/test/*"]).await;
+    for route in [
+        "/actions/builtin/web/http-request",
+        "/actions/nowhere/nothing",
+    ] {
+        assert_eq!(
+            s.status(&token, Method::POST, route, Some(json!({}))).await,
+            403,
+            "{route}"
+        );
+    }
+    // Within its scopes a missing action is still a 404.
+    assert_eq!(
+        s.status(
+            &token,
+            Method::POST,
+            "/actions/builtin/test/nothing",
+            Some(json!({}))
+        )
+        .await,
+        404
+    );
+}

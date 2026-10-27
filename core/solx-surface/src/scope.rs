@@ -80,7 +80,8 @@ pub enum Resource {
 }
 
 impl Resource {
-    fn name(self) -> &'static str {
+    /// The resource as a scope names it: `document`, `type`, ….
+    pub fn name(self) -> &'static str {
         match self {
             Resource::Document => "document",
             Resource::Type => "type",

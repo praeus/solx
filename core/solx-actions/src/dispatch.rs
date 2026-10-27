@@ -183,14 +183,24 @@ impl LocalActionManager {
         ctx: &ExecContext,
         invocation_id: Option<&str>,
     ) -> Result<ActionExecResult> {
+        // Like the exclusions, the scope check runs on every frame: a
+        // client's call is checked against its token, and each nested call
+        // against the action that makes it. It runs first on the reference
+        // asked for, so a caller out of scope gets the same refusal whether
+        // the action exists, is missing or is excluded, and can't probe for
+        // any of them.
+        let scopes = ScopeCheck::for_exec(&self.config, ctx);
+        if let Ok(asked) = solx_surface::path::normalize_path(path) {
+            scopes.require(&Need::Exec {
+                path: &asked,
+                name: name.trim(),
+            })?;
+        }
         let (action, secrets) = self.get_with_secrets(path, name).await?;
         let action_ref = full_ref(&action.path, &action.name)?;
         let params = self.enforce_exclusions(ctx.exclude_mode(), &action, params)?;
-        // After the exclusions, so an excluded action still reads as
-        // missing. Like them it runs on every frame: a client's call is
-        // checked against its token, and each nested call against the
-        // action that makes it.
-        let scopes = ScopeCheck::for_exec(&self.config, ctx);
+        // Again on the stored row's reference, which is what the scopes
+        // name, in case the lookup matched a differently spelled one.
         scopes.require(&Need::Exec {
             path: &action.path,
             name: &action.name,

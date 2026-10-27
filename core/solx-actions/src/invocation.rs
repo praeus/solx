@@ -73,6 +73,17 @@ impl LocalActionManager {
             ));
         }
 
+        // The caller's `exec` scope first, on the reference asked for, so
+        // an out-of-scope target is refused the same whether it exists or
+        // not (as in dispatch).
+        let scopes = ScopeCheck::for_exec_info(&self.config, &exec);
+        if let Ok(asked) = solx_surface::path::normalize_path(path) {
+            scopes.require(&Need::Exec {
+                path: &asked,
+                name: name.trim(),
+            })?;
+        }
+
         // Resolved (and validated) up front, outside the spawned task, so a
         // bad path/name/action_type fails the `start` call itself rather
         // than silently producing a row that immediately goes `failed`.
@@ -92,7 +103,7 @@ impl LocalActionManager {
         }
         // Likewise the caller's `exec` scope, which the spawned run checks
         // again: refused here, it leaves no row behind.
-        ScopeCheck::for_exec_info(&self.config, &exec).require(&Need::Exec {
+        scopes.require(&Need::Exec {
             path: &action.path,
             name: &action.name,
         })?;

@@ -194,6 +194,12 @@ async fn a_detached_run_is_checked_like_a_direct_one() {
         matches!(refused, Err(SolxError::Forbidden(_))),
         "{refused:?}"
     );
+    // A missing action out of scope reads the same, so it can't be probed.
+    let missing = start(&m, "nothing", &["exec:/x/*"]).await;
+    assert!(
+        matches!(missing, Err(SolxError::Forbidden(_))),
+        "{missing:?}"
+    );
 
     let ok = finish(&m, start(&m, "scoped", &["exec:/t/*"]).await.unwrap()).await;
     assert_eq!(ok["status"], "ok", "{ok}");

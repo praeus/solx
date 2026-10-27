@@ -159,8 +159,12 @@ impl<'a> ScopeCheck<'a> {
     /// code is refused rather than overwritten, since one list can't hold
     /// the intersection of two.
     pub fn narrow(&self, filter: PathFilter, scope: &str, include: &mut Vec<String>) -> Result<()> {
-        let mode = self.config.scope_enforcement();
-        match (filter, mode) {
+        // Before reading the mode, which costs a config read: most callers
+        // are unrestricted.
+        if filter == PathFilter::Unrestricted {
+            return Ok(());
+        }
+        match (filter, self.config.scope_enforcement()) {
             (PathFilter::Unrestricted, _) | (_, Enforcement::Off) => Ok(()),
             (PathFilter::Nothing, Enforcement::Audit) => {
                 self.audit(scope.to_string(), Some(Vec::new()), false);
@@ -195,7 +199,7 @@ impl<'a> ScopeCheck<'a> {
     pub fn narrow_reads(&self, resource: Resource, include: &mut Vec<String>) -> Result<()> {
         self.narrow(
             self.grant.path_filter(Access::Read, resource),
-            &format!("read:{}", resource_name(resource)),
+            &format!("read:{}", resource.name()),
             include,
         )
     }
@@ -214,7 +218,7 @@ impl<'a> ScopeCheck<'a> {
         }
         self.narrow(
             PathFilter::Nothing,
-            &format!("read:{}", resource_name(resource)),
+            &format!("read:{}", resource.name()),
             &mut Vec::new(),
         )
     }
@@ -226,15 +230,6 @@ pub fn resource_of(kind: EntityKind) -> Resource {
         EntityKind::Document => Resource::Document,
         EntityKind::Type => Resource::Type,
         EntityKind::Action => Resource::Action,
-    }
-}
-
-fn resource_name(resource: Resource) -> &'static str {
-    match resource {
-        Resource::Document => "document",
-        Resource::Type => "type",
-        Resource::Action => "action",
-        Resource::File => "file",
     }
 }
 

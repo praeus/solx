@@ -277,6 +277,14 @@ everything running through solx today is trusted by construction.
 - **A document's links show outside its scope.** Reading a document returns
   the references it links to, even ones the token can't read (never their
   contents).
+- **A write scope shows what it writes.** Saving a document, type or action
+  returns the whole stored entity, merged with what was there, so
+  `write:document` on a path also reveals the documents saved there. Pair
+  write scopes with the matching read scope, as the presets do.
+- **Consoles and runs are reached by `exec` alone.** A token with `exec` on
+  `/builtin/console/*` can read or clear any action's console, and one with
+  `exec` on `action-poll`/`action-stop` can reach any run whose id it knows.
+  The `tools` preset (`exec:/*`) includes both.
 - **New client tokens default to full access.** A code or `solx token issue`
   given no scopes or preset makes an `all` token; choose narrower access
   when the device doesn't need everything.
