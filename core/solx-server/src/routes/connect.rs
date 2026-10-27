@@ -167,6 +167,7 @@ const CONNECT_PAGE: &str = r#"<!doctype html>
     <textarea id="token" rows="2" readonly aria-label="Token"></textarea>
     <p><button id="copy" type="button">Copy token</button></p>
     <p>Paste it into solx-web's Settings or an MCP client's configuration, or on another machine run <code>solx connect &lt;server&gt; &lt;token&gt;</code>.</p>
+    <p id="open-ui" hidden><a href="ui/">Open solx in this browser</a>; it already has the token.</p>
   </section>
 </main>
 <script>
@@ -206,6 +207,11 @@ const CONNECT_PAGE: &str = r#"<!doctype html>
       $("expires").textContent = body.expires_at ? new Date(body.expires_at).toLocaleString() : "revoked";
       $("token").value = body.token;
       $("done").hidden = false;
+      // The web UI, when this server has one published, reads the token
+      // just stored, since it is served from this same origin.
+      fetch(new URL("ui/", location.href), { method: "HEAD" })
+        .then((r) => { $("open-ui").hidden = !r.ok; })
+        .catch(() => {});
     } catch (err) {
       $("error").textContent = err.message;
     } finally {

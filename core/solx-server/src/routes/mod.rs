@@ -7,6 +7,7 @@ pub mod files;
 pub mod mcp;
 pub mod refs;
 pub mod types;
+pub mod ui;
 pub mod whoami;
 
 use axum::Router;

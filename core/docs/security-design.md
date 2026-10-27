@@ -283,8 +283,10 @@ action's key. Nothing that leaves the host can reach the key (§5.2).
   `action_config.timeout_secs`. `kill_on_drop` kills the shell but **not its
   descendants**, so a grandchild process can outlive the timeout.
 - **Environment.** The child inherits solx's own environment, plus
-  `SOL_LOG_DIR`, the console loopback variables (§6), and the server
-  credential (§3.3). Nothing in the action row can add a variable. The old
+  `SOL_LOG_DIR`, `SOLX_ACTION_REF` (the `/path/name` of the action being
+  run, so one allowlisted command can serve many actions), the console
+  loopback variables (§6), and the server credential (§3.3). Nothing in the
+  action row can add a variable. The old
   `action_config.env` map is no longer applied, and a warning is logged if
   a stored row still sets anything other than `SOLX_SERVER_URL` there.
 

@@ -1,5 +1,5 @@
 //! A spawned Command action is handed `SOLX_SERVER_URL`/`SOLX_SERVER_TOKEN`
-//! by the manager's token authority. The removed `action_config.env` map is
+//! by the manager's token authority, and its own `SOLX_ACTION_REF`. The removed `action_config.env` map is
 //! ignored, so it can neither override them nor add variables of its own.
 
 use std::sync::Arc;
@@ -11,12 +11,12 @@ use solx_surface::auth::TokenAuthority;
 use solx_surface::entities::{ActionInput, ActionType};
 use solx_surface::managers::{ActionManager, DocManager, FileStore, TypeManager};
 
-/// Prints the two injected variables plus an ordinary one, space-separated.
+/// Prints the three injected variables plus an ordinary one, space-separated.
 fn print_env() -> &'static str {
     if cfg!(windows) {
-        "echo %SOLX_SERVER_TOKEN% %SOLX_SERVER_URL% %SOLX_TEST_OTHER%"
+        "echo %SOLX_SERVER_TOKEN% %SOLX_SERVER_URL% %SOLX_ACTION_REF% %SOLX_TEST_OTHER%"
     } else {
-        "echo \"$SOLX_SERVER_TOKEN $SOLX_SERVER_URL $SOLX_TEST_OTHER\""
+        "echo \"$SOLX_SERVER_TOKEN $SOLX_SERVER_URL $SOLX_ACTION_REF $SOLX_TEST_OTHER\""
     }
 }
 
@@ -100,16 +100,23 @@ async fn command_receives_server_url_and_token() {
 }
 
 #[tokio::test]
+async fn command_receives_its_own_action_ref() {
+    let out = run_print_env(None).await;
+    assert_eq!(out[2], "/t/print-env");
+}
+
+#[tokio::test]
 async fn action_config_env_is_ignored() {
     let out = run_print_env(Some(json!({
         "env": {
             "SOLX_SERVER_TOKEN": "stale-token",
             "SOLX_SERVER_URL": "http://elsewhere",
+            "SOLX_ACTION_REF": "/someone/else",
             "SOLX_TEST_OTHER": "not-forwarded",
         }
     })))
     .await;
-    assert_eq!(out[..2], ["issued-token", "http://127.0.0.1:9"]);
+    assert_eq!(out[..3], ["issued-token", "http://127.0.0.1:9", "/t/print-env"]);
     assert!(!out.iter().any(|v| v == "not-forwarded"), "{out:?}");
 }
 

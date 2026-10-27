@@ -343,6 +343,32 @@ is rejected by the file store.
 | `GET` | `/auth/whoami` | Any token. Returns `{kind, scopes, scope_enforcement}`, plus `id` and `label` for a client token and `action` and `invocation_id` for an action token. `kind` is `root`, `client` or `action`; `scopes` is `null` for the root token, which no scope limits. |
 | `POST`/`GET`/`DELETE` | `/mcp` | MCP Streamable HTTP transport, same auth gate. |
 
+### Web UI
+
+| Method | Route | Returns |
+| --- | --- | --- |
+| `GET` | `/ui` | `308` to `/ui/` |
+| `GET` | `/ui/` | the file store's `web/index.html` |
+| `GET` | `/ui/{relPath}` | the file store's `web/{relPath}` |
+
+These routes need no bearer token: a browser can't send one when it opens a
+page or loads a `<script src>`. They serve only the file store's `web/`
+directory, with the same `ETag`/`no-cache` validators as `GET /files`, plus
+`X-Content-Type-Options: nosniff`. Until a UI is published there, every path
+is a `404`.
+
+Publish the UI with `bun run publish-ui` in `web/web` (`web/scripts/publish-ui.mjs`),
+which uploads `dist/` through `PUT /files/web/…`. Only the root token may
+write or delete under `web/`; a client or action token gets a `400`, as do
+the file built-ins (`file-put`, `dir-copy`, …) under any token, and the
+desktop app's main window. Code served from `/ui/` runs on the server's
+origin, next to every browser user's token, so content must not be able to
+replace it.
+
+The UI keeps its server URL and token in `localStorage`. Served from `/ui/`,
+it defaults to its own origin, and the `/connect` page stores the redeemed
+token on that same origin, so a connect link signs the browser straight in.
+
 ## Errors
 
 Every error response body is the tagged error itself:

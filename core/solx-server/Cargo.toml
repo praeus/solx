@@ -42,7 +42,7 @@ solx-config = { workspace = true }
 # facade.
 solx-actions = { workspace = true }
 # `normalize_rel_path`: a file's scope is checked against the path the store
-# will really use.
+# will really use. `WEB_UI_DIR`, the store directory `GET /ui/*` serves.
 solx-files = { workspace = true }
 # `streamable_http_service()` — mounts the same `SolxMcpServer` the stdio
 # `solx-mcp` binary uses, as an MCP-over-HTTP route sharing this process's
@@ -85,8 +85,5 @@ tempfile = "3"
 # of the shipped `solx-server` binary (which only needs `solx-mcp`'s server
 # side, pulled in as a normal dependency above).
 rmcp = { version = "3.0.0", features = ["client", "transport-streamable-http-client-reqwest"] }
-# Test-only, to register a Script action's artifact directly for the
-# progress-notification test — same use as `solx-mcp`'s own dev-dependency.
-solx-files = { workspace = true }
 # TLS tests: a file-backend CA and server certificate in a tempdir.
 solx-certs = { workspace = true }
