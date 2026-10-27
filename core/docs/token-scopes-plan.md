@@ -2,10 +2,11 @@
 
 Status: **In progress.** Steps 1 (the scope types, `solx_surface::scope`),
 2 (plumbing: every principal, frame and actor carries its grant) and 3 (the
-checks, under `scope_enforcement`, default `audit`) and 4 (packages: manifest
+checks, under `scope_enforcement`, default `audit`), 4 (packages: manifest
 scopes, the own-package `exec`, `solx action scopes`, `solx scopes audit`,
-and every package's declared scopes) have landed. Next is step 5, issuing
-scoped client tokens, then step 6, enforcing by default. This is the
+and every package's declared scopes) and 5 (issuing scoped client tokens from
+the CLI and the desktop app, and `GET /auth/whoami`) have landed. Next is
+step 6, enforcing by default. This is the
 follow-on that
 [token-registry-plan.md](token-registry-plan.md) calls "authorization that the
 principal makes possible", and it closes the first gap in SECURITY.md's "What
@@ -632,7 +633,13 @@ default; audit mode is how they're found.
      (repeatable) and `--preset` on `solx token issue` and `solx token
      connect-code`. `GET /auth/whoami` (`{kind, scopes, scope_enforcement}`,
      `scopes: null` for root), for any token.
-   - Desktop and web preset picker, and scopes shown in the client list.
+   - ✅ "Connect another device" (the desktop Settings window, the only
+     place with the root token) picks a preset or a custom list of scope
+     strings, and shows each code's and each device's access
+     (`web/web/src/api/scopes.ts`), with a note while `scope_enforcement`
+     isn't `enforce`. A browser's settings panel shows what its own token
+     may do, from `whoami` (`@solx/http`'s `whoami`). `@solx/tauri`'s
+     `createConnectCode` and `issueClient` take `preset` and `scopes`.
 6. **Enforce and document.**
    - Flip the default to `enforce`.
    - Update SECURITY.md (remove the first known gap, add the confused-deputy

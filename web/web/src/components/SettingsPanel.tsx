@@ -23,6 +23,10 @@
  * it: "Open solx settings…" opens the separate Settings window
  * (`config/ConfigApp.tsx`), the only window allowed to touch it.
  *
+ * In a browser, the status line also says what the stored token may do
+ * (`GET /auth/whoami`), since a connect code may have been made for part
+ * of solx only.
+ *
  * Below the connection controls are tabs. "Install" (local desktop host
  * only) installs the official packages — see `settings/InstallTab.tsx`.
  * "Connect" is still to be designed.
@@ -30,7 +34,8 @@
 
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useHealth } from "../api/hooks";
+import { useHealth, useWhoami } from "../api/hooks";
+import { describeScopes } from "../api/scopes";
 import { InstallTab } from "./settings/InstallTab";
 import { TabBar, type TabDefinition } from "./TabBar";
 import {
@@ -53,6 +58,7 @@ interface Props {
 
 export function SettingsPanel({ open, onClose }: Props) {
   const healthQuery = useHealth();
+  const whoamiQuery = useWhoami();
   const queryClient = useQueryClient();
 
   const [serverUrl, setServerUrl] = useState("");
@@ -157,6 +163,13 @@ export function SettingsPanel({ open, onClose }: Props) {
               : "Checking connection…"}
           </span>
         </div>
+        {whoamiQuery.data && (
+          <div className="dialog__hint settings-panel__access">
+            This browser's access: {describeScopes(whoamiQuery.data.scopes)}
+            {whoamiQuery.data.scopes !== null && whoamiQuery.data.scope_enforcement !== "enforce" &&
+              " (not enforced yet on this server)"}
+          </div>
+        )}
 
         {localHost ? (
           <div className="settings-panel__body settings-panel__body--top">

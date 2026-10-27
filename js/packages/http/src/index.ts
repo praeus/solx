@@ -28,6 +28,7 @@ export { HttpDocManager } from './docs.js';
 export { HttpFileStore } from './files.js';
 export { HttpTypeManager } from './types.js';
 export { mapWireError } from './error.js';
+export { whoami, type Whoami } from './whoami.js';
 
 export interface HttpSolx extends RemoteSolx {
   types: HttpTypeManager;

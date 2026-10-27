@@ -30,7 +30,14 @@ export { TauriTypeManager } from './types.js';
 export type { InvokeArgs, InvokeFn, InvokeOptions } from './invoke.js';
 export { TauriConfig } from './config.js';
 export { TauriAuth } from './auth.js';
-export type { ClientInfo, ConnectCode, CreateConnectCodeOptions, IssuedClient } from './auth.js';
+export type {
+  ClientInfo,
+  ConnectCode,
+  CreateConnectCodeOptions,
+  IssuedClient,
+  ScopePreset,
+  TokenAccess,
+} from './auth.js';
 export type {
   CommandDef,
   ConfigChanges,

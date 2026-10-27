@@ -49,7 +49,8 @@ import {
 } from "./api";
 import type { ExcludeMode } from "@solx/surface";
 import type { CatalogView, PackageOpResult } from "@solx/tauri";
-import { getTauri } from "./connection";
+import type { Whoami } from "@solx/http";
+import { fetchWhoami, getTauri, IN_TAURI, isConfigured } from "./connection";
 import { acquireObjectUrl, releaseObjectUrl } from "./objectUrlCache";
 
 /** ── Health ─────────────────────────────────────────────────────────── */
@@ -59,6 +60,19 @@ export function useHealth(): UseQueryResult<HealthResponse> {
     queryKey: ["health"],
     queryFn: fetchHealth,
     refetchInterval: 15_000,
+    retry: false,
+  });
+}
+
+/**
+ * What this browser's token may do (`GET /auth/whoami`). Browser only: in
+ * the desktop app the host holds the connection, so there is no token here.
+ */
+export function useWhoami(): UseQueryResult<Whoami> {
+  return useQuery({
+    queryKey: ["whoami"],
+    queryFn: fetchWhoami,
+    enabled: !IN_TAURI && isConfigured(),
     retry: false,
   });
 }

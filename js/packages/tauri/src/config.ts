@@ -122,6 +122,7 @@ export interface EffectiveConfig {
   server_port: number;
   server_embedded: boolean;
   client_token_ttl_days: number;
+  scope_enforcement: 'off' | 'audit' | 'enforce';
   console_max_entries: number;
   console_ttl_days: number;
   background_timeout_secs: number;

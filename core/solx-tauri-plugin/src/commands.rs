@@ -706,6 +706,7 @@ fn config_view(config: &ConfigService) -> ConfigView {
             "server_port": snap.server_port.unwrap_or(solx_config::DEFAULT_SERVER_PORT),
             "server_embedded": config.server_embedded(),
             "client_token_ttl_days": config.client_token_ttl_days(),
+            "scope_enforcement": config.scope_enforcement().name(),
             "console_max_entries": config.console_max_entries(),
             "console_ttl_days": config.console_ttl_days(),
             "background_timeout_secs": config.background_timeout_secs(),

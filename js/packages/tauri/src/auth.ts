@@ -24,6 +24,8 @@ export interface ConnectCode {
   tls_pin: string | null;
   /** RFC 3339. */
   expires_at: string;
+  /** What the token the code redeems for may do, as scope strings. */
+  scopes: string[];
 }
 
 /** A client token as listed: never the token itself. */
@@ -46,9 +48,23 @@ export interface IssuedClient {
   /** The address to give the client, with `#pin=` when the server has a pin. */
   server_url: string | null;
   tls_pin: string | null;
+  /** What the token may do, as scope strings. */
+  scopes: string[];
 }
 
-export interface CreateConnectCodeOptions {
+/** A named bundle of scopes, expanded when the token is issued. */
+export type ScopePreset = 'read-only' | 'tools' | 'editor' | 'full';
+
+/**
+ * What a new token may do: a preset, scope strings (`read:document:/notes`,
+ * `exec:/packages/solx-google/*`), or both, combined. Neither means `all`.
+ */
+export interface TokenAccess {
+  preset?: ScopePreset;
+  scopes?: string[];
+}
+
+export interface CreateConnectCodeOptions extends TokenAccess {
   /** Name for the client the code creates, shown in the client list. */
   label?: string;
   /** How long the code stays valid (default 600). */
@@ -76,6 +92,8 @@ export class TauriAuth {
       code_ttl_secs: options.codeTtlSecs,
       token_ttl_secs: options.tokenTtlSecs,
       public_url: options.publicUrl,
+      preset: options.preset,
+      scopes: options.scopes,
     });
   }
 
@@ -88,7 +106,12 @@ export class TauriAuth {
     await this.exec('revoke-client', { id });
   }
 
-  issueClient(label: string, tokenTtlSecs?: number): Promise<IssuedClient> {
-    return this.exec('issue-client', { label, token_ttl_secs: tokenTtlSecs });
+  issueClient(label: string, tokenTtlSecs?: number, access: TokenAccess = {}): Promise<IssuedClient> {
+    return this.exec('issue-client', {
+      label,
+      token_ttl_secs: tokenTtlSecs,
+      preset: access.preset,
+      scopes: access.scopes,
+    });
   }
 }

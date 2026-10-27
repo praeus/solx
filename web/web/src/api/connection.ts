@@ -18,7 +18,7 @@
  * Callers only see `RemoteSolx`, the manager set both transports provide.
  */
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { connectHttp } from "@solx/http";
+import { connectHttp, whoami, type Whoami } from "@solx/http";
 import type { RemoteSolx } from "@solx/surface";
 import { connectTauri, type HostInfo, type TauriSolx } from "@solx/tauri";
 import { parseConnectInput } from "./connectInput";
@@ -194,6 +194,11 @@ export async function restartApp(): Promise<void> {
 /** Desktop server build: show the TLS certificates folder, with the root certificate selected. */
 export async function revealCertsFolder(): Promise<void> {
   await invoke("reveal_certs_folder");
+}
+
+/** Browser: what the stored token is and may do. */
+export function fetchWhoami(): Promise<Whoami> {
+  return whoami(getStoredServerUrl(), getStoredServerToken());
 }
 
 /** Subscribe to connection changes (e.g. to invalidate cached queries). Returns an unsubscribe function. */

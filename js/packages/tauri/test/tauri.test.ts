@@ -144,6 +144,17 @@ describe('auth', () => {
       args: { name: 'create-connect-code', params: { label: 'phone', code_ttl_secs: 60 } },
     });
 
+    await solx.auth.createConnectCode({ preset: 'tools', scopes: ['read:type'] });
+    expect(last()).toMatchObject({
+      args: { name: 'create-connect-code', params: { preset: 'tools', scopes: ['read:type'] } },
+    });
+
+    reply = () => ({ token: 't', client_id: 'c1', scopes: ['read:document:/'] });
+    await solx.auth.issueClient('laptop', undefined, { preset: 'read-only' });
+    expect(last()).toMatchObject({
+      args: { name: 'issue-client', params: { label: 'laptop', preset: 'read-only' } },
+    });
+
     reply = () => ({ clients: [{ id: 'c1' }] });
     await expect(solx.auth.listClients()).resolves.toEqual([{ id: 'c1' }]);
     expect(last()).toMatchObject({ args: { name: 'list-clients', params: {} } });

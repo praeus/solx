@@ -13,6 +13,7 @@ import type {
   ConnectCode,
   ExclusionLists,
   PackageResult,
+  ScopePreset,
   SolxConfigFile,
   TlsCert,
   TlsResult,
@@ -23,6 +24,7 @@ import { ChipTagInput } from "../components/ChipTagInput";
 import { JsonEditField } from "../components/JsonEditField";
 import { getTauri, restartApp, revealCertsFolder } from "../api/connection";
 import { useActionPaths, useDocumentPaths, useTypePaths } from "../api/hooks";
+import { describeScopes, PRESETS, SCOPE_SUGGESTIONS } from "../api/scopes";
 import {
   globMatches,
   isLoopbackHost,
@@ -1321,8 +1323,27 @@ function formatDate(iso: string | null): string {
 /** Remembers the last "Address for the link" in this window. */
 const LINK_ADDRESS_KEY = "solx.connectLinkAddress";
 
+const SCOPE_DATALIST_ID = "config-scope-suggestions";
+
+/** Why a token's scopes don't hold yet, under `scope_enforcement`; `null` once they do. */
+function enforcementNote(mode: ConfigView["effective"]["scope_enforcement"]): string | null {
+  switch (mode) {
+    case "enforce":
+      return null;
+    case "off":
+      return 'Scopes aren\'t checked yet (scope_enforcement is "off"): every device can do everything.';
+    default:
+      return (
+        'Scopes are only logged for now (scope_enforcement is "audit"): a device can still do everything, and ' +
+        "solx scopes audit shows what it would be refused."
+      );
+  }
+}
+
 function DevicesView({ view }: SectionEditorProps<null>) {
   const [label, setLabel] = useState("");
+  const [access, setAccess] = useState<ScopePreset | "custom">("full");
+  const [customScopes, setCustomScopes] = useState<string[]>([]);
   const [linkAddress, setLinkAddress] = useState(() => {
     try {
       return localStorage.getItem(LINK_ADDRESS_KEY) ?? "";
@@ -1368,13 +1389,26 @@ function DevicesView({ view }: SectionEditorProps<null>) {
     if (code && remaining === 0) setCode(null);
   }, [code, remaining]);
 
+  const chooseAccess = (next: ScopePreset | "custom") => {
+    // Custom starts from the preset it replaces, to narrow or add to.
+    if (next === "custom" && access !== "custom" && !customScopes.length) {
+      setCustomScopes([...(PRESETS.find((p) => p.id === access)?.scopes ?? [])]);
+    }
+    setAccess(next);
+  };
+
   const create = async () => {
+    if (access === "custom" && !customScopes.length) {
+      setError("Add at least one scope, or choose a preset.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       const next = await getTauri().auth.createConnectCode({
         label: label.trim() || undefined,
         publicUrl: linkAddress.trim() || undefined,
+        ...(access === "custom" ? { scopes: customScopes } : { preset: access }),
       });
       setNow(Date.now());
       setCode(next);
@@ -1447,6 +1481,44 @@ function DevicesView({ view }: SectionEditorProps<null>) {
           {code ? "New code" : "Create connect code"}
         </button>
       </div>
+      <div className="dialog__field">
+        <span className="dialog__label">What the device may do</span>
+        <div className="config-rows">
+          {[...PRESETS, { id: "custom" as const, label: "Custom", hint: "Only the scopes listed below." }].map((p) => (
+            <label className="config-check" key={p.id}>
+              <input
+                type="radio"
+                name="device-access"
+                checked={access === p.id}
+                onChange={() => chooseAccess(p.id)}
+              />
+              <span>
+                {p.label} <span className="dialog__hint">{p.hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        {access === "custom" && (
+          <>
+            <ChipTagInput
+              chips={customScopes}
+              onChange={setCustomScopes}
+              placeholder="read:document:/notes/*, exec:/packages/solx-google/*"
+              datalistId={SCOPE_DATALIST_ID}
+              datalistOptions={[...SCOPE_SUGGESTIONS]}
+            />
+            <span className="dialog__hint">
+              <code>read:</code> or <code>write:</code> with <code>document</code>, <code>type</code>,{" "}
+              <code>action</code> or <code>file</code>, optionally followed by <code>:/path/*</code>;{" "}
+              <code>exec:/path/*</code> to run actions; <code>write:script</code> and the other kinds to save
+              actions of that kind. The device's token gets exactly these, fixed when the code is made.
+            </span>
+          </>
+        )}
+        {enforcementNote(view.effective.scope_enforcement) && (
+          <span className="dialog__hint">{enforcementNote(view.effective.scope_enforcement)}</span>
+        )}
+      </div>
       <Field
         label="Address for the link (optional)"
         view={view}
@@ -1499,6 +1571,7 @@ function DevicesView({ view }: SectionEditorProps<null>) {
               </button>
             </span>
           )}
+          <span className="dialog__hint">Access: {describeScopes(code.scopes)}</span>
           <span className="dialog__hint">
             Expires in {formatCountdown(remaining)}. It works once, and anyone who has it can connect until then.
           </span>
@@ -1530,6 +1603,7 @@ function DevicesView({ view }: SectionEditorProps<null>) {
                 Connected {formatDate(c.created_at)} · last used {formatDate(c.last_used_at)} · expires{" "}
                 {formatDate(c.expires_at)}
               </span>
+              <span className="dialog__hint">Access: {describeScopes(c.scopes)}</span>
               {confirming === c.id && (
                 <div className="config-warning">
                   Revoke this device's token? Its next request is refused, and it needs a new code to reconnect.
@@ -1562,7 +1636,8 @@ const devices: SectionDef<null> = {
   description: (
     <>
       Give another computer, browser or MCP client a token of its own: create a code here and enter it there (or
-      run <code>solx token connect-code</code> on this machine). Each device can be revoked on its own.
+      run <code>solx token connect-code</code> on this machine). Choose what the device may do before making the
+      code; each device can be revoked on its own.
     </>
   ),
   fromConfig: () => null,

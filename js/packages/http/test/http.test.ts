@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { SolxError } from '@solx/surface';
-import { connectHttp, type HttpSolx } from '../src/index.js';
+import { connectHttp, whoami, type HttpSolx } from '../src/index.js';
 
 const TOKEN = 'test-token';
 const NOW = '2026-01-01T00:00:00Z';
@@ -24,6 +24,7 @@ interface Received {
 
 let server: Server;
 let solx: HttpSolx;
+let baseUrl: string;
 /** Every request the server saw, in order. */
 const seen: Received[] = [];
 /** Set by a test to override the next response. */
@@ -85,7 +86,8 @@ beforeAll(async () => {
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
-  solx = connectHttp(`http://127.0.0.1:${port}`, TOKEN);
+  baseUrl = `http://127.0.0.1:${port}`;
+  solx = connectHttp(baseUrl, TOKEN);
 });
 
 afterAll(async () => {
@@ -279,6 +281,19 @@ describe('files', () => {
     const paths = await solx.files.list('media');
     expect(paths).toEqual(['media/pic.png']);
     expect(last().url).toBe('/files?prefix=media');
+  });
+});
+
+describe('whoami', () => {
+  test("GETs /auth/whoami with the token and returns the body", async () => {
+    const body = { kind: 'client', id: 'c1', label: 'laptop', scopes: ['read:document:/'], scope_enforcement: 'audit' };
+    nextResponse = (res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(body));
+    };
+    await expect(whoami(baseUrl, TOKEN)).resolves.toEqual(body);
+    expect(last().method).toBe('GET');
+    expect(last().url).toBe('/auth/whoami');
   });
 });
 

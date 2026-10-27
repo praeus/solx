@@ -563,6 +563,17 @@
 .settings-panel__status-dot.ok { background: var(--success); }
 .settings-panel__status-dot.err { background: var(--danger); }
 
+/* Under the status line, in the same strip: what this browser's token may do. */
+.settings-panel__status:has(+ .settings-panel__access) {
+  border-bottom: none;
+}
+
+.settings-panel__access {
+  padding: 0 16px 10px 32px;
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--border);
+}
+
 .settings-panel__body {
   flex: 1;
   overflow-y: auto;
