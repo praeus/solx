@@ -269,6 +269,36 @@ async fn last_used_is_written_at_most_once_a_minute() {
 
 // ── connect codes ────────────────────────────────────────────────────────────
 
+/// A scoped code's token holds exactly its scopes, and `list-clients`
+/// reports them; an unscoped code's token holds `all`.
+#[tokio::test]
+async fn a_scoped_code_redeems_for_a_scoped_token() {
+    let (_d, r) = setup().await;
+    let scopes = ScopeSet::parse(["read:document:/notes/*", "exec:/*"]).unwrap();
+    let code = r
+        .create_scoped_connect_code(Some("phone"), None, None, None, &scopes)
+        .await
+        .unwrap();
+    let issued = r.redeem(&code.code).await.unwrap();
+    let principal = r.authenticate(&issued.token).await.unwrap();
+    assert_eq!(
+        principal.grant(),
+        &solx_surface::Grant::scoped(scopes.clone())
+    );
+
+    let plain = r.create_connect_code(None, None, None, None).await.unwrap();
+    let plain = r.redeem(&plain.code).await.unwrap();
+    let principal = r.authenticate(&plain.token).await.unwrap();
+    assert_eq!(
+        principal.grant(),
+        &solx_surface::Grant::scoped(ScopeSet::all())
+    );
+
+    let clients = r.list_clients().await.unwrap();
+    let phone = clients.iter().find(|c| c.id == issued.client_id).unwrap();
+    assert_eq!(phone.scopes, scopes);
+}
+
 #[tokio::test]
 async fn a_code_redeems_once_for_a_working_client_token() {
     let (_d, r) = setup().await;

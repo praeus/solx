@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use solx_surface::internal_actions::{
     InternalActionHandler, InternalActionRegistry, InternalCallCtx, SeedAction,
 };
-use solx_surface::Principal;
+use solx_surface::{Principal, ScopeSet};
 
 use crate::Registry;
 
@@ -62,6 +62,28 @@ fn opt_str<'a>(params: &'a Value, field: &str) -> Option<&'a str> {
     params.get(field).and_then(Value::as_str)
 }
 
+/// The scopes a new token is to hold: `scopes` (a list of scope strings)
+/// and `preset` (`read-only`, `tools`, `editor` or `full`), expanded
+/// together. `None` when neither is given: the token holds `all`, as before
+/// scopes existed.
+fn opt_scopes(params: &Value) -> Result<Option<ScopeSet>, String> {
+    let scopes = match params.get("scopes") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            v.as_array()
+                .and_then(|items| items.iter().map(Value::as_str).collect::<Option<Vec<_>>>())
+                .ok_or("scopes must be a list of scope strings")?,
+        ),
+    };
+    let preset = opt_str(params, "preset");
+    if scopes.is_none() && preset.is_none() {
+        return Ok(None);
+    }
+    ScopeSet::expand(scopes.unwrap_or_default(), preset)
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
 fn opt_secs(params: &Value, field: &str) -> Result<Option<Duration>, String> {
     match params.get(field) {
         None | Some(Value::Null) => Ok(None),
@@ -79,21 +101,29 @@ impl InternalActionHandler for AuthHandler {
         let r = &self.registry;
         let result = match self.op {
             Op::CreateConnectCode => {
-                let code = r
-                    .create_connect_code(
-                        opt_str(params, "label"),
-                        opt_secs(params, "code_ttl_secs")?,
-                        opt_secs(params, "token_ttl_secs")?,
-                        opt_str(params, "public_url"),
-                    )
-                    .await
-                    .map_err(|e| e.to_string())?;
+                let label = opt_str(params, "label");
+                let code_ttl = opt_secs(params, "code_ttl_secs")?;
+                let token_ttl = opt_secs(params, "token_ttl_secs")?;
+                let public_url = opt_str(params, "public_url");
+                let scopes = opt_scopes(params)?;
+                let code = match &scopes {
+                    Some(scopes) => {
+                        r.create_scoped_connect_code(label, code_ttl, token_ttl, public_url, scopes)
+                            .await
+                    }
+                    None => {
+                        r.create_connect_code(label, code_ttl, token_ttl, public_url)
+                            .await
+                    }
+                }
+                .map_err(|e| e.to_string())?;
                 json!({
                     "display_code": code.display_code,
                     "url": code.url,
                     "server_url": code.server_url,
                     "tls_pin": code.tls_pin,
                     "expires_at": code.expires_at,
+                    "scopes": scopes.unwrap_or_else(ScopeSet::all),
                 })
             }
             Op::ListClients => {
@@ -105,13 +135,14 @@ impl InternalActionHandler for AuthHandler {
                 json!({ "revoked": id })
             }
             Op::IssueClient => {
-                let issued = r
-                    .issue_client(
-                        opt_str(params, "label"),
-                        opt_secs(params, "token_ttl_secs")?,
-                    )
-                    .await
-                    .map_err(|e| e.to_string())?;
+                let label = opt_str(params, "label");
+                let ttl = opt_secs(params, "token_ttl_secs")?;
+                let scopes = opt_scopes(params)?;
+                let issued = match &scopes {
+                    Some(scopes) => r.issue_scoped_client(label, ttl, scopes).await,
+                    None => r.issue_client(label, ttl).await,
+                }
+                .map_err(|e| e.to_string())?;
                 // The address to give the client, with the pin it should
                 // hold, so a token handed over by hand is pinned too.
                 let public_url = r.public_url();
@@ -127,6 +158,7 @@ impl InternalActionHandler for AuthHandler {
                     "expires_at": issued.expires_at,
                     "server_url": server_url,
                     "tls_pin": tls_pin,
+                    "scopes": scopes.unwrap_or_else(ScopeSet::all),
                 })
             }
         };
@@ -150,12 +182,12 @@ pub fn seed_actions() -> Vec<SeedAction> {
         seed(
             "create-connect-code",
             "auth-create-connect-code",
-            "Root only. Create a single-use 8-digit connect code another device redeems for its own client token. Params: label?, code_ttl_secs? (default 600), token_ttl_secs?, public_url? (the address to put in the link instead of server_public_url, e.g. a Tailscale IP; a bare host gets this server's port). Returns display_code, url, server_url, expires_at.",
+            "Root only. Create a single-use 8-digit connect code another device redeems for its own client token. Params: label?, code_ttl_secs? (default 600), token_ttl_secs?, public_url? (the address to put in the link instead of server_public_url, e.g. a Tailscale IP; a bare host gets this server's port), scopes? (scope strings the redeemed token holds), preset? (read-only, tools, editor or full; added to scopes). With neither scopes nor preset the token holds all. Returns display_code, url, server_url, expires_at, scopes.",
         ),
         seed(
             "list-clients",
             "auth-list-clients",
-            "Root only. List working client tokens: ids, labels and timestamps, never the tokens.",
+            "Root only. List working client tokens: ids, labels, timestamps and scopes, never the tokens.",
         ),
         seed(
             "revoke-client",
@@ -165,7 +197,7 @@ pub fn seed_actions() -> Vec<SeedAction> {
         seed(
             "issue-client",
             "auth-issue-client",
-            "Root only. Mint a client token directly. Params: label, token_ttl_secs?. Returns token, client_id, expires_at.",
+            "Root only. Mint a client token directly. Params: label, token_ttl_secs?, scopes? (scope strings it holds), preset? (read-only, tools, editor or full; added to scopes). With neither scopes nor preset it holds all. Returns token, client_id, expires_at, scopes.",
         ),
     ]
 }

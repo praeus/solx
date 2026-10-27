@@ -195,6 +195,32 @@ async fn single_document_routes_follow_read_and_write_scopes() {
     );
 }
 
+/// `whoami` reports what the token is and holds: root unlimited (`null`), a
+/// client its scopes, and whether they are enforced.
+#[tokio::test]
+async fn whoami_reports_the_tokens_scopes() {
+    let s = spawn_server("enforce").await;
+    let root = s.get_json(&s.root, "/auth/whoami").await;
+    assert_eq!(root["kind"], "root", "{root}");
+    assert_eq!(root["scopes"], Value::Null, "{root}");
+    assert_eq!(root["scope_enforcement"], "enforce", "{root}");
+
+    // Any token may ask, even one holding nothing else.
+    let narrow = s.token(&["read:type", "exec:/builtin/web/*"]).await;
+    let me = s.get_json(&narrow, "/auth/whoami").await;
+    assert_eq!(me["kind"], "client", "{me}");
+    assert_eq!(
+        me["scopes"],
+        json!(["exec:/builtin/web/*", "read:type"]),
+        "{me}"
+    );
+    assert_eq!(
+        s.status("not-a-token", Method::GET, "/auth/whoami", None)
+            .await,
+        401
+    );
+}
+
 /// A Command child's token, as the registry issues it, holds exactly its
 /// action's scopes: allowed inside them, 403 outside, and refused
 /// everything when the action declares none.

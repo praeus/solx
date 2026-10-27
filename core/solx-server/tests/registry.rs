@@ -180,6 +180,67 @@ async fn issue_client_mints_a_working_token() {
     .await;
     let token = issued["result"]["token"].as_str().unwrap();
     assert_eq!(status_with(&s, token).await, 200);
+    assert_eq!(issued["result"]["scopes"], json!(["all"]), "{issued}");
+}
+
+/// `scopes` and `preset` decide what a minted or redeemed token holds, and
+/// a bad scope is refused before anything is stored.
+#[tokio::test]
+async fn issued_and_redeemed_tokens_hold_the_scopes_asked_for() {
+    let s = spawn_server().await;
+    let whoami = |token: String| {
+        let base = s.base.clone();
+        async move {
+            let res = http()
+                .get(format!("{base}/auth/whoami"))
+                .bearer_auth(token)
+                .send()
+                .await
+                .unwrap();
+            ok_json(res).await["scopes"].clone()
+        }
+    };
+
+    let issued = ok_json(
+        auth_builtin(
+            &s,
+            &s.root,
+            "issue-client",
+            json!({ "label": "ci", "preset": "tools", "scopes": ["read:type"] }),
+        )
+        .await,
+    )
+    .await;
+    let expected = json!(["exec:/*", "read:action", "read:type"]);
+    assert_eq!(issued["result"]["scopes"], expected, "{issued}");
+    let token = issued["result"]["token"].as_str().unwrap().to_string();
+    assert_eq!(whoami(token).await, expected);
+
+    let created = ok_json(
+        auth_builtin(
+            &s,
+            &s.root,
+            "create-connect-code",
+            json!({ "scopes": ["read:document:/notes/*"] }),
+        )
+        .await,
+    )
+    .await;
+    let code = created["result"]["display_code"].as_str().unwrap();
+    let exchanged = ok_json(exchange(&s, code).await).await;
+    let token = exchanged["token"].as_str().unwrap().to_string();
+    assert_eq!(whoami(token).await, json!(["read:document:/notes/*"]));
+
+    for bad in [
+        json!({ "scopes": ["read:nothing"] }),
+        json!({ "preset": "most" }),
+    ] {
+        let res = auth_builtin(&s, &s.root, "issue-client", bad.clone()).await;
+        let body: Value = res.json().await.unwrap();
+        assert_ne!(body["success"], json!(true), "{bad}: {body}");
+    }
+    let listed = ok_json(auth_builtin(&s, &s.root, "list-clients", json!({})).await).await;
+    assert_eq!(listed["result"]["clients"].as_array().unwrap().len(), 2);
 }
 
 #[tokio::test]

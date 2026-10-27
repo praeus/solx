@@ -246,12 +246,42 @@ impl Registry {
     /// server's port, and `https://` when it serves TLS. It only shapes
     /// what is shown: the code redeems at any address the server answers
     /// on.
+    ///
+    /// The token it redeems for holds `all`; see
+    /// [`Self::create_scoped_connect_code`].
     pub async fn create_connect_code(
         &self,
         label: Option<&str>,
         code_ttl: Option<Duration>,
         token_ttl: Option<Duration>,
         public_url: Option<&str>,
+    ) -> Result<ConnectCode> {
+        self.create_code(label, code_ttl, token_ttl, public_url, None)
+            .await
+    }
+
+    /// [`Self::create_connect_code`] for a code whose token holds only
+    /// `scopes`.
+    pub async fn create_scoped_connect_code(
+        &self,
+        label: Option<&str>,
+        code_ttl: Option<Duration>,
+        token_ttl: Option<Duration>,
+        public_url: Option<&str>,
+        scopes: &ScopeSet,
+    ) -> Result<ConnectCode> {
+        let scopes = Some(scopes_column(scopes));
+        self.create_code(label, code_ttl, token_ttl, public_url, scopes)
+            .await
+    }
+
+    async fn create_code(
+        &self,
+        label: Option<&str>,
+        code_ttl: Option<Duration>,
+        token_ttl: Option<Duration>,
+        public_url: Option<&str>,
+        scopes: Option<String>,
     ) -> Result<ConnectCode> {
         let base = match public_url.map(str::trim).filter(|u| !u.is_empty()) {
             Some(u) => {
@@ -295,9 +325,16 @@ impl Registry {
             let inserted = conn
                 .execute(
                     "INSERT OR IGNORE INTO connect_codes \
-                     (code_hash, label, token_ttl_secs, created_at, expires_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    libsql::params![hash, label.clone(), token_ttl.map(secs), now, expires_at],
+                     (code_hash, label, token_ttl_secs, created_at, expires_at, scopes) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    libsql::params![
+                        hash,
+                        label.clone(),
+                        token_ttl.map(secs),
+                        now,
+                        expires_at,
+                        scopes.clone()
+                    ],
                 )
                 .await
                 .map_err(map_db)?;

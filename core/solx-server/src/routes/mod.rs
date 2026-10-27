@@ -7,6 +7,7 @@ pub mod files;
 pub mod mcp;
 pub mod refs;
 pub mod types;
+pub mod whoami;
 
 use axum::Router;
 
@@ -24,5 +25,6 @@ pub fn router(state: &AppState) -> Router<AppState> {
         .merge(docs::router())
         .merge(actions::router())
         .merge(files::router())
+        .merge(whoami::router())
         .merge(mcp::router(state.app.clone()))
 }

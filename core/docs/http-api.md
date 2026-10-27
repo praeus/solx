@@ -25,6 +25,17 @@ options ride in the query string, and the HTTP method carries the verb.
     command as `SOLX_SERVER_TOKEN` and revoked when it ends.
 
   A rejected token is a `401` with the usual `{kind, message}` body.
+
+  Client and action tokens hold **scopes** (`read:document`,
+  `exec:/builtin/web/*`, ...; see
+  [token-scopes-plan.md](token-scopes-plan.md)). A client token holds the
+  scopes it was issued with, `all` when none were given; an action token
+  holds its action's declared scopes. A call they don't cover is a `403`
+  `forbidden` under `scope_enforcement: "enforce"`; under `"audit"`, the
+  default for now, it is allowed and recorded for `solx scopes audit`. A
+  list, search or path facet is narrowed to what the token may read rather
+  than refused. The root token holds every scope. `GET /auth/whoami` says
+  what the presented token holds.
 - **CORS** — on a loopback bind, permissive, so a browser page can call the
   server directly. On any other bind, only the origins listed in the config's
   `server_cors_origins` are allowed (none by default). Either way, the bearer
@@ -159,8 +170,12 @@ pages without submitting forms, so they can't spend a code.
 
 Codes and client tokens are created by four root-only actions under
 `/builtin/auth`: `create-connect-code {label?, code_ttl_secs?,
-token_ttl_secs?, public_url?}`, `list-clients`, `revoke-client {id}` and
-`issue-client {label, token_ttl_secs?}`. With `server_tls: "auto"`, a
+token_ttl_secs?, public_url?, scopes?, preset?}`, `list-clients`,
+`revoke-client {id}` and `issue-client {label, token_ttl_secs?, scopes?,
+preset?}`. `scopes` is a list of scope strings and `preset` one of
+`read-only`, `tools`, `editor` or `full`, added to them; with neither, the
+token holds `all`. Both return the resulting `scopes`, and `list-clients`
+reports each client's. With `server_tls: "auto"`, a
 connect code's `url` ends in `&pin=<pin>` and it has a `tls_pin`, and
 `issue-client` returns `tls_pin` and a `server_url` with `#pin=`, so a
 token handed over by hand is pinned too. They refuse every caller except the
@@ -174,7 +189,9 @@ A request with `X-Solx-Principal: none` runs with no principal instead, as a
 local call would. `solx-client`'s `exec` always sends it (only `exec_for`
 doesn't), so the CLI and the `.solx` scripts it runs can't reach the
 root-only actions just because they present the loopback root token. The
-header can only drop a principal, never grant one.
+header can only drop a principal, never grant one, and it is honoured for the
+root token only: a client or action token keeps its principal, and so its
+scopes, whatever it sends.
 
 ## Entity references in the URL
 
@@ -323,6 +340,7 @@ is rejected by the file store.
 | Method | Route | Notes |
 | --- | --- | --- |
 | `GET` | `/health` | Unauthenticated. Returns `{status, version, commit, commit_date}`. |
+| `GET` | `/auth/whoami` | Any token. Returns `{kind, scopes, scope_enforcement}`, plus `id` and `label` for a client token and `action` and `invocation_id` for an action token. `kind` is `root`, `client` or `action`; `scopes` is `null` for the root token, which no scope limits. |
 | `POST`/`GET`/`DELETE` | `/mcp` | MCP Streamable HTTP transport, same auth gate. |
 
 ## Errors
@@ -339,6 +357,8 @@ Every error response body is the tagged error itself:
 | `invalid` | 400 |
 | `validation` | 422 |
 | `conflict` | 409 |
+| `unauthorized` | 401 |
+| `forbidden` | 403 |
 | `io`, `db`, `exec`, `config`, `other` | 500 |
 
 A malformed reference (a forbidden character, a `.`/`..` segment, a missing

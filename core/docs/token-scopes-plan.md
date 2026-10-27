@@ -626,7 +626,12 @@ default; audit mode is how they're found.
        mcp-actions and firefox under `enforce` (every scope parses and is
        covered), and by running ollama's actions under `enforce`.
 5. **Issuing and UI.**
-   - `--scope`/`--preset` on the CLI, builtin parameters, `whoami`.
+   - ✅ `scopes` and `preset` on `issue-client` and `create-connect-code`
+     (`Registry::issue_scoped_client`, `create_scoped_connect_code`), both
+     returning the resulting `scopes`; neither given means `all`. `--scope`
+     (repeatable) and `--preset` on `solx token issue` and `solx token
+     connect-code`. `GET /auth/whoami` (`{kind, scopes, scope_enforcement}`,
+     `scopes: null` for root), for any token.
    - Desktop and web preset picker, and scopes shown in the client list.
 6. **Enforce and document.**
    - Flip the default to `enforce`.

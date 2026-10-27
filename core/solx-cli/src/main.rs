@@ -146,6 +146,8 @@ enum TokenAction {
         /// or host name (which gets `http://` and the server's port).
         #[arg(long, value_name = "URL|HOST")]
         url: Option<String>,
+        #[command(flatten)]
+        scopes: ScopeArgs,
     },
     /// List client tokens that still work (never the tokens themselves).
     Clients,
@@ -160,7 +162,35 @@ enum TokenAction {
         /// `client_token_ttl_days`, 90 days).
         #[arg(long, value_name = "SECS")]
         ttl: Option<u64>,
+        #[command(flatten)]
+        scopes: ScopeArgs,
     },
+}
+
+/// What a new client token may do. With neither option it holds `all`, as
+/// tokens did before scopes existed.
+#[derive(clap::Args)]
+struct ScopeArgs {
+    /// A scope the token holds (`read:document`, `exec:/builtin/web/*`, ...).
+    /// Repeatable.
+    #[arg(long = "scope", value_name = "SCOPE")]
+    scopes: Vec<String>,
+    /// A named bundle added to the scopes: read-only, tools, editor or full.
+    #[arg(long)]
+    preset: Option<String>,
+}
+
+impl ScopeArgs {
+    /// Merge into a built-in's params, leaving both out when neither was
+    /// given.
+    fn add_to(self, params: &mut Value) {
+        if !self.scopes.is_empty() {
+            params["scopes"] = json!(self.scopes);
+        }
+        if let Some(preset) = self.preset {
+            params["preset"] = json!(preset);
+        }
+    }
 }
 
 #[tokio::main]
@@ -475,21 +505,24 @@ async fn run_token(action: TokenAction) -> Result<Value> {
             ttl,
             token_ttl,
             url,
-        } => (
-            "create-connect-code",
-            json!({
+            scopes,
+        } => {
+            let mut params = json!({
                 "label": label,
                 "code_ttl_secs": ttl,
                 "token_ttl_secs": token_ttl,
                 "public_url": url,
-            }),
-        ),
+            });
+            scopes.add_to(&mut params);
+            ("create-connect-code", params)
+        }
         TokenAction::Clients => ("list-clients", json!({})),
         TokenAction::Revoke { id } => ("revoke-client", json!({ "id": id })),
-        TokenAction::Issue { label, ttl } => (
-            "issue-client",
-            json!({ "label": label, "token_ttl_secs": ttl }),
-        ),
+        TokenAction::Issue { label, ttl, scopes } => {
+            let mut params = json!({ "label": label, "token_ttl_secs": ttl });
+            scopes.add_to(&mut params);
+            ("issue-client", params)
+        }
     };
     run_auth_builtin(name, params).await
 }
