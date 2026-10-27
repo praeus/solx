@@ -195,6 +195,54 @@ async fn single_document_routes_follow_read_and_write_scopes() {
     );
 }
 
+/// A Command child's token, as the registry issues it, holds exactly its
+/// action's scopes: allowed inside them, 403 outside, and refused
+/// everything when the action declares none.
+#[tokio::test]
+async fn an_action_token_is_held_to_its_actions_scopes() {
+    use solx_surface::auth::TokenAuthority;
+
+    let s = spawn_server("enforce").await;
+    // The credential is kept, not just its token: dropping it revokes the
+    // token, as it does when a Command run ends.
+    let issue = |scopes: &'static [&'static str]| {
+        let registry = s.app.registry().unwrap();
+        async move {
+            registry
+                .issue_action_token(
+                    "/t/a",
+                    "inv",
+                    std::time::Duration::from_secs(60),
+                    &ScopeSet::parse(scopes).unwrap(),
+                )
+                .await
+                .unwrap()
+        }
+    };
+
+    let scoped_credential = issue(&["read:document:/notes/*"]).await;
+    let scoped = scoped_credential.token.clone();
+    assert_eq!(
+        s.status(&scoped, Method::GET, "/docs/notes/a", None).await,
+        200
+    );
+    let refused = s.send(&scoped, Method::GET, "/docs/private/c", None).await;
+    assert_eq!(refused.status(), 403);
+    let body: Value = refused.json().await.unwrap();
+    assert!(
+        body["message"].as_str().unwrap().contains("action /t/a"),
+        "{body}"
+    );
+
+    let none_credential = issue(&[]).await;
+    let none = none_credential.token.clone();
+    assert_eq!(
+        s.status(&none, Method::GET, "/docs/notes/a", None).await,
+        403
+    );
+    assert_eq!(s.status(&none, Method::GET, "/docs", None).await, 403);
+}
+
 #[tokio::test]
 async fn lists_narrow_and_a_list_with_no_grant_is_refused() {
     let s = spawn_server("enforce").await;

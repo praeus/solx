@@ -159,6 +159,54 @@ async fn each_call_is_checked_against_whoever_makes_it() {
     m.exec("/builtin/test", "grant", json!({})).await.unwrap();
 }
 
+/// `action-start` is checked like a direct call: the client needs exec on
+/// the action, refused before any run starts, and the detached run's own
+/// nested calls are checked against the action, not the client.
+#[tokio::test]
+#[serial_test::serial]
+async fn a_detached_run_is_checked_like_a_direct_one() {
+    solx_actions::set_long_lived_host(true);
+    let (_d, m, files) = wired("enforce").await;
+    save_script(
+        &m,
+        &files,
+        "scoped",
+        "exec /builtin/test/grant",
+        Some(&["exec:/builtin/test/*"]),
+    )
+    .await;
+    save_script(&m, &files, "bare", "exec /builtin/test/grant", None).await;
+    async fn start(
+        m: &LocalActionManager,
+        name: &str,
+        scopes: &[&str],
+    ) -> solx_surface::Result<Value> {
+        let ctx = solx_surface::ExecContext::for_principal(client(scopes));
+        m.start_invocation("/t", name, json!({}), ctx.info()).await
+    }
+    async fn finish(m: &LocalActionManager, started: Value) -> Value {
+        let id = started["invocation_id"].as_str().unwrap();
+        m.poll_invocation(id, Some(30)).await.unwrap()
+    }
+
+    let refused = start(&m, "scoped", &["exec:/x/*"]).await;
+    assert!(
+        matches!(refused, Err(SolxError::Forbidden(_))),
+        "{refused:?}"
+    );
+
+    let ok = finish(&m, start(&m, "scoped", &["exec:/t/*"]).await.unwrap()).await;
+    assert_eq!(ok["status"], "ok", "{ok}");
+
+    let bare = finish(&m, start(&m, "bare", &["exec:/t/*"]).await.unwrap()).await;
+    assert_ne!(bare["status"], "ok", "{bare}");
+    assert!(
+        bare.to_string().contains("exec:/builtin/test/grant"),
+        "{bare}"
+    );
+    solx_actions::set_long_lived_host(false);
+}
+
 /// A package's action may call its own package's actions without declaring
 /// it, and nothing else.
 #[tokio::test]

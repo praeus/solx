@@ -2,9 +2,10 @@
 
 Status: **In progress.** Steps 1 (the scope types, `solx_surface::scope`),
 2 (plumbing: every principal, frame and actor carries its grant) and 3 (the
-checks, under `scope_enforcement`, default `audit`) have landed, and step 4's
-core half (manifest scopes, the own-package `exec`, `solx action scopes` and
-`solx scopes audit`); the packages' own manifests are next. This is the
+checks, under `scope_enforcement`, default `audit`) and 4 (packages: manifest
+scopes, the own-package `exec`, `solx action scopes`, `solx scopes audit`,
+and every package's declared scopes) have landed. Next is step 5, issuing
+scoped client tokens, then step 6, enforcing by default. This is the
 follow-on that
 [token-registry-plan.md](token-registry-plan.md) calls "authorization that the
 principal makes possible", and it closes the first gap in SECURITY.md's "What
@@ -86,7 +87,11 @@ parameters must not let a caller aim it elsewhere. SECURITY.md should say so.
 
 ## Where things stand
 
-What this plan builds on, all present at the baseline:
+What this plan builds on, all present at the baseline. The paths are the
+baseline's: `solx-actions` has since been split into modules, so
+`content.rs` is now `guard/content.rs`, `exec.rs` is `exec/command.rs` and
+`exec/webhook.rs`, and `secret_config.rs` is `secrets/config.rs`. The scope
+checks live in `guard/scope.rs` (`ScopeCheck`).
 
 | Piece | Where | What it does today |
 |---|---|---|
@@ -232,10 +237,9 @@ preset later never widens an existing token.
   client tokens keep working; a value that no longer parses grants nothing.
   `redeem` copies a code's scopes onto its token, action tokens store the
   action's declared scopes, and `list-clients` returns each token's scopes.
-- **`action_config.scopes`**: a list of scope strings, validated and
-  normalised in `secret_config::normalize` beside `secrets` (rename the module
-  `config_guard` or similar while there). Anything but a list of valid scope
-  strings is refused.
+- **`action_config.scopes`**: a list of scope strings, validated and stored
+  canonical by `secrets::config::normalize`, beside `secrets`. Anything but a
+  list of valid scope strings is refused.
 
 ## What a scope check covers
 
@@ -429,9 +433,9 @@ which is allowed today.
 - **CLI.** `solx token issue --label laptop --scope read:document --scope
   exec:/packages/solx-google/*` and `solx token connect-code --preset tools`.
   `--scope` can be repeated.
-- **Granting an action scopes.** Operators set `action_config.scopes` in an
-  install script or with the CLI's action save. Add a convenience, `solx
-  action scopes <ref> --scope ...`, that shows and sets them.
+- **Granting an action scopes** (done in step 4). Operators set
+  `action_config.scopes` in an install script, or with `solx action scopes
+  <ref>`.
 - **Desktop and web.** "Connect another device" gets a preset picker and an
   "advanced" list of scope strings.
 - **Default when nothing is given: `full`** (`all`). This keeps today's
@@ -473,8 +477,10 @@ which is allowed today.
 
 ### Callback inventory
 
-What packages do today with `SOLX_SERVER_TOKEN`, found by grepping
-`solx-packages` for the env var and the REST routes:
+What packages did with `SOLX_SERVER_TOKEN` when this plan was written, found
+by grepping `solx-packages` for the env var and the REST routes. The scopes
+each package now declares, and the choices behind them, are in "Rollout",
+step 4.
 
 | Package | Calls | Scopes it needs |
 |---|---|---|
@@ -493,18 +499,19 @@ deputy for anyone who can exec it, but what it saves can't do anything on
 its own, so that is low risk. Drop the plan's earlier `scopes` build
 parameter.
 
-**Delegating tools.** `solx-agent` and `solx-inquiry` run whatever tools
-their caller asks for, so their fixed scopes are what any caller of them
-gets. Give them the narrowest `exec:` list that serves their purpose, and
-call out in SECURITY.md that granting a client `exec` on them grants their
-scopes.
+**Delegating tools.** `solx-agent` runs whatever tools its model picks, so
+its fixed scopes are what any caller of it gets; it was given broad scopes so
+those tools keep working. `solx-inquiry` turned out to call a fixed,
+read-mostly set. SECURITY.md must say that granting a client `exec` on either
+grants their scopes.
 
 **WASM and Script packages** (`solx-google`, `solx-ollama`,
 `solx-livejournal`, `solx-reddit`, `solx-facebook`, ...) don't hold a token.
 They make in-process nested calls (`http-request`, `get-secret`, `oauth-*`,
-...), which are checked against their declared scopes. Those calls are too
-spread out to inventory by grep, so **the audit mode produces this list**
-(below).
+...), which are checked against their declared scopes. The plan was to
+collect these under audit, but most of these packages need accounts to run,
+so their scopes were read from each guest's source instead. Audit mode
+remains the way to find what an operator's own actions need.
 
 ### Audit mode
 
@@ -528,8 +535,8 @@ A config key, `scope_enforcement: "off" | "audit" | "enforce"`:
   choice), and the package's manifest when it's a package action. It drops
   what the action's current scopes already grant. It reads this machine's
   log only, so it's run on the solx host.
-  Running each package's `verify.solx` and normal use under audit gives the
-  exact scope list to paste into each manifest.
+  Running an action's normal use under audit gives the exact scopes to
+  grant it, or to paste into a package's manifest.
 - **`enforce`**: a failed check is refused with 403.
 
 It is read live through `ConfigService`, like the allowlists, so no restart
@@ -628,6 +635,10 @@ default; audit mode is how they're found.
      note), `security-design.md`, `http-api.md` and the README.
 
 ## Tests
+
+All of these exist, in `solx-surface/src/scope.rs`,
+`solx-actions/tests/scope.rs`, `solx-actions/tests/command_credentials.rs`,
+`solx-server/tests/scopes.rs` and `solx-packages/tests/install_locks.rs`.
 
 - **`scope` unit tests** (step 1, done): parsing and display, strict errors,
   plain vs `/*` paths, case sensitivity, file paths, no implication, `covers`
