@@ -74,7 +74,11 @@ fn reveal_certs_folder(app: AppHandle) -> Result<(), String> {
 
 /// `app.restart()` spawns the new process before this one exits, so release
 /// the single-instance lock first or the new process would defer to us and quit.
+/// It exits without a `RunEvent::Exit`, so shut down here too: the new
+/// process can't start a background this one still holds.
 pub(crate) fn restart(app: &AppHandle) {
+    #[cfg(feature = "server")]
+    server::shutdown(app);
     std::env::set_var(RESTART_ENV, "1");
     #[cfg(desktop)]
     tauri_plugin_single_instance::destroy(app);

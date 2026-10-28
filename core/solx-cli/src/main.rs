@@ -218,7 +218,11 @@ async fn main() -> Result<()> {
         BinCommand::Scopes { op } => run_scopes(op).await?,
         BinCommand::Core(command) => {
             let app = build_app().await?;
-            run_command(&app, command, None).await?
+            let result = run_command(&app, command, None).await;
+            // Built local, this process hosted any backgrounds the command
+            // started; they go with it rather than with the job handle.
+            app.shutdown().await;
+            result?
         }
     };
     match result {

@@ -20,6 +20,10 @@ use tokio::sync::oneshot;
 /// Stops the embedded server (gracefully) when the app exits.
 struct Shutdown(Mutex<Option<oneshot::Sender<()>>>);
 
+/// The local `App`, when this process built one: its background commands
+/// stop when the app exits.
+struct LocalApp(Arc<solx_manager::App>);
+
 pub fn setup(app: &mut App) -> anyhow::Result<()> {
     // Detached (`action-start`) invocations need a host that outlives the
     // call that started them — true of this app, as of `solx-server`.
@@ -62,6 +66,7 @@ async fn start(handle: &AppHandle) -> anyhow::Result<()> {
     // Always local, like solx-server: never proxy to a stray `server_url`.
     let app = solx_manager::App::build_local().await.context("build local solx App")?;
     handle.plugin(solx_tauri_plugin::local(app.clone()))?;
+    handle.manage(LocalApp(app.clone()));
 
     if !app.config.server_embedded() {
         return Ok(());
@@ -131,11 +136,17 @@ fn server_tls(config: &ConfigService, addr: SocketAddr) -> anyhow::Result<Option
     Ok(Some(solx_server::tls::server_config(&source)?))
 }
 
+/// On the way out: stop the embedded server, and every background command
+/// this process runs. Blocks for up to `stop_grace_secs` while they exit,
+/// so call it from the main thread, never from inside the async runtime.
 pub fn shutdown(handle: &AppHandle) {
     if let Some(shutdown) = handle.try_state::<Shutdown>() {
         if let Some(tx) = shutdown.0.lock().unwrap().take() {
             let _ = tx.send(());
         }
+    }
+    if let Some(app) = handle.try_state::<LocalApp>() {
+        tauri::async_runtime::block_on(app.0.shutdown());
     }
 }
 

@@ -48,10 +48,13 @@ async fn main() -> anyhow::Result<()> {
         Some(url) => tracing::info!("attached to solx host at {url}"),
         None => tracing::info!("no solx host running; using local storage"),
     }
-    let service = SolxMcpServer::new(app, path_prefix)
+    let service = SolxMcpServer::new(app.clone(), path_prefix)
         .serve(stdio())
         .await
         .inspect_err(|e| tracing::error!("serve error: {e:?}"))?;
-    service.waiting().await?;
+    let served = service.waiting().await;
+    // Built local, this process hosted any backgrounds its calls started.
+    app.shutdown().await;
+    served?;
     Ok(())
 }

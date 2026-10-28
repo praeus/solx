@@ -367,6 +367,18 @@ async fn build_authority(config: &Arc<ConfigService>) -> Result<BuiltAuthority> 
 }
 
 impl App {
+    /// Stop what this process hosts before it exits: every running
+    /// background command, each given `stop_grace_secs` to exit on
+    /// `shutdown`. Hosts call it on their way out; a background that
+    /// outlives it anyway (a hard kill) goes with its containment. A no-op
+    /// for a remote app, whose backgrounds belong to the server.
+    pub async fn shutdown(&self) {
+        #[cfg(feature = "local")]
+        if let Some(local) = &self.local_actions {
+            local.stop_backgrounds().await;
+        }
+    }
+
     /// Refuse a write or delete of any of `targets` that `actor` may not
     /// make: for content, a locked action's pinned artifact. See
     /// `solx_actions::LocalActionManager::authorize_file_change`. A no-op

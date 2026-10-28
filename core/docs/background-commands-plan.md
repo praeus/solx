@@ -1,9 +1,9 @@
 # Background commands — design plan
 
 Status: **In progress** (2026-10-28), on the `background-commands` branch.
-Steps 1–4 are implemented and tested (`solx-actions/tests/background.rs`),
+Steps 1–5 are implemented (1–4 tested in `solx-actions/tests/background.rs`),
 and step 6 on the `background-commands` branch of solx-packages
-(`solx-package-lib/src/background.rs`); steps 5, 7 and 8 are not started.
+(`solx-package-lib/src/background.rs`); steps 7 and 8 are not started.
 
 ## Goal
 
@@ -258,9 +258,13 @@ the host must enforce them in-process:
    start/stop, and process containment. Tests run against a fake background.
 4. **Dispatch.** The `background` branch in the Command arm, lazy start,
    and the host-op handlers (`exec`, `console.print`) with scope checks.
-5. **Shutdown wiring.** `LocalActionManager::stop_backgrounds()`, called
-   from solx-server, the browser app's exit handler and the CLI's embedded
-   server.
+5. **Shutdown wiring.** `LocalActionManager::stop_backgrounds()`, behind
+   `App::shutdown()`, called from:
+   - solx-server, on Ctrl-C or SIGTERM, after draining requests (capped at
+     10s, so a long-lived stream can't hold it open);
+   - the browser app's `RunEvent::Exit` and its `restart`, which exits
+     without one;
+   - solx-cli after a core command, and solx-mcp when its stdio session ends.
 6. **solx-package-lib `background` module.** `serve`, `host()`, and routing
    logs to `console.print`.
 7. **Built-ins and docs.** `/builtin/background/list|stop`, `http-api.md`,

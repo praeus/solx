@@ -5821,6 +5821,7 @@ dependencies = [
  "futures",
  "jsonwebtoken",
  "keyring",
+ "libc",
  "libsql",
  "rand 0.8.8",
  "reqwest 0.12.28",
@@ -5875,7 +5876,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "rand 0.8.8",
- "reqwest 0.12.28",
+ "serde",
  "serde_json",
  "solx-actions",
  "solx-client",
@@ -5992,6 +5993,7 @@ name = "solx-manager"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "reqwest 0.12.28",
  "solx-actions",
  "solx-client",
  "solx-config",
@@ -6032,6 +6034,7 @@ dependencies = [
  "solx-config",
  "solx-scripts",
  "solx-surface",
+ "tokio",
  "tracing",
  "zip",
 ]

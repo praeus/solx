@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
         snap.server_cors_origins.as_deref().unwrap_or_default(),
     );
     let tls = solx_server::tls_config(&app.config).context("server_tls")?;
-    let state = AppState::new(app)?;
+    let state = AppState::new(app.clone())?;
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("bind {addr}"))?;
@@ -77,8 +77,52 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("WARNING: {warning}");
     }
 
-    solx_server::serve_listener(listener, router, tls, std::future::pending())
-        .await
-        .context("serve")?;
+    let (signalled, on_signal) = tokio::sync::oneshot::channel();
+    let serve = solx_server::serve_listener(listener, router, tls, async move {
+        shutdown_signal().await;
+        let _ = signalled.send(());
+    });
+    // A long-lived stream (a console tail, an SSE client) would hold the
+    // drain open indefinitely; cap it.
+    let served = tokio::select! {
+        served = serve => served,
+        () = async {
+            let _ = on_signal.await;
+            tokio::time::sleep(DRAIN_TIMEOUT).await;
+        } => {
+            tracing::warn!("open connections didn't close within {DRAIN_TIMEOUT:?}; stopping anyway");
+            Ok(())
+        }
+    };
+    // After in-flight requests drain: stop the background commands this
+    // host runs, rather than leave them to the job handle.
+    app.shutdown().await;
+    served.context("serve")?;
     Ok(())
+}
+
+/// How long a shutdown waits for open connections to close.
+const DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Ctrl-C, or SIGTERM on POSIX (what service managers send).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let term = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut term) => {
+                term.recv().await;
+            }
+            Err(_) => std::future::pending().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+    tokio::select! {
+        () = ctrl_c => {}
+        () = term => {}
+    }
+    tracing::info!("solx-server shutting down");
 }
