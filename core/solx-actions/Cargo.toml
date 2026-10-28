@@ -46,7 +46,24 @@ futures = { workspace = true }
 # `cmd /C start`, which splits an unquoted URL at `&` (see
 # `internal/open_url.rs`). Already in the tree via tokio/keyring.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# `Win32_System_JobObjects` (+ `Win32_Security`, `Win32_System_Threading`
+# for its signatures): the Job Object a background
+# command runs in, so stopping it takes its whole process tree (see
+# `background/contain.rs`).
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+# `killpg` for a background command's process group.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# The fake background `tests/background.rs` drives. Needs `test-probe`,
+# which only this crate's own dev-dependency on itself enables, so no
+# shipped build includes it.
+[[bin]]
+name = "solx-fake-background"
+path = "tests/fixtures/fake_background.rs"
+required-features = ["test-probe"]
+test = false
 
 [features]
 # Registers `test_probe`'s principal-echo handler. Enabled only from

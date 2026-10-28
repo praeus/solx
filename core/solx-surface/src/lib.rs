@@ -8,6 +8,7 @@
 
 pub mod actor;
 pub mod auth;
+pub mod background;
 pub mod entities;
 pub mod error;
 pub mod exec_context;

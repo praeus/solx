@@ -30,6 +30,7 @@ mod command;
 mod webhook;
 
 pub use command::run_command;
+pub(crate) use command::{prepare_command, PreparedCommand};
 pub use webhook::run_webhook;
 
 /// Wall-clock ceiling on a command, overridable per action via

@@ -10,6 +10,7 @@
 //! `crate::script`).
 
 pub mod auth;
+mod background;
 pub mod caller;
 mod db;
 mod dispatch;
@@ -84,6 +85,9 @@ pub struct LocalActionManager {
     /// `LocalActionManager` instances, so keeping it per-manager is simpler
     /// and keeps tests isolated from one another.
     running: Arc<Mutex<HashMap<String, AbortHandle>>>,
+    /// Running background commands — see [`crate::background`]. Per
+    /// manager for the same reason as `running`.
+    backgrounds: background::BackgroundManager,
     /// This manager's own handle, set once right after construction (see
     /// [`Self::set_self_ref`]) so WASM guests can recursively call back into
     /// `action-exec` (see `wasm`). `&self` methods can't hand out
@@ -193,6 +197,7 @@ impl LocalActionManager {
             invocations,
             internal_registry: OnceLock::new(),
             running: Arc::new(Mutex::new(HashMap::new())),
+            backgrounds: Default::default(),
             self_ref: OnceLock::new(),
             token_authority: OnceLock::new(),
             extra_plugins: Mutex::new(Vec::new()),

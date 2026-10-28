@@ -1,6 +1,8 @@
 # Background commands — design plan
 
-Status: **Proposed** (2026-10-28). Nothing has landed yet.
+Status: **In progress** (2026-10-28), on the `background-commands` branch.
+Steps 1–4 are implemented and tested (`solx-actions/tests/background.rs`);
+steps 5–8 are not started.
 
 ## Goal
 
@@ -183,6 +185,28 @@ The same containment covers host exits that skip `stop_backgrounds()`, such
 as a panic or a hard kill. When the host dies, the job handle closes and
 takes the background's processes with it. (On POSIX this is best effort: a
 `SIGKILL`ed host leaves the group running until the next start notices.)
+
+### One per machine
+
+The per-key lock covers one host process, but a CLI or stdio MCP process
+that isn't attached to a server starts its own backgrounds, and a
+background wrapping an embedded database must not run twice against the
+same files. So a start first takes an OS file lock (`LockFileEx` /
+`flock`) on `<appdata>/backgrounds/<namespace>/<name>.lock`
+(`background/lock.rs`):
+
+- The OS releases it when its holder dies, so there's no stale lock.
+- It's released only once the process tree is gone, not when `shutdown`
+  is sent.
+- On POSIX the background inherits the locked descriptor (cleared of
+  `FD_CLOEXEC` in the child only), so an orphan left by a `SIGKILL`ed host
+  still holds it.
+- The holder writes `<name>.owner.json` (host, pid, since), since a locked
+  file can't be read on Windows. A refused start names it.
+- `background_lock_wait_secs` (default 0) makes a start wait for the lock
+  instead of failing at once.
+
+The embedded database's own lock stays the last line of defense.
 
 ### Scopes
 

@@ -217,6 +217,11 @@ pub struct SolxConfig {
     /// force-aborting the task. Defaults to 10.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_grace_secs: Option<u64>,
+    /// How long starting a background command waits for another solx
+    /// process on this machine to release it before giving up. Defaults
+    /// to 0: fail at once, naming the process that has it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_lock_wait_secs: Option<u64>,
     /// A terminal invocation row older than this many days is dropped by
     /// the startup sweep. Defaults to 7.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1,5 +1,6 @@
 //! `Command` action backend — see the [`super`] module doc.
 
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -64,6 +65,93 @@ fn warn_on_removed_env(action_ref: &str, action_config: &Option<Value>) {
     }
 }
 
+/// A Command action's process, set up but not spawned: what a one-shot
+/// [`run_command`] and a background start have in common.
+pub(crate) struct PreparedCommand {
+    /// `cmd /C` / `sh -c` with the command, cwd, `SOL_LOG_DIR` and
+    /// `SOLX_ACTION_REF` set, and stdin/stdout/stderr piped.
+    pub cmd: tokio::process::Command,
+    /// The allowlisted command line, for error messages.
+    pub command: String,
+    /// This action's `SOL_LOG_DIR`.
+    pub log_dir: PathBuf,
+}
+
+/// Resolve `fn_name` against the `command_actions` allowlist and build the
+/// process every Command action runs in. Per-invocation environment (the
+/// console loopback, a server credential) is the caller's to add.
+///
+/// The `Command` kills nothing on drop and isn't contained: `kill_on_drop`
+/// would kill the *shell* only, not its descendants. Neither Windows nor
+/// POSIX terminates a process tree on request without extra machinery (a
+/// Job Object / a process group), so a long-running grandchild — `sh -c
+/// 'sleep 600'` spawning `sleep`, or `cmd /C ping ...` spawning `ping` —
+/// outlives it and keeps the inherited stdout pipe open. One-shot commands
+/// live with that; backgrounds are contained (`crate::background`).
+pub(crate) fn prepare_command(
+    cfg: &ConfigService,
+    action_ref: &str,
+    action_config: &Option<Value>,
+    fn_name: &str,
+) -> Result<PreparedCommand> {
+    // `fn_name` is a key, not a command — resolve it against the
+    // `command_actions` allowlist before anything else runs. Deny-by-default:
+    // an unregistered key (including every key when the allowlist itself is
+    // unset) is a hard error naming the fix, not a fallback to running the
+    // key text as a shell command.
+    let def = cfg.command_actions().remove(fn_name).ok_or_else(|| {
+        SolxError::Exec(format!(
+            "command key '{fn_name}' is not registered in solx-config.json's              'command_actions' allowlist; add an entry there to allow this              command to run"
+        ))
+    })?;
+
+    // The allowlist's own `cwd` wins over the action's `action_config.cwd`
+    // when both are set — the allowlist author decides where an approved
+    // command runs, not the (potentially untrusted) action that invokes it.
+    let cwd = def
+        .cwd
+        .clone()
+        .or_else(|| {
+            action_config
+                .as_ref()
+                .and_then(|c| c.get("cwd"))
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
+        .unwrap_or_else(|| cfg.appdata().to_string_lossy().into_owned());
+
+    let (shell, flag) = if cfg!(windows) {
+        ("cmd", "/C")
+    } else {
+        ("sh", "-c")
+    };
+
+    // `SOL_LOG_DIR` is the env var `solx-omniparse`/`solx-media` already read
+    // for their own file logging (a convention carried over from old sol) —
+    // this is what actually turns it on. It was never set here before, so
+    // that logging has been silently inert regardless of what any package
+    // does on its own. One subdirectory per action ref, so two actions in
+    // the same package (e.g. omniparse's process/write variants) don't
+    // collide on one shared file.
+    let log_dir = cfg.logs_dir().join(log_dir_slug(action_ref));
+
+    let mut cmd = tokio::process::Command::new(shell);
+    cmd.arg(flag)
+        .arg(&def.command)
+        .current_dir(&cwd)
+        .env("SOL_LOG_DIR", &log_dir)
+        .env(ENV_ACTION_REF, action_ref)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    warn_on_removed_env(action_ref, action_config);
+    Ok(PreparedCommand {
+        cmd,
+        command: def.command,
+        log_dir,
+    })
+}
+
 /// Run a `Command` action. `fn_name` is a key resolved against the
 /// `command_actions` allowlist (see the module doc); the matching
 /// `CommandDef.command` is what actually executes. Params are passed as
@@ -96,50 +184,12 @@ pub async fn run_command(
         params,
     } = invoke;
 
-    // `fn_name` is a key, not a command — resolve it against the
-    // `command_actions` allowlist before anything else runs. Deny-by-default:
-    // an unregistered key (including every key when the allowlist itself is
-    // unset) is a hard error naming the fix, not a fallback to running the
-    // key text as a shell command.
-    let def = cfg.command_actions().remove(fn_name).ok_or_else(|| {
-        SolxError::Exec(format!(
-            "command key '{fn_name}' is not registered in solx-config.json's \
-             'command_actions' allowlist; add an entry there to allow this \
-             command to run"
-        ))
-    })?;
-
-    // The allowlist's own `cwd` wins over the action's `action_config.cwd`
-    // when both are set — the allowlist author decides where an approved
-    // command runs, not the (potentially untrusted) action that invokes it.
-    let cwd = def
-        .cwd
-        .clone()
-        .or_else(|| {
-            action_config
-                .as_ref()
-                .and_then(|c| c.get("cwd"))
-                .and_then(|v| v.as_str())
-                .map(String::from)
-        })
-        .unwrap_or_else(|| cfg.appdata().to_string_lossy().into_owned());
-    let command = def.command.as_str();
-
-    let params_json = serde_json::to_string(params)?;
-    let (shell, flag) = if cfg!(windows) {
-        ("cmd", "/C")
-    } else {
-        ("sh", "-c")
-    };
-
-    // `SOL_LOG_DIR` is the env var `solx-omniparse`/`solx-media` already read
-    // for their own file logging (a convention carried over from old sol) —
-    // this is what actually turns it on. It was never set here before, so
-    // that logging has been silently inert regardless of what any package
-    // does on its own. One subdirectory per action ref, so two actions in
-    // the same package (e.g. omniparse's process/write variants) don't
-    // collide on one shared file.
-    let log_dir = cfg.logs_dir().join(log_dir_slug(action_ref));
+    // First, so an unregistered key is refused before anything is issued.
+    let PreparedCommand {
+        mut cmd,
+        command,
+        ..
+    } = prepare_command(cfg, action_ref, action_config, fn_name)?;
 
     // A one-shot credential letting this specific invocation POST to its
     // own console over loopback HTTP — see `solx_console::loopback` for
@@ -177,26 +227,9 @@ pub async fn run_command(
         None => None,
     };
 
-    let mut cmd = tokio::process::Command::new(shell);
-    cmd.arg(flag)
-        .arg(command)
-        .current_dir(&cwd)
-        .env("SOL_LOG_DIR", &log_dir)
-        .env(ENV_ACTION_REF, action_ref)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        // So a timed-out or cancelled exec reaps the child instead of
-        // leaking it.
-        //
-        // Caveat: this kills the *shell* we spawned, not its descendants.
-        // Neither Windows nor POSIX terminates a process tree on request
-        // without extra machinery (a Job Object / a process group), so a
-        // long-running grandchild — `sh -c 'sleep 600'` spawning `sleep`,
-        // or `cmd /C ping ...` spawning `ping` — outlives the timeout and
-        // keeps the inherited stdout pipe open. Killing the tree properly
-        // would mean putting each command in its own job/process group.
-        .kill_on_drop(true);
+    // So a timed-out or cancelled exec reaps the child instead of leaking
+    // it. Only the shell, though: see `prepare_command`.
+    cmd.kill_on_drop(true);
     if let Some(reg) = &registration {
         cmd.env("SOLX_CONSOLE_URL", reg.url())
             .env("SOLX_CONSOLE_TOKEN", reg.token())
@@ -209,7 +242,7 @@ pub async fn run_command(
             cmd.env(ENV_SERVER_URL, url);
         }
     }
-    warn_on_removed_env(action_ref, action_config);
+    let params_json = serde_json::to_string(params)?;
     let mut child = cmd.spawn().map_err(|e| {
         SolxError::Exec(format!("spawn command key '{fn_name}' ('{command}'): {e}"))
     })?;

@@ -3330,6 +3330,7 @@ dependencies = [
  "futures",
  "jsonwebtoken",
  "keyring",
+ "libc",
  "libsql",
  "rand 0.8.7",
  "reqwest",

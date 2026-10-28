@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use serde_json::Value;
+use solx_surface::background::BackgroundConfig;
 use solx_surface::entities::{Action, ActionExecResult, ActionType};
 use solx_surface::error::{Result, SolxError};
 use solx_surface::path::full_ref;
@@ -257,6 +258,28 @@ impl LocalActionManager {
 
         let result = match action.action_type {
             Some(ActionType::Command) => {
+                // A background action serves the call from its long-lived
+                // process instead of spawning one for it.
+                if let Some(bg) =
+                    BackgroundConfig::from_action_config(action.action_config.as_ref())
+                        .map_err(SolxError::Exec)?
+                {
+                    return Ok(ActionExecResult {
+                        result: self
+                            .exec_background(
+                                &action,
+                                &secrets,
+                                &bg,
+                                &invoke,
+                                ctx,
+                                effective_timeout,
+                            )
+                            .await?,
+                        action: action_ref,
+                        success: true,
+                        message: None,
+                    });
+                }
                 let fn_name = action.fn_name.as_deref().ok_or_else(|| {
                     SolxError::Exec("command action has no fn_name (the command to run)".into())
                 })?;

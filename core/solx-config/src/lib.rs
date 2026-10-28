@@ -449,6 +449,12 @@ impl ConfigService {
         }
     }
 
+    /// How long a background start waits for another process's lock on it.
+    /// Defaults to 0 (don't wait).
+    pub fn background_lock_wait_secs(&self) -> u64 {
+        self.snapshot().background_lock_wait_secs.unwrap_or(0)
+    }
+
     /// Lifetime of a client token issued by the token registry, in days.
     /// Defaults to 90.
     pub fn client_token_ttl_days(&self) -> i64 {
