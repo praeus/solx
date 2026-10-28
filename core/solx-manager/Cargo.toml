@@ -27,4 +27,6 @@ solx-docs = { workspace = true, optional = true }
 solx-actions = { workspace = true, optional = true }
 solx-registry = { workspace = true, optional = true }
 solx-client = { workspace = true }
+# Only for `build_or_attach`'s `/health` probe; solx-client already links it.
+reqwest = { workspace = true }
 anyhow = { workspace = true }

@@ -299,7 +299,11 @@ back every manager:
   gates every data route behind a bearer token (auto-generated on first
   start, kept in the OS credential manager; see `solx_config::credentials`). A `SOLX_SERVER_URL` env
   var or a config `server_url` flips `solx-manager` into remote mode for
-  any `solx-cli`/`solx-mcp` process pointed at the server.
+  any `solx-cli`/`solx-mcp` process pointed at the server. With neither
+  set, both probe `127.0.0.1:<server_port>/health` first
+  (`App::build_or_attach`) and attach to a host already running there, so
+  they never open its database files beside it; only `solx-cli` also embeds
+  a server when it ends up building local.
 
 `async` was chosen specifically to keep these traits transport-agnostic —
 local and remote impls are interchangeable behind `Arc<dyn _>`, so callers

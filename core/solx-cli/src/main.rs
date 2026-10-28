@@ -677,34 +677,22 @@ fn root_token(action: TokenAction) -> Result<Value> {
 /// `solx-quickjs`'s `build-javascript-action`, via
 /// `solx-package-lib::ServerConfig`) has nothing to reach.
 ///
-/// So: an explicit `server_url` (env or config) is honored unchanged. With
-/// none set, probe the default local port — if something's already
-/// listening there, wire remote against it instead of touching local
-/// storage. If nothing's listening, build local as today and additionally
-/// serve this same `App` over HTTP for the rest of this process's
-/// lifetime, so a spawned child still has a server to reach.
+/// So: an explicit `server_url` (env or config) is honored unchanged, and
+/// with none set, a host already listening on the local port is attached
+/// to instead of touching local storage (`App::build_or_attach`). If
+/// nothing's listening, build local as today and additionally serve this
+/// same `App` over HTTP for the rest of this process's lifetime, so a
+/// spawned child still has a server to reach.
 async fn build_app() -> Result<Arc<App>> {
+    if let Some(app) = App::build_or_attach().await? {
+        return Ok(app);
+    }
+
     let config = solx_config::ConfigService::open().context("open config")?;
-    let snap = config.snapshot();
-
-    let explicit = std::env::var("SOLX_SERVER_URL")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| snap.server_url.clone().filter(|s| !s.trim().is_empty()));
-    if explicit.is_some() {
-        return App::build().await;
-    }
-
-    let port = snap.server_port.unwrap_or(solx_config::DEFAULT_SERVER_PORT);
-
-    if health_check(port).await {
-        // A client of that host: `App::build` resolves the token the way
-        // any client does (never minting one, which the running host
-        // wouldn't accept anyway).
-        std::env::set_var("SOLX_SERVER_URL", format!("http://127.0.0.1:{port}"));
-        return App::build().await;
-    }
-
+    let port = config
+        .snapshot()
+        .server_port
+        .unwrap_or(solx_config::DEFAULT_SERVER_PORT);
     let app = App::build_local().await?;
     match solx_server::state::AppState::new(app.clone()) {
         Ok(state) => {
@@ -718,14 +706,4 @@ async fn build_app() -> Result<Arc<App>> {
         Err(e) => tracing::warn!("could not prepare embedded solx-server: {e}"),
     }
     Ok(app)
-}
-
-async fn health_check(port: u16) -> bool {
-    reqwest::Client::new()
-        .get(format!("http://127.0.0.1:{port}/health"))
-        .timeout(std::time::Duration::from_millis(300))
-        .send()
-        .await
-        .map(|r| r.status().is_success())
-        .unwrap_or(false)
 }

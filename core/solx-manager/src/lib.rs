@@ -102,29 +102,33 @@ impl App {
         Self::wire_local(config).await
     }
 
-    async fn build_with_config(config: Arc<ConfigService>) -> Result<Arc<Self>> {
-        let snap = config.snapshot();
-        // SOLX_SERVER_URL must be able to *enable* remote mode on its own
-        // (mirroring SOLX_APPDATA_DIR's independent-of-config precedence),
-        // not merely override an already-configured `server_url` — a
-        // config with no `server_url` at all is the common case for every
-        // client pointed at a server via env var alone.
-        let server_url = std::env::var("SOLX_SERVER_URL")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .or_else(|| snap.server_url.clone().filter(|s| !s.trim().is_empty()));
-        match server_url {
-            Some(server_url) => {
-                let token = solx_config::credentials::client_token(&config, &server_url)
-                    .with_context(|| {
-                        format!(
-                            "server_url is configured but no token is saved for {server_url} \
-                             (start solx-server against this appdata dir first, or set \
-                             SOLX_SERVER_TOKEN)"
-                        )
-                    })?;
-                Self::remote(config, server_url, token)
+    /// Like [`Self::build`], but with no `server_url` configured (env or
+    /// config), first looks for a `solx-server` already running on this
+    /// machine's `server_port`. If one answers `/health`, this wires remote
+    /// against it instead of opening the same database files a second time.
+    /// `Ok(None)` means there's nothing to attach to. The caller then builds
+    /// local itself with [`Self::build_local`], and may also serve that app.
+    pub async fn build_or_attach() -> Result<Option<Arc<Self>>> {
+        let config = Arc::new(ConfigService::open().context("open config")?);
+        let server_url = match configured_server_url(&config) {
+            Some(url) => url,
+            None => {
+                let port = config
+                    .snapshot()
+                    .server_port
+                    .unwrap_or(solx_config::DEFAULT_SERVER_PORT);
+                if !local_server_listening(port).await {
+                    return Ok(None);
+                }
+                format!("http://127.0.0.1:{port}")
             }
+        };
+        Self::connect(config, server_url).map(Some)
+    }
+
+    async fn build_with_config(config: Arc<ConfigService>) -> Result<Arc<Self>> {
+        match configured_server_url(&config) {
+            Some(server_url) => Self::connect(config, server_url),
             #[cfg(feature = "local")]
             None => Self::wire_local(config).await,
             #[cfg(not(feature = "local"))]
@@ -132,6 +136,22 @@ impl App {
                 "no server_url is configured, and this build has no local managers                  (solx-manager was built without the `local` feature)"
             ),
         }
+    }
+
+    /// Remote wiring against `server_url`, with the token a client would
+    /// use for it: never minted here, since the host wouldn't accept one
+    /// minted by this process anyway.
+    fn connect(config: Arc<ConfigService>, server_url: String) -> Result<Arc<Self>> {
+        let token = solx_config::credentials::client_token(&config, &server_url).with_context(
+            || {
+                format!(
+                    "server_url is configured but no token is saved for {server_url} \
+                     (start solx-server against this appdata dir first, or set \
+                     SOLX_SERVER_TOKEN)"
+                )
+            },
+        )?;
+        Self::remote(config, server_url, token)
     }
 
     /// Today's exact wiring, unchanged: open the three local databases and
@@ -282,6 +302,36 @@ impl App {
     pub fn registry(&self) -> Option<Arc<solx_registry::Registry>> {
         self.registry.clone()
     }
+}
+
+/// The `solx-server` this process is explicitly pointed at, if any.
+/// SOLX_SERVER_URL must be able to *enable* remote mode on its own
+/// (mirroring SOLX_APPDATA_DIR's independent-of-config precedence), not
+/// merely override an already-configured `server_url` — a config with no
+/// `server_url` at all is the common case for every client pointed at a
+/// server via env var alone.
+fn configured_server_url(config: &ConfigService) -> Option<String> {
+    std::env::var("SOLX_SERVER_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            config
+                .snapshot()
+                .server_url
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+        })
+}
+
+/// Whether a `solx-server` (or a host embedding one) answers on loopback.
+async fn local_server_listening(port: u16) -> bool {
+    reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{port}/health"))
+        .timeout(std::time::Duration::from_millis(300))
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
 }
 
 /// What [`build_authority`] chose.
