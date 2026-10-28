@@ -1,8 +1,9 @@
 # Background commands — design plan
 
 Status: **In progress** (2026-10-28), on the `background-commands` branch.
-Steps 1–4 are implemented and tested (`solx-actions/tests/background.rs`);
-steps 5–8 are not started.
+Steps 1–4 are implemented and tested (`solx-actions/tests/background.rs`),
+and step 6 on the `background-commands` branch of solx-packages
+(`solx-package-lib/src/background.rs`); steps 5, 7 and 8 are not started.
 
 ## Goal
 
@@ -238,6 +239,13 @@ the host must enforce them in-process:
 - **Stdout belongs to the protocol.** Anything a package prints to stdout
   outside these helpers corrupts the stream. The module docs need to say so
   loudly.
+- **`serve_one_at_a_time(handler)`**: the same, with handlers run one after
+  another in arrival order, for a package whose operations all go to a
+  single-writer store. The reader keeps going meanwhile, so a handler
+  waiting on a host call can't deadlock.
+- **Shutdown**: on `shutdown` or end of input, `serve` refuses new requests,
+  lets running handlers finish (after end of input, their pending host calls
+  fail at once), and returns. A panicking handler answers with an error.
 
 ## Implementation steps
 
