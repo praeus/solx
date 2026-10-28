@@ -715,6 +715,32 @@ fn builtin_action_param_types() -> Vec<SeedType> {
         },
         SeedType {
             path: BUILTIN_TYPES_PATH,
+            name: "BackgroundListParams",
+            description: "List the background commands running in this host, optionally one namespace's.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "backgroundNamespace": { "type": "string" },
+                }
+            }),
+            groups: vec!["builtin-params"],
+        },
+        SeedType {
+            path: BUILTIN_TYPES_PATH,
+            name: "BackgroundStopParams",
+            description: "Stop a running background command.",
+            schema: json!({
+                "type": "object",
+                "required": ["backgroundNamespace", "backgroundName"],
+                "properties": {
+                    "backgroundNamespace": { "type": "string" },
+                    "backgroundName": { "type": "string" },
+                }
+            }),
+            groups: vec!["builtin-params"],
+        },
+        SeedType {
+            path: BUILTIN_TYPES_PATH,
             name: "HttpStreamCloseParams",
             description: "Stop a stream's reader task and drop its buffer.",
             schema: json!({

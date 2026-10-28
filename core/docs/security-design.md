@@ -295,6 +295,42 @@ action's key. Nothing that leaves the host can reach the key (§5.2).
   `action_config.env` map is no longer applied, and a warning is logged if
   a stored row still sets anything other than `SOLX_SERVER_URL` there.
 
+### 4.1a Background commands (`solx-actions/src/background/`)
+
+A Command action with `action_config.background` runs as one long-lived
+child per `(backgroundNamespace, backgroundName)` that serves many calls
+over its stdin and stdout ([background-commands-plan.md](background-commands-plan.md)).
+
+- **Same allowlist.** The process is the *start* action's `fn_name`,
+  resolved through `command_actions` like any Command (§4.1). An operation
+  never spawns its own command: one with no running instance finds its
+  package's start action and runs it through `exec_as`, so that hop is
+  scope-checked too.
+- **No credential.** A background gets no `SOLX_SERVER_URL`/
+  `SOLX_SERVER_TOKEN` and no console loopback variables; it outlives every
+  invocation those would belong to. It reaches solx only by sending
+  requests over stdout (`exec`, `console.print`), which the host serves
+  in-process.
+- **Scopes.** Every `exec` from a background runs as its start action:
+  checked against that action's `action_scopes` (§8), with exclusions
+  applied and refusals recorded, under the chain of the call it's serving
+  when it names one. Whichever operation woke it, and whatever that
+  operation's own scopes, it can do no more than its start action.
+- **Stdout is the protocol.** A line that isn't a protocol message closes
+  the instance and kills it, so a confused child can't be steered into
+  answering the wrong call.
+- **Containment.** The process tree runs in a Job Object
+  (`KILL_ON_JOB_CLOSE`) on Windows and its own process group on POSIX, and
+  is killed as a whole on stop, crash or host exit. Hosts stop their
+  backgrounds on the way out (`App::shutdown`).
+- **One per machine.** An OS file lock on
+  `<appdata>/backgrounds/<namespace>/<name>.lock` refuses a second solx
+  process starting the same background against the same appdata dir, and
+  names the holder.
+- **Stopping another package's background** takes `exec:` on
+  `/builtin/background/stop`, like any built-in; a package's own `stop`
+  action needs nothing beyond its own package.
+
 ### 4.2 Webhook, and every other outbound request (`solx-actions/src/net.rs`)
 
 All of these share a single check, `check_outbound_url`:
@@ -776,6 +812,10 @@ These are accepted for now. Each one is a candidate for future hardening.
     endpoint. A problem is handled by reissuing the server certificate or
     resetting the CA. Windows Schannel clients that insist on a revocation
     check (curl on Windows) need `--ssl-no-revoke`.
+16. **Backgrounds outlive a `SIGKILL`ed host on POSIX** (§4.1a). Its process
+    group keeps running, still holding the per-machine lock, until it's
+    killed by hand; on Windows the Job Object takes it down. Cancelling an
+    invocation (`action-stop`) doesn't reach a background serving it yet.
 
 ## 10. Rules for changing this code
 

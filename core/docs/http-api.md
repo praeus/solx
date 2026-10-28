@@ -318,6 +318,16 @@ and hand it `fields`. There is no widget-specific route or protocol — the
 widget calls back in through the routes on this page like any other client.
 See [widget-actions.md](widget-actions.md).
 
+A Command action with `actionConfig.background` belongs to a background
+command: one long-lived process serving many calls (see
+[background-commands-plan.md](background-commands-plan.md)). `POST` on one of
+its operations starts the process if it isn't running, forwards the params,
+and returns its answer as `result`; on its `start` or `stop` action it returns
+the instance's status. `/builtin/background/list` (optionally
+`{"backgroundNamespace"}`) and `/builtin/background/stop`
+(`{"backgroundNamespace", "backgroundName"}`) list and stop what this host
+runs, `POST`ed like any other action; they take `exec:` on their own paths.
+
 ### Files
 
 | Method | Route | Body | Returns |

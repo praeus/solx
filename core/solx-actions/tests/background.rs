@@ -421,3 +421,70 @@ async fn a_start_waits_for_the_lock_when_configured_to() {
     assert!(pid.result.is_u64());
     second.stop_backgrounds().await;
 }
+
+#[tokio::test]
+async fn the_builtins_list_and_stop_running_backgrounds() {
+    let (_d, cfg, actions) = setup().await;
+    fake_package(&cfg, &actions, "", None).await;
+    let started = call(&actions, "start", json!({})).await;
+    let pid = call(&actions, "pid", json!({})).await.as_u64().unwrap();
+
+    let list = |params: Value| {
+        let actions = actions.clone();
+        async move {
+            actions
+                .exec("/builtin/background", "list", params)
+                .await
+                .unwrap()
+                .result["backgrounds"]
+                .as_array()
+                .unwrap()
+                .clone()
+        }
+    };
+    let running = list(json!({})).await;
+    assert_eq!(running.len(), 1, "{running:?}");
+    assert_eq!(running[0]["backgroundNamespace"], "fake");
+    assert_eq!(running[0]["backgroundName"], "session");
+    // The shell's pid, which the fake's own `pid` isn't.
+    assert_eq!(running[0]["pid"], started["pid"]);
+    assert!(list(json!({"backgroundNamespace": "other"})).await.is_empty());
+
+    let stop = json!({"backgroundNamespace": "fake", "backgroundName": "session"});
+    let stopped = actions
+        .exec("/builtin/background", "stop", stop.clone())
+        .await
+        .unwrap()
+        .result;
+    assert_eq!(stopped["wasRunning"], true);
+    assert!(wait_dead(pid).await, "the background outlived the stop");
+    assert!(list(json!({})).await.is_empty());
+    let again = actions
+        .exec("/builtin/background", "stop", stop)
+        .await
+        .unwrap()
+        .result;
+    assert_eq!(again["wasRunning"], false);
+}
+
+#[tokio::test]
+async fn stopping_a_background_takes_the_exec_scope_on_the_builtin() {
+    let (_d, cfg, actions) = setup().await;
+    fake_package(&cfg, &actions, "", Some(&["exec:/t/*"])).await;
+
+    let err = actions
+        .exec(
+            PKG,
+            "host",
+            json!({"op": "exec", "params": {
+                "path": "/builtin/background",
+                "name": "stop",
+                "params": {"backgroundNamespace": "fake", "backgroundName": "session"}
+            }}),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("exec:/builtin/background/stop"), "{err}");
+    assert_eq!(actions.list_backgrounds().len(), 1);
+    actions.stop_backgrounds().await;
+}

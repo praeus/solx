@@ -1,9 +1,10 @@
 # Background commands — design plan
 
 Status: **In progress** (2026-10-28), on the `background-commands` branch.
-Steps 1–5 are implemented (1–4 tested in `solx-actions/tests/background.rs`),
-and step 6 on the `background-commands` branch of solx-packages
-(`solx-package-lib/src/background.rs`); steps 7 and 8 are not started.
+Steps 1–5 and 7 are implemented (tested in
+`solx-actions/tests/background.rs`), and step 6 on the `background-commands`
+branch of solx-packages (`solx-package-lib/src/background.rs`, with a
+"Background commands" section in its `HOWTO.md`); step 8 is not started.
 
 ## Goal
 

@@ -56,6 +56,10 @@ pub const ENV_PATH: &str = "/builtin/env";
 /// Subdivision of the builtin namespace for per-caller-scoped secrets.
 pub const SECRETS_PATH: &str = "/builtin/secrets";
 
+/// Subdivision of the builtin namespace for the background commands this
+/// host runs.
+pub const BACKGROUND_PATH: &str = "/builtin/background";
+
 /// Subdivision of the builtin namespace for the OAuth 2.0 loopback listener.
 pub const OAUTH_PATH: &str = "/builtin/oauth";
 
@@ -147,6 +151,9 @@ pub fn builtin_actions() -> Vec<SeedAction> {
         // browser; host-side streaming HTTP lives under WEB_STREAM_PATH below.
         a_at(WEB_PATH, "http-request", "http-request", "Issue an HTTP request with optional method, headers, body, and timeout.", Some("HttpRequestParams")),
         a_at(WEB_PATH, "open-url", "open-url", "Open a URL in the system browser via the platform-native handler (xdg-open / open / ShellExecuteW).", Some("OpenUrlParams")),
+        // Background commands this host runs
+        a_at(BACKGROUND_PATH, "list", "background-list", "List the background commands running in this host, optionally one namespace's.", Some("BackgroundListParams")),
+        a_at(BACKGROUND_PATH, "stop", "background-stop", "Stop a running background command: shutdown, then a kill after stop_grace_secs. A no-op when it isn't running.", Some("BackgroundStopParams")),
         // Action consoles (`/builtin/console/*`) and asynchronous actions
         // (`/builtin/action/{start,stop,poll,cancelled}`) are seeded by
         // `solx-console` itself — see `solx_console::actions::seed_actions`,

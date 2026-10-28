@@ -44,6 +44,7 @@ use solx_surface::{Actor, ExecContext};
 
 use crate::{LocalActionManager, ScopeCheck};
 
+mod background;
 pub mod doc_fields;
 pub mod entity;
 pub mod env;
@@ -214,6 +215,10 @@ pub async fn run_internal(
 
         // ── system integration ────────────────────────────────────────────
         "open-url" => open_url::open_url(params, &ctx.config).await,
+
+        // ── background commands ──────────────────────────────────────────
+        "background-list" => background::list(params, ctx),
+        "background-stop" => background::stop(params, ctx).await,
 
         // ── secrets (per-caller scoped) ──────────────────────────────────
         "get-secret" => secrets::get_secret(params, ctx.exec.caller()).await,
