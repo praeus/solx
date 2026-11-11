@@ -66,6 +66,16 @@ fn register(cfg: &ConfigService, key: &str, command: String) {
     .unwrap();
 }
 
+/// A one-shot command that takes a couple of seconds, so a background's
+/// callback into the host is still in flight when a second call arrives.
+fn slow_command() -> String {
+    if cfg!(windows) {
+        "ping -n 3 127.0.0.1 > nul".into()
+    } else {
+        "sleep 2".into()
+    }
+}
+
 /// A Command action in `path` belonging to background `fake/session`.
 async fn save_bg(
     actions: &LocalActionManager,
@@ -328,6 +338,104 @@ async fn waking_through_a_wider_operation_does_not_widen_the_scopes() {
 
     let err = actions.exec(PKG, "host", host_exec("/u")).await.unwrap_err();
     assert!(err.to_string().contains("exec:/u/hello"), "{err}");
+    actions.stop_backgrounds().await;
+}
+
+/// A background calling back into an op on *itself* is refused, rather than
+/// deadlocking: the host would wait for an answer only that background can
+/// give, and it cannot give one until the call returns.
+#[tokio::test]
+async fn a_background_calling_itself_is_refused() {
+    let (_d, cfg, actions) = setup().await;
+    fake_package(&cfg, &actions, "", None).await;
+
+    let err = actions
+        .exec(
+            PKG,
+            "host",
+            json!({"op": "exec", "params": {
+                "path": PKG, "name": "echo", "params": {"value": "nested"}
+            }}),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("may not call 'echo'"), "{err}");
+    // The background is still there: the refusal was the call's, not its death.
+    assert_eq!(actions.list_backgrounds().len(), 1);
+    actions.stop_backgrounds().await;
+}
+
+/// The deadlock the refusal prevents. A background that serves one operation
+/// at a time, calling back into an op on itself: the host waits for an
+/// answer only that background can give, and it cannot give one until the
+/// call returns.
+#[tokio::test]
+async fn a_serial_background_calling_itself_is_refused_rather_than_deadlocking() {
+    let (_d, cfg, actions) = setup().await;
+    fake_package(&cfg, &actions, "--serial", None).await;
+
+    let began = Instant::now();
+    let err = actions
+        .exec(
+            PKG,
+            "host",
+            json!({"op": "exec", "params": {
+                "path": PKG, "name": "echo", "params": {"value": "nested"}
+            }}),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("may not call 'echo'"), "{err}");
+    // Refused at once: without the refusal this waits out the call's
+    // timeout, five minutes by default.
+    assert!(
+        began.elapsed() < Duration::from_secs(5),
+        "it waited {:?} for the refusal",
+        began.elapsed()
+    );
+    actions.stop_backgrounds().await;
+}
+
+/// The refusal is about *this* background calling *itself*: a concurrent
+/// call from anywhere else goes through while the background is busy.
+#[tokio::test]
+async fn a_concurrent_call_to_a_busy_background_is_not_refused() {
+    let (_d, cfg, actions) = setup().await;
+    fake_package(&cfg, &actions, "", Some(&["exec:/slow/*"])).await;
+    register(&cfg, "slow", slow_command());
+    actions
+        .save(
+            "/slow",
+            "slow",
+            ActionInput {
+                action_type: Some(ActionType::Command),
+                fn_name: Some("slow".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // A call whose callback into the host takes a couple of seconds.
+    let a = actions.clone();
+    let busy = tokio::spawn(async move {
+        a.exec(
+            PKG,
+            "host",
+            json!({"op": "exec", "params": {
+                "path": "/slow", "name": "slow", "params": {}
+            }}),
+        )
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // A second call to the same background, from outside: not the background
+    // calling itself, so it is served.
+    let out = call(&actions, "echo", json!({"value": "concurrent"})).await;
+    assert_eq!(out, json!({"value": "concurrent"}));
+
+    busy.await.unwrap().unwrap();
     actions.stop_backgrounds().await;
 }
 

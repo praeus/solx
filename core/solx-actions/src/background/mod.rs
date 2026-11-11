@@ -92,6 +92,30 @@ impl LocalActionManager {
             BackgroundOp::Start => self.start_background(action, secrets, bg, ctx).await,
             BackgroundOp::Stop => Ok(self.stop_background(&bg.key()).await),
             BackgroundOp::Call(op) => {
+                // A background calling back into an op on *itself*. The host
+                // would wait for an answer only that background can give,
+                // and it cannot give one until this call returns: with a
+                // package that serves one operation at a time, the two wait
+                // on each other until the call times out. Refused here
+                // instead.
+                //
+                // The caller of a background's own host call is its start
+                // action (see [`handle::BackgroundHandle::host_frame`]), so
+                // "is this the background calling itself?" is "is the
+                // calling action the one that starts the background being
+                // called?". A concurrent call from anywhere else is not
+                // affected: its caller is that action's, not the start
+                // action's.
+                if let Some(handle) = self.backgrounds.get(&bg.key()) {
+                    if ctx.caller().map(|c| c.action_ref()) == Some(handle.start_ref.as_str()) {
+                        return Err(SolxError::Exec(format!(
+                            "background {}/{} may not call '{op}': it is already \
+                             inside a call to itself, and cannot answer one it \
+                             is waiting on",
+                            bg.background_namespace, bg.background_name
+                        )));
+                    }
+                }
                 let handle = self
                     .ensure_background(action, secrets, bg, invoke, ctx)
                     .await?;

@@ -330,6 +330,14 @@ over its stdin and stdout ([background-commands-plan.md](background-commands-pla
 - **Stopping another package's background** takes `exec:` on
   `/builtin/background/stop`, like any built-in; a package's own `stop`
   action needs nothing beyond its own package.
+- **No re-entering itself.** The host serves a background's host calls while
+  it is still waiting for that background's answer, so a background may call
+  back into the host mid-operation. A call back into an op on *the same
+  background* is refused instead: the host would wait for an answer only
+  that background can give, and it cannot give one until the call returns.
+  The refusal is structural, not a scope check, so it holds whatever the
+  scopes say. Two backgrounds calling *each other* are not caught — see
+  [background-commands-plan.md](background-commands-plan.md).
 
 ### 4.2 Webhook, and every other outbound request (`solx-actions/src/net.rs`)
 
@@ -816,6 +824,12 @@ These are accepted for now. Each one is a candidate for future hardening.
     group keeps running, still holding the per-machine lock, until it's
     killed by hand; on Windows the Job Object takes it down. Cancelling an
     invocation (`action-stop`) doesn't reach a background serving it yet.
+17. **Two backgrounds calling each other deadlock** (§4.1a). A background
+    calling back into an op on *itself* is refused, but a cycle across two
+    of a package's own backgrounds isn't detected: the call chain isn't
+    carried in the context, so the host can't see that it already passed
+    through a background. It is a self-inflicted stall, bounded by the
+    operations' `action_config.timeout_secs`, not a privilege problem.
 
 ## 10. Rules for changing this code
 

@@ -223,6 +223,34 @@ the host must enforce them in-process:
 - A background can never do more than its start action could, whichever
   operation woke it.
 
+### Reentrancy
+
+The host serves a background's host calls while it is still waiting for that
+background's answer: the reader hands each request to its own task, so a slow
+`exec` doesn't hold up the responses behind it. A background may therefore
+call back into the host *while* it is being called.
+
+That is what makes one case impossible. A background calling back into an op
+on **itself** would have the host wait for an answer only that background can
+give, and it cannot give one until the call returns: the two wait on each
+other until the call times out (five minutes by default). The host refuses
+the call instead, in the Command arm's `background` branch
+(`solx-actions/src/background/mod.rs`): the caller of a background's own host
+call is its start action, so "is this the background calling itself?" is
+"is the calling action the one that starts the background being called?".
+
+Only that case is caught. Two backgrounds calling *each other* still
+deadlock: each hop's caller is the other background's start action, and the
+call chain isn't carried in the context (`ExecContext` replaces the caller at
+each frame), so the host can't see that the chain already passed through a
+background. A package that talks to two of its own backgrounds in a cycle
+needs `action_config.timeout_secs` on the operations involved.
+
+`stop` is not refused: a background that stops itself is not waiting on an
+answer, only on its own process to exit, which `stop_grace_secs` bounds. The
+call that asked for it fails — the background it was talking to is gone — but
+it fails at once rather than hanging.
+
 ### solx-package-lib: `src/background.rs`
 
 - **`serve(handler)`**: reads requests from stdin and calls
@@ -299,6 +327,13 @@ limited to step 1 (a mechanical extraction), the Command arm, a new
   - a background's `exec` inside the start action's scopes succeeds;
   - one outside them is refused and recorded;
   - starting through an operation doesn't widen the scopes.
+- **Reentrancy:**
+  - a background calling back into an op on itself is refused at once, not
+    left to deadlock (the fake's `--serial` mode serves one operation at a
+    time, the way `serve_one_at_a_time` does, which is what deadlocks
+    without the refusal);
+  - a concurrent call from outside the background is not refused while it is
+    busy.
 - **solx-package-lib:** `serve` + `host().call` over in-memory duplex pipes:
   concurrent handlers, a host call made inside a handler, `shutdown`, and
   log routing.
