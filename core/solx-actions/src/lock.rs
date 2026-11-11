@@ -65,6 +65,13 @@ pub fn guard_locked_action(
              `solx action unlock`"
         ));
     }
+    if incoming.is_some_and(|i| i.unpin.is_some()) {
+        return Err(format!(
+            "cannot unpin {reference} from here; only an operator (the solx CLI, a \
+             package install, the root token, or the desktop app's Settings window) can \
+             drop an artifact pin"
+        ));
+    }
     Ok(())
 }
 
@@ -709,5 +716,77 @@ mod lifecycle_tests {
         .await
         .unwrap();
         assert_eq!(run(&m).await.unwrap(), json!(7));
+    }
+
+    /// An operator can drop a keyed action's pin while it stays locked: a
+    /// package install that rebuilds the artifact over HTTP needs the pin
+    /// gone, and a locked action with no pin refuses to run, so nothing can
+    /// execute a swapped artifact while the pin is missing.
+    #[tokio::test]
+    async fn unpinning_drops_the_pin_but_keeps_the_lock() {
+        let (_d, _cfg, m) = setup_wired().await;
+        put(&m, &shared(), "json 42").await;
+        let action = m.save("/p", "s", keyed_script()).await.unwrap();
+        assert!(action.locked);
+        assert!(action.artifact_pin.is_some());
+
+        let action = m
+            .save(
+                "/p",
+                "s",
+                ActionInput {
+                    unpin: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(action.locked, "the lock stays");
+        assert!(action.artifact_pin.is_none(), "the pin is gone");
+
+        // Nothing can run it while the pin is gone, whatever the store holds.
+        put(&m, &shared(), "json 666").await;
+        let err = m.exec("/p", "s", json!({})).await.unwrap_err();
+        assert!(err.to_string().contains("no pinned"), "{err}");
+
+        // Saving it again re-pins the artifact as it stands.
+        let action = m.save("/p", "s", keyed_script()).await.unwrap();
+        assert!(action.locked);
+        assert_eq!(
+            action.artifact_pin.expect("pinned").sha256,
+            super::sha256_hex(b"json 666")
+        );
+    }
+
+    /// Content cannot drop a pin: the pin is what keeps a locked action's
+    /// artifact from being swapped for code that would run with its key.
+    #[tokio::test]
+    async fn content_cannot_unpin() {
+        let (_d, _cfg, m) = setup_wired().await;
+        put(&m, &shared(), "json 42").await;
+        m.save("/p", "s", keyed_script()).await.unwrap();
+
+        // A locked action can't be saved by content at all, so its pin
+        // stands whatever the save asks for.
+        let err = builtin(
+            &m,
+            ACTION_PATH,
+            "entity-save-action",
+            json!({"path": "/p", "name": "s", "unpin": true}),
+        )
+        .await;
+        assert!(!err.is_empty(), "{err}");
+        let action = m.get("/p", "s").await.unwrap();
+        assert!(action.artifact_pin.is_some(), "still pinned");
+
+        // And on an unlocked row the field is refused outright.
+        let err = builtin(
+            &m,
+            ACTION_PATH,
+            "entity-save-action",
+            json!({"path": "/p", "name": "open", "unpin": true}),
+        )
+        .await;
+        assert!(err.contains("cannot unpin"), "{err}");
     }
 }
