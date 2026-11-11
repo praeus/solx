@@ -257,6 +257,16 @@ pub struct ActionInput {
     /// it at all is refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locked: Option<bool>,
+    /// Drop the artifact pin, keeping the lock — see
+    /// [`Action::artifact_pin`]. A pinned artifact is write-protected, so a
+    /// package install whose `install.solx` rebuilds it over HTTP (as
+    /// `solx-quickjs`'s builds do) has to drop the pin first. The lock
+    /// stays: a locked action with no pin refuses to run at all, so nothing
+    /// can execute a swapped artifact while the pin is gone, and the install
+    /// re-pins when the script saves the action again. Honored only on
+    /// operator paths; content that sets it at all is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unpin: Option<bool>,
 }
 
 /// Where a locked action's artifact lives in the file store, and the SHA-256

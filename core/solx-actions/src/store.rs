@@ -271,16 +271,26 @@ impl ActionManager for LocalActionManager {
             || input
                 .locked
                 .unwrap_or_else(|| existing.as_ref().is_some_and(|a| a.locked));
+        // A pinned artifact is write-protected, so a package install that
+        // rebuilds it over HTTP has to drop the pin first — see
+        // `ActionInput::unpin`. The lock stays: a locked action with no pin
+        // refuses to run at all (`crate::lock::load_artifact`), so nothing can
+        // execute a swapped artifact while the pin is gone, and the install
+        // re-pins when the script saves the action again.
         let pin = match (locked, action_type) {
-            (true, Some(ActionType::Script | ActionType::Wasm)) => Some(
-                lock::pin_artifact(
-                    &self.files,
-                    &id.to_string(),
-                    bin_name.as_deref(),
-                    &full_ref(&path, &name)?,
+            (true, Some(ActionType::Script | ActionType::Wasm))
+                if input.unpin != Some(true) =>
+            {
+                Some(
+                    lock::pin_artifact(
+                        &self.files,
+                        &id.to_string(),
+                        bin_name.as_deref(),
+                        &full_ref(&path, &name)?,
+                    )
+                    .await?,
                 )
-                .await?,
-            ),
+            }
             _ => None,
         };
 
