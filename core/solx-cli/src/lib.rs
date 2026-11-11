@@ -270,6 +270,11 @@ async fn handle_save(
                     "`locked` can't be set with `save`; use `solx action lock` or `solx action unlock`"
                 );
             }
+            // Dropping an artifact pin is the install's business: it is what
+            // lets an `install.solx` rebuild a pinned artifact over HTTP.
+            if input.unpin.is_some() {
+                anyhow::bail!("`unpin` can't be set with `save`");
+            }
             solx_packages::guard_package_script_action(&path, Some(&input)).map_err(to_anyhow)?;
             Ok(serde_json::to_value(
                 app.actions()

@@ -95,6 +95,12 @@ impl PackageActions for FakeActions {
         Ok(())
     }
 
+    async fn unpin(&self, path: &str, name: &str) -> Result<()> {
+        let full = format!("{path}/{name}");
+        self.log.lock().unwrap().push(format!("unpin {full}"));
+        Ok(())
+    }
+
     async fn is_keyed(&self, path: &str, name: &str) -> Result<bool> {
         Ok(self.keyed.contains(&format!("{path}/{name}")))
     }
@@ -201,6 +207,9 @@ async fn an_opted_out_action_with_secrets_is_locked_anyway() {
 
 /// An action with secrets is never unlocked, so content gets no window
 /// during the script to swap the code that runs with the package's key.
+/// Its artifact pin is dropped instead, so an `install.solx` that rebuilds
+/// the artifact over HTTP is not refused by it; the lock stays, and a
+/// locked action with no pin refuses to run at all.
 #[tokio::test]
 async fn a_reinstall_leaves_actions_with_secrets_locked() {
     let appdata = tempfile::tempdir().unwrap();
@@ -217,10 +226,16 @@ async fn a_reinstall_leaves_actions_with_secrets_locked() {
     assert_eq!(
         actions.log(),
         vec![
+            "unpin /packages/pkg/login",
             "unlock /packages/pkg/run",
             "lock /packages/pkg/login",
             "lock /packages/pkg/run",
         ]
+    );
+    assert!(
+        !actions.log().iter().any(|l| l == "unlock /packages/pkg/login"),
+        "a keyed action is never unlocked: {:?}",
+        actions.log()
     );
 }
 

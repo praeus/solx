@@ -73,6 +73,14 @@
 //! artifact must therefore be written by the script itself (`save file`,
 //! the operator path), not rebuilt over HTTP with an action token.
 //!
+//! A keyed action that declares `action_config.scopes` is keyed too (see
+//! [`solx_surface::is_keyed`]), and such a package normally rebuilds its
+//! artifact over HTTP. Its pin — not its lock — is what the rebuild would
+//! be refused by, so the install drops the pin and keeps the lock: a
+//! locked action with no pin refuses to run at all, so nothing can execute
+//! a swapped artifact while the pin is gone, and the script's
+//! `save action` re-pins the artifact it built.
+//!
 //! ## Scopes
 //!
 //! `solx-package.json` may list `scopes`: everything the package's actions
@@ -143,6 +151,10 @@ pub trait PackageActions: Send + Sync {
     /// only those at `base` or below it.
     async fn actions_under(&self, base: &str) -> Result<Vec<(String, String)>>;
     async fn set_locked(&self, path: &str, name: &str, locked: bool) -> Result<()>;
+    /// Drop the action's artifact pin, keeping its lock: see
+    /// [`solx_surface::ActionInput::unpin`]. The install uses it to let its
+    /// own `install.solx` rebuild a pinned artifact over HTTP.
+    async fn unpin(&self, path: &str, name: &str) -> Result<()>;
     /// Whether the action is keyed: it has scoped secrets or an `auth`
     /// keyring reference (see [`solx_surface::is_keyed`]). Such an action is
     /// locked even when the manifest lists it under `unlocked_actions`:
@@ -192,6 +204,19 @@ impl PackageActions for Arc<dyn ActionManager> {
     async fn is_keyed(&self, path: &str, name: &str) -> Result<bool> {
         let action = self.get(path, name).await?;
         Ok(solx_surface::is_keyed(action.action_config.as_ref()))
+    }
+
+    async fn unpin(&self, path: &str, name: &str) -> Result<()> {
+        self.save(
+            path,
+            name,
+            ActionInput {
+                unpin: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn declared_scopes(&self, path: &str, name: &str) -> Result<Option<ScopeSet>> {
@@ -491,13 +516,23 @@ pub async fn install_package(
         .map_err(|e| SolxError::Io(format!("read {}: {e}", install_path.display())))?;
 
     // Unlock what a previous install locked, so this one can replace it —
-    // see the module doc. A keyed action stays locked: the
-    // script replaces its artifact as the operator (`save file`) and its
-    // `save action` re-pins it, so content never gets a window to swap in
-    // code that would run with the package's key.
+    // see the module doc. A keyed action stays locked: the script replaces
+    // its artifact as the operator (`save file`) and its `save action`
+    // re-pins it, so content never gets a window to swap in code that would
+    // run with the package's key.
+    //
+    // A keyed action that rebuilds its artifact over HTTP — as
+    // `solx-quickjs`'s builds do, and as this package's does — needs its pin
+    // dropped too: a pinned artifact is write-protected, and the pin is what
+    // the upload would be refused by. Dropping the pin keeps the lock, so the
+    // action still refuses to run while the pin is gone (a locked action with
+    // no pin has nothing to run), and the script's `save action` re-pins the
+    // artifact it built.
     let base = package_actions_base(&name);
     for (path, action) in own_actions(actions, &base).await? {
-        if !actions.is_keyed(&path, &action).await? {
+        if actions.is_keyed(&path, &action).await? {
+            actions.unpin(&path, &action).await?;
+        } else {
             actions.set_locked(&path, &action, false).await?;
         }
     }
