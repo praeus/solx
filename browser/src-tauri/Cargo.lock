@@ -5877,6 +5877,7 @@ dependencies = [
  "clap",
  "rand 0.8.8",
  "serde",
+ "serde",
  "serde_json",
  "solx-actions",
  "solx-client",
