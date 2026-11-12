@@ -20,10 +20,16 @@ and WASM components, driven by a CLI, an HTTP server, or an LLM through MCP.
 That makes the boundaries worth stating precisely.
 
 **Assume a solx instance runs with your full user privileges.** It is not a
-sandbox for untrusted operators, and it is not a multi-tenant system. The
+sandbox for untrusted operators, and it is not a multi-tenant system: the
+CLI, the desktop app and stdio `solx-mcp` are unlimited, and the document,
+type, action and file stores are shared by everyone who reaches them. The
 controls below limit what *content* — a model, a package, a WASM guest — can
-reach. They do not limit what a person holding your server token or your
-shell can do.
+reach, and what the holder of a *client token* can reach, which is what
+that token's scopes allow (see "Tokens and actions are held to their
+scopes"). They do not limit what a person holding your *root* token or your
+shell can do. Scopes are a configuration, not a guarantee: they bite under
+`scope_enforcement: "enforce"`, the default; `"audit"` records the calls it
+would refuse, and `"off"` doesn't check.
 
 ### What is enforced
 

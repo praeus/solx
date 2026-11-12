@@ -29,6 +29,12 @@ const ENV_SERVER_TOKEN: &str = "SOLX_SERVER_TOKEN";
 /// another action; it's a name, not a secret.
 const ENV_ACTION_REF: &str = "SOLX_ACTION_REF";
 
+/// Windows' `CREATE_NO_WINDOW`: run a console program without giving it a
+/// console window of its own. Ignored if `CREATE_NEW_CONSOLE` or
+/// `DETACHED_PROCESS` is also set — neither is here.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// Turn an action ref into a filesystem-safe path segment for
 /// [`ConfigService::logs_dir`] — `/packages/solx-omniparse/process-file` ->
 /// `packages_solx-omniparse_process-file`.
@@ -144,6 +150,15 @@ pub(crate) fn prepare_command(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Windows: a console program spawned without a flag opens a console
+    // window of its own. `cmd /C` is exactly that, so every Command action
+    // — and every background — flashes a cmd window on the operator's
+    // desktop, once per invocation. CREATE_NO_WINDOW runs the shell
+    // without one; the stdio pipes the action's output and params ride on
+    // are unaffected, and the command the shell starts inherits its
+    // console-less state, so it opens no window either.
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
     warn_on_removed_env(action_ref, action_config);
     Ok(PreparedCommand {
         cmd,
