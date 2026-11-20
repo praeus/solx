@@ -18,9 +18,12 @@ solx save action /weather/forecast --json '{
 # as act__weather__forecast.
 ```
 
-That's the whole loop. MCP's `tools/list` advertises a single router tool,
-`explore_tools`, which searches or pages through the live actions database;
-each action it surfaces is then called directly by its `act__` name. There is
+That's the whole loop. MCP's `tools/list` advertises two meta-tools,
+`explore_tools` (which searches or pages through the live actions database)
+and `exec_action` (which runs one action by the name the router returned);
+each action the router surfaces is then called directly by its `act__` name,
+or through `exec_action` for clients whose model can only see the
+advertised tool list. There is
 no hand-written tool layer to keep in sync and no `tools/list_changed` churn
 when packages come and go — and no separate CRUD tool surface, because entity
 CRUD, search, files, and secrets are themselves just actions in the
@@ -51,7 +54,9 @@ flat store keyed by `path` + `name`. `/builtin/document/search-documents`,
 The namespace is also the access control for tool catalogues. Set
 `SOLX_MCP_PATH_PREFIX=/packages/solx-google` and that MCP instance exposes
 only Google's actions — so you can run several narrowly-scoped servers
-instead of flooding one model's context with every action you own.
+instead of flooding one model's context with every action you own. The
+prefix holds at execution time too: an action outside it is refused as
+unknown, through `exec_action` as much as through its `act__` name.
 
 ## Security posture
 

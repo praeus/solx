@@ -1,22 +1,29 @@
 //! The MCP `ServerHandler` implementation.
 //!
-//! `list_tools` exposes a single router meta-tool (`explore_tools`) rather
-//! than the full action catalogue; `call_tool` either handles that router
-//! (searching/listing the live actions DB) or dispatches a real action tool.
-//! Implemented by hand rather than via rmcp's `#[tool_router]`/`#[tool]`
+//! `list_tools` exposes two meta-tools — a router (`explore_tools`) and an
+//! invoker (`exec_action`) — rather than the full action catalogue;
+//! `call_tool` either handles one of those two, or dispatches a real action
+//! tool. Implemented by hand rather than via rmcp's `#[tool_router]`/`#[tool]`
 //! macros: those assume a fixed, compile-time-known tool set, but the tools
 //! the router discovers come from a live `actions.list()`/`actions.search()`
 //! query.
 //!
-//! This means an MCP client reading `tools/list` will see exactly one entry
-//! even though there are dozens of invokable actions behind it. The
-//! `get_info` instructions and the `explore_tools` description both spell
-//! this out, but a UI that only renders the wire `tools/list` (VS Code's
-//! MCP picker, for one) will show just the one tool regardless — that's a
-//! discoverability UX gap, not a routing bug, and it's by design: a flat
-//! `tools/list` would need a `tools/list_changed` notification on every
-//! package install/uninstall, and the model would have to filter dozens of
-//! static entries instead of searching on demand.
+//! This means an MCP client reading `tools/list` will see two entries even
+//! though there are dozens of invokable actions behind them. The `get_info`
+//! instructions and the two tools' descriptions spell this out, but a UI
+//! that only renders the wire `tools/list` (VS Code's MCP picker, for one)
+//! will show just those two regardless — that's a discoverability UX gap,
+//! not a routing bug, and it's by design: a flat `tools/list` would need a
+//! `tools/list_changed` notification on every package install/uninstall,
+//! and the model would have to filter dozens of static entries instead of
+//! searching on demand.
+//!
+//! `exec_action` exists because of the other half of that trade-off. A
+//! client that only offers its model the tools from `tools/list` — several
+//! agents do exactly this — can still discover `act__builtin__file__file-put`
+//! through the router but has no way to call it, because the action tools
+//! are not (and cannot be) listed. One static invoker is always available
+//! to stand in for the whole dynamic set.
 
 use std::sync::Arc;
 
@@ -48,6 +55,11 @@ const PAGE_SIZE: usize = 200;
 /// can never collide with an encoded action tool name.
 const ROUTER_TOOL_NAME: &str = "explore_tools";
 
+/// The invoker meta-tool's name — the "call a tool" door. Plain for the
+/// same reason as the router: it must never collide with an encoded action
+/// tool name.
+const EXEC_TOOL_NAME: &str = "exec_action";
+
 /// Max candidates returned per router page (both `search` and `list_all`).
 const ROUTER_PAGE_SIZE: usize = 10;
 
@@ -70,7 +82,7 @@ impl SolxMcpServer {
         SolxMcpServer { app, path_prefix }
     }
 
-    /// The single router meta-tool exposed by `list_tools`.
+    /// The router meta-tool exposed by `list_tools`.
     fn router_tool() -> Tool {
         let schema: JsonObject = serde_json::json!({
             "type": "object",
@@ -100,7 +112,39 @@ impl SolxMcpServer {
         .clone();
         Tool::new(
             ROUTER_TOOL_NAME,
-            "Discover available tools. Use 'search' to find tools for a specific task, or 'list_all' to browse the complete registry. Returns tool names you can then invoke directly. Note: only this router tool is advertised in the MCP `tools/list` response — the action tools it surfaces are NOT listed there (they're discovered through this tool, then invoked by `tools/call` against their `act__`-prefixed names). That mismatch is by design: the action catalogue is dynamic and large, and exposing it as a flat `tools/list` would mean every package install/uninstall needs a `tools/list_changed` notification and the model would have to wade through dozens of static entries instead of searching on demand.",
+            "Discover available tools. Use 'search' to find tools for a specific task, or 'list_all' to browse the complete registry. Returns tool names you can then invoke directly. Note: only the two meta-tools (`explore_tools` and `exec_action`) are advertised in the MCP `tools/list` response — the action tools it surfaces are NOT listed there (they're discovered through this tool, then invoked by `tools/call` against their `act__`-prefixed names, or through `exec_action`). That mismatch is by design: the action catalogue is dynamic and large, and exposing it as a flat `tools/list` would mean every package install/uninstall needs a `tools/list_changed` notification and the model would have to wade through dozens of static entries instead of searching on demand.",
+            Arc::new(schema),
+        )
+    }
+
+    /// The invoker meta-tool: run an action by the name the router
+    /// returned.
+    ///
+    /// The action tools are dynamic, so they cannot be advertised — but
+    /// that leaves a client whose model can only see `tools/list` with no
+    /// way to run anything the router found. This is that way: one static
+    /// tool standing in for the whole dynamic set, always in the list.
+    fn exec_tool() -> Tool {
+        let schema: JsonObject = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "tool": {
+                    "type": "string",
+                    "description": "The action to run: the encoded tool name explore_tools returned (e.g. 'act__builtin__file__file-put'), or a full action reference (e.g. '/builtin/file/file-put')."
+                },
+                "arguments": {
+                    "type": "object",
+                    "description": "The action's parameters, exactly as the schema explore_tools showed describes them. Defaults to {} for a parameterless action."
+                }
+            },
+            "required": ["tool"]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        Tool::new(
+            EXEC_TOOL_NAME,
+            "Run one action found with explore_tools. Pass the tool name it returned as 'tool' (e.g. 'act__builtin__file__file-put') and the action's parameters as 'arguments'. Use this when your client cannot call the 'act__'-prefixed names directly, because those action tools are not advertised in the MCP `tools/list` response. Same result either way — this is a route to the same action, not a different one.",
             Arc::new(schema),
         )
     }
@@ -234,6 +278,146 @@ impl SolxMcpServer {
         }
     }
 
+    /// Handle a `call_tool` invocation of the invoker meta-tool: run the
+    /// action the caller named, with the parameters it passed.
+    ///
+    /// The action's name comes in either form the catalogue uses: the
+    /// encoded `act__`-prefixed name the router hands out, or the plain
+    /// `/path/name` reference every other solx surface (CLI, HTTP) uses.
+    async fn handle_exec_action(
+        &self,
+        args: &Map<String, Value>,
+        ctx: &RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let tool = ["tool", "tool_name"]
+            .iter()
+            .find_map(|k| args.get(*k).and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let Some(tool) = tool else {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
+                "exec_action needs a 'tool': the encoded tool name explore_tools returned \
+                 (e.g. 'act__builtin__file__file-put'), or a full action reference \
+                 (e.g. '/builtin/file/file-put')."
+                    .to_string(),
+            )]));
+        };
+        let Some((path, name)) = tools::resolve_action_ref(tool) else {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "unknown tool '{tool}': expected the encoded name explore_tools returned \
+                 (e.g. 'act__builtin__file__file-put') or a full action reference \
+                 (e.g. '/builtin/file/file-put')."
+            ))]));
+        };
+        let params = match ["arguments", "params"].iter().find_map(|k| args.get(*k)) {
+            None => Map::new(),
+            Some(Value::Object(map)) => map.clone(),
+            Some(_) => {
+                return Ok(CallToolResult::error(vec![ContentBlock::text(
+                    "'arguments' must be a JSON object".to_string(),
+                )]));
+            }
+        };
+        self.dispatch_action(&path, &name, params, ctx).await
+    }
+
+    /// Run one action and shape the outcome for the wire.
+    ///
+    /// Shared by the direct `act__`-named tool calls and the `exec_action`
+    /// meta-tool, so both routes get the same treatment: the same
+    /// instance scope, the same hidden-action check, the same tooling
+    /// scope, and the same console-tail progress stream. `exec_action` is
+    /// a different way in, not a different action.
+    async fn dispatch_action(
+        &self,
+        path: &str,
+        name: &str,
+        params: Map<String, Value>,
+        ctx: &RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let label = full_ref(path, name).unwrap_or_else(|_| format!("{path}/{name}"));
+        // The instance's own scope (`SOLX_MCP_PATH_PREFIX`) is the
+        // catalogue this server exists to expose, so an action outside it
+        // is not callable here — including through `exec_action`, which
+        // would otherwise be a way around the scope the router
+        // advertises. Refused as "unknown", the same as a hidden action:
+        // the caller learns nothing about what exists outside the scope.
+        if !self.within_prefix(path) {
+            return Err(ErrorData::invalid_params(
+                format!("unknown tool '{label}'"),
+                None,
+            ));
+        }
+        // Defense in depth: a client that already knows a hidden tool's name
+        // still can't invoke it — hidden tools are rejected here, not just
+        // omitted from discovery.
+        //
+        // This costs one `get` per call, which the old path-only check did
+        // not: `solx:hidden` lives on the row, so there is nothing to test
+        // without reading it. A row that has gone missing falls through to
+        // `exec`, which does its own `get` and reports NotFound in-band —
+        // failing open here would be wrong, but so would inventing a
+        // different error for a race `exec` already handles.
+        if let Ok(action) = self.app.actions().get(path, name).await {
+            if self.policy().is_hidden(&action) {
+                return Err(ErrorData::invalid_params(
+                    format!("unknown tool '{label}'"),
+                    None,
+                ));
+            }
+        }
+        // Not `request.progress_token()`: on the receiving side, rmcp
+        // strips the wire `_meta` into the request envelope's `Extensions`
+        // during deserialization rather than populating the typed params'
+        // own `meta` field, then moves it into `RequestContext::meta` before
+        // dispatch (see `rmcp::model::meta`'s `GetMeta` doc comment) — so
+        // `ctx.meta` is the one that's actually populated here.
+        let progress_token = ctx.meta.get_progress_token();
+        // The whole chain runs in the tooling scope: the dispatcher refuses
+        // excluded actions at every hop, not just this first one, and forces
+        // the tooling `excludeMode` onto every built-in.
+        let params = Value::Object(params);
+
+        // Only pay for the tail loop if the client actually asked for
+        // progress updates (attached a `progressToken`) — most callers of
+        // short builtin actions won't, and skipping this is free for them.
+        let tail_handle = match (progress_token, full_ref(path, name)) {
+            (Some(token), Ok(action_ref)) => Some(
+                self.spawn_console_tail(action_ref, token, ctx.peer.clone())
+                    .await,
+            ),
+            _ => None,
+        };
+
+        let exec_result = self
+            .app
+            .actions()
+            .exec_tooling(request_principal(ctx).as_ref(), path, name, params)
+            .await;
+        if let Some(handle) = tail_handle {
+            handle.stop_and_drain().await;
+        }
+
+        Ok(match exec_result {
+            Ok(result) => error::exec_result_to_tool_result(result),
+            Err(e) => error::solx_error_to_tool_result(e),
+        })
+    }
+
+    /// Whether `path` is inside this server's own scope
+    /// (`SOLX_MCP_PATH_PREFIX`), matching the router's `path_prefix`
+    /// semantics: the directory itself and everything under it.
+    fn within_prefix(&self, path: &str) -> bool {
+        let Some(prefix) = self.path_prefix.as_deref() else {
+            return true;
+        };
+        let prefix = prefix.trim().trim_end_matches('/');
+        if prefix.is_empty() || prefix == "/" {
+            return true;
+        }
+        path == prefix || path.starts_with(&format!("{prefix}/"))
+    }
+
     async fn explore_search(
         &self,
         args: &Map<String, Value>,
@@ -284,7 +468,9 @@ impl SolxMcpServer {
             ))]));
         }
         let mut text = format!(
-            "Found {} tool(s) matching '{query}'. Invoke one by its tool name:\n\n",
+            "Found {} tool(s) matching '{query}'. Invoke one by its tool name — as a \
+             `tools/call` against that name, or through the `exec_action` tool with it as \
+             the `tool` argument:\n\n",
             lines.len()
         );
         text.push_str(&lines.join("\n\n"));
@@ -316,7 +502,9 @@ impl SolxMcpServer {
             lines.push(self.format_candidate(a, &policy).await);
         }
         let mut text = format!(
-            "Displaying tools {} to {} of {}.\n\n",
+            "Displaying tools {} to {} of {}. Invoke one by its tool name — as a \
+             `tools/call` against that name, or through the `exec_action` tool with it as \
+             the `tool` argument:\n\n",
             start + 1,
             end,
             all.len()
@@ -353,7 +541,8 @@ impl ServerHandler for SolxMcpServer {
         info.instructions = Some(
             "This server is a thin router over the live solx actions database, exposed as MCP tools.\n\
              \n\
-             IMPORTANT: only one tool, `explore_tools`, is registered in the MCP `tools/list` response. \
+             IMPORTANT: only two tools, `explore_tools` and `exec_action`, are registered in the MCP \
+             `tools/list` response. \
              The full action catalogue (every action across every installed package, plus the built-in \
              ones under `/builtin/*`) is NOT advertised in `tools/list` — it is dynamic, large, and \
              changes every time a package is installed or removed. To discover the actions available \
@@ -361,6 +550,11 @@ impl ServerHandler for SolxMcpServer {
              or `discovery_mode: \"list_all\"` (paginated browse). Every action it surfaces is encoded \
              as an `act__`-prefixed tool name and is invokable directly via `tools/call` against that \
              name — passing through the action's parameters as the `arguments` object.\n\
+             \n\
+             If your client only offers you the tools listed in `tools/list`, you cannot call those \
+             `act__`-prefixed names directly. Use `exec_action` instead: pass the name \
+             `explore_tools` returned as its `tool` argument and the action's parameters as its \
+             `arguments`. It runs the same action, with the same result.\n\
              \n\
              Documents, types, actions-as-data, search, and general file-store access are all reached \
              through those actions (e.g. `entity-save-document`, `search-actions`, `file-put`) — there \
@@ -375,7 +569,10 @@ impl ServerHandler for SolxMcpServer {
         _request: Option<PaginatedRequestParams>,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(vec![Self::router_tool()]))
+        Ok(ListToolsResult::with_all_items(vec![
+            Self::router_tool(),
+            Self::exec_tool(),
+        ]))
     }
 
     async fn call_tool(
@@ -393,66 +590,21 @@ impl ServerHandler for SolxMcpServer {
                 .await?
                 .into());
         }
+        // The invoker meta-tool: same dispatch as an `act__`-prefixed name,
+        // reached through the one tool every client can call.
+        if request.name == EXEC_TOOL_NAME {
+            let args = request.arguments.clone().unwrap_or_default();
+            return Ok(self.handle_exec_action(&args, &ctx).await?.into());
+        }
         let Some((path, name)) = tools::decode_tool_name(&request.name) else {
             return Err(ErrorData::invalid_params(
                 format!("unknown tool '{}'", request.name),
                 None,
             ));
         };
-        // Defense in depth: a client that already knows a hidden tool's name
-        // still can't invoke it — hidden tools are rejected here, not just
-        // omitted from discovery.
-        //
-        // This costs one `get` per call, which the old path-only check did
-        // not: `solx:hidden` lives on the row, so there is nothing to test
-        // without reading it. A row that has gone missing falls through to
-        // `exec`, which does its own `get` and reports NotFound in-band —
-        // failing open here would be wrong, but so would inventing a
-        // different error for a race `exec` already handles.
-        if let Ok(action) = self.app.actions().get(&path, &name).await {
-            if self.policy().is_hidden(&action) {
-                return Err(ErrorData::invalid_params(
-                    format!("unknown tool '{}'", request.name),
-                    None,
-                ));
-            }
-        }
-        // Not `request.progress_token()`: on the receiving side, rmcp
-        // strips the wire `_meta` into the request envelope's `Extensions`
-        // during deserialization rather than populating the typed params'
-        // own `meta` field, then moves it into `RequestContext::meta` before
-        // dispatch (see `rmcp::model::meta`'s `GetMeta` doc comment) — so
-        // `ctx.meta` is the one that's actually populated here.
-        let progress_token = ctx.meta.get_progress_token();
-        // The whole chain runs in the tooling scope: the dispatcher refuses
-        // excluded actions at every hop, not just this first one, and forces
-        // the tooling `excludeMode` onto every built-in.
-        let params = Value::Object(request.arguments.unwrap_or_default());
-
-        // Only pay for the tail loop if the client actually asked for
-        // progress updates (attached a `progressToken`) — most callers of
-        // short builtin actions won't, and skipping this is free for them.
-        let tail_handle = match (progress_token, full_ref(&path, &name)) {
-            (Some(token), Ok(action_ref)) => Some(
-                self.spawn_console_tail(action_ref, token, ctx.peer.clone())
-                    .await,
-            ),
-            _ => None,
-        };
-
-        let exec_result = self
-            .app
-            .actions()
-            .exec_tooling(request_principal(&ctx).as_ref(), &path, &name, params)
-            .await;
-        if let Some(handle) = tail_handle {
-            handle.stop_and_drain().await;
-        }
-
-        let result: CallToolResult = match exec_result {
-            Ok(result) => error::exec_result_to_tool_result(result),
-            Err(e) => error::solx_error_to_tool_result(e),
-        };
+        let result = self
+            .dispatch_action(&path, &name, request.arguments.unwrap_or_default(), &ctx)
+            .await?;
         Ok(result.into())
     }
 }

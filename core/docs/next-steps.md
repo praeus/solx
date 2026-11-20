@@ -294,7 +294,10 @@ now exist:
   cursor-only), scoping is a launch-time server config — run several
   `solx-mcp` instances, each with a different prefix, to present narrower
   toolsets to different clients/teams (e.g. one for `/builtin`, one for
-  `/packages/solx-google`).
+  `/packages/solx-google`). The prefix is enforced at execution time as well
+  as at discovery: an action outside it is refused as `unknown tool`,
+  whichever route the call came in by — the direct `act__`-prefixed name or
+  the `exec_action` meta-tool.
 - **A real grouping to scope by:** the flat `/builtin` catalogue has been
   split into `/builtin/<area>/*` subpaths (`document`, `type`, `file`,
   `env`, `secrets`, `oauth`, `web` (+ `web/stream`), and the existing

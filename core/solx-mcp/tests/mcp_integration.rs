@@ -35,8 +35,8 @@ async fn tools_list_and_call_tool_round_trip() -> anyhow::Result<()> {
     let names: Vec<&str> = tools.tools.iter().map(|t| t.name.as_ref()).collect();
     assert_eq!(
         names,
-        vec!["explore_tools"],
-        "list_tools should expose only the router meta-tool, got: {names:?}"
+        vec!["explore_tools", "exec_action"],
+        "list_tools should expose the router and the invoker meta-tools, got: {names:?}"
     );
 
     // file-put -> file-get round trip through two real tool calls.
@@ -76,6 +76,153 @@ async fn tools_list_and_call_tool_round_trip() -> anyhow::Result<()> {
         err.is_err(),
         "expected a protocol error for an unparseable tool name"
     );
+
+    client.cancel().await?;
+    server_task.await?;
+    Ok(())
+}
+
+/// A client whose model can only see the tools in `tools/list` cannot call
+/// the `act__`-prefixed names the router hands out — those are not
+/// advertised. `exec_action` is the way in for those clients: it runs the
+/// action by the name the router returned, with the action's own
+/// parameters.
+#[tokio::test]
+async fn exec_action_runs_an_action_by_its_discovered_name() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    // Never touch the real OS credential manager from a test.
+    solx_config::credentials::use_memory_store_for_tests();
+    let app = solx_manager::App::build_in(dir.path()).await?;
+
+    let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
+    let server_task = tokio::spawn(async move {
+        server::SolxMcpServer::new(app, None)
+            .serve(server_transport)
+            .await
+            .expect("server serve")
+            .waiting()
+            .await
+            .expect("server waiting");
+    });
+
+    let client = ().serve(client_transport).await?;
+
+    // Discover the tool the way a model would, and take the name the
+    // router printed.
+    let found = client
+        .call_tool(
+            CallToolRequestParams::new("explore_tools").with_arguments(
+                serde_json::json!({"discovery_mode": "search", "search_query": "file put"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await?;
+    let text = found.content[0]
+        .as_text()
+        .expect("text content")
+        .text
+        .clone();
+    assert!(
+        text.contains("act__builtin__file__file-put"),
+        "router should surface file-put, got: {text}"
+    );
+
+    // Run it through `exec_action`, by the encoded name.
+    let put = client
+        .call_tool(
+            CallToolRequestParams::new("exec_action").with_arguments(
+                serde_json::json!({
+                    "tool": "act__builtin__file__file-put",
+                    "arguments": {"rel_path": "notes/a.txt", "content": "hello via exec_action"}
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await?;
+    assert!(!put.is_error.unwrap_or(false), "{put:?}");
+
+    // The plain `/path/name` reference works too — the form the CLI, the
+    // HTTP API and the docs use everywhere else.
+    let got = client
+        .call_tool(
+            CallToolRequestParams::new("exec_action").with_arguments(
+                serde_json::json!({
+                    "tool": "/builtin/file/file-get",
+                    "arguments": {"rel_path": "notes/a.txt"}
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await?;
+    let structured = got.structured_content.expect("structured_content present");
+    assert_eq!(
+        structured.get("content").and_then(|v| v.as_str()),
+        Some("hello via exec_action")
+    );
+
+    client.cancel().await?;
+    server_task.await?;
+    Ok(())
+}
+
+/// A bad `exec_action` call is an in-band error the model can read and
+/// react to, not a transport failure — same as any other action error.
+#[tokio::test]
+async fn exec_action_reports_bad_input_in_band() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    // Never touch the real OS credential manager from a test.
+    solx_config::credentials::use_memory_store_for_tests();
+    let app = solx_manager::App::build_in(dir.path()).await?;
+
+    let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
+    let server_task = tokio::spawn(async move {
+        server::SolxMcpServer::new(app, None)
+            .serve(server_transport)
+            .await
+            .expect("server serve")
+            .waiting()
+            .await
+            .expect("server waiting");
+    });
+
+    let client = ().serve(client_transport).await?;
+
+    // No `tool` at all.
+    let missing = client
+        .call_tool(CallToolRequestParams::new("exec_action"))
+        .await?;
+    assert_eq!(missing.is_error, Some(true), "{missing:?}");
+    let text = missing.content[0]
+        .as_text()
+        .expect("text content")
+        .text
+        .clone();
+    assert!(text.contains("'tool'"), "{text}");
+
+    // A name that is neither an encoded tool name nor a full reference.
+    let unknown = client
+        .call_tool(
+            CallToolRequestParams::new("exec_action").with_arguments(
+                serde_json::json!({"tool": "file-put"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await?;
+    assert_eq!(unknown.is_error, Some(true), "{unknown:?}");
+    let text = unknown.content[0]
+        .as_text()
+        .expect("text content")
+        .text
+        .clone();
+    assert!(text.contains("unknown tool 'file-put'"), "{text}");
 
     client.cancel().await?;
     server_task.await?;
@@ -250,6 +397,26 @@ async fn router_list_all_respects_path_prefix() -> anyhow::Result<()> {
     assert!(
         !text.contains("act__builtin__file__file-put"),
         "a /builtin-root action should not appear when scoped to /builtin/console, got: {text}"
+    );
+
+    // The scope holds at execution time too — otherwise `exec_action`
+    // would be a way around the catalogue this instance advertises.
+    let outside = client
+        .call_tool(
+            CallToolRequestParams::new("exec_action").with_arguments(
+                serde_json::json!({
+                    "tool": "act__builtin__file__file-put",
+                    "arguments": {"rel_path": "notes/a.txt", "content": "out of scope"}
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await;
+    assert!(
+        outside.is_err(),
+        "expected a protocol error for an action outside the instance scope"
     );
 
     client.cancel().await?;

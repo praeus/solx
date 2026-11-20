@@ -67,14 +67,15 @@ async fn tools_list_and_call_tool_round_trip_over_http() -> anyhow::Result<()> {
         ))
         .await?;
 
-    // Only the router is advertised; actions are found through it (see
-    // `solx-mcp/src/server.rs`), then called by their `act__` names.
+    // The router and the invoker are advertised; actions are found through
+    // the router (see `solx-mcp/src/server.rs`), then called by their
+    // `act__` names or through `exec_action`.
     let tools = client.list_tools(None).await?;
     let names: Vec<&str> = tools.tools.iter().map(|t| t.name.as_ref()).collect();
     assert_eq!(
         names,
-        vec!["explore_tools"],
-        "list_tools should expose only the router meta-tool"
+        vec!["explore_tools", "exec_action"],
+        "list_tools should expose the router and the invoker meta-tools"
     );
 
     let found = client
@@ -128,6 +129,23 @@ async fn tools_list_and_call_tool_round_trip_over_http() -> anyhow::Result<()> {
         structured.get("content").and_then(|v| v.as_str()),
         Some("hello over mcp http")
     );
+
+    // The same action, reached through `exec_action` — the route a client
+    // whose model can only see the advertised `tools/list` has to take.
+    let via_exec = client
+        .call_tool(
+            CallToolRequestParams::new("exec_action").with_arguments(
+                serde_json::json!({
+                    "tool": put_name,
+                    "arguments": {"rel_path": "notes/b.txt", "content": "hello via exec_action"}
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await?;
+    assert!(!via_exec.is_error.unwrap_or(false), "{via_exec:?}");
 
     client.cancel().await?;
     Ok(())

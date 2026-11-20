@@ -1,6 +1,6 @@
 ---
 name: solx
-description: Use whenever the task involves solx - the local SQLite-backed catalogue of dynamically dispatched actions served over MCP, HTTP and a CLI. Covers finding actions with the explore_tools router, running them (solx exec, POST /actions/{ref}), reading and writing documents, types and files, registering new actions, and installing packages. Trigger on "solx", "solx-server", "solx-mcp", "explore_tools", "act__", "solx exec", "action catalogue", or any request to list, search, run, create or delete solx actions, documents or types.
+description: Use whenever the task involves solx - the local SQLite-backed catalogue of dynamically dispatched actions served over MCP, HTTP and a CLI. Covers finding actions with the explore_tools router, running them (exec_action, solx exec, POST /actions/{ref}), reading and writing documents, types and files, registering new actions, and installing packages. Trigger on "solx", "solx-server", "solx-mcp", "explore_tools", "exec_action", "act__", "solx exec", "action catalogue", or any request to list, search, run, create or delete solx actions, documents or types.
 ---
 
 # solx
@@ -60,8 +60,9 @@ the allowlist is entirely unset.
 
 ### 1. Discover - one router tool
 
-The `solx` MCP server advertises **exactly one** tool in its `tools/list`
-response: `explore_tools`. It is a router over the live database.
+The `solx` MCP server advertises **two** tools in its `tools/list` response:
+`explore_tools` (a router over the live database) and `exec_action` (runs one
+action by the name the router returned).
 
 ```jsonc
 // Code Mode
@@ -91,13 +92,40 @@ not a broken server.
 
 This is the part that trips people up. **`explore_tools` hands you names you
 cannot call as tools.** A client's tool list comes from the MCP `tools/list`
-response, and solx deliberately puts only the router there: the catalogue is
+response, and solx deliberately puts only the meta-tools there: the catalogue is
 large and changes on every package install, so a flat list would mean a
 `tools/list_changed` notification each time and a model sifting dozens of
 static entries instead of searching on demand.
 
 So `act__builtin__document__entity-save-document` is a *reference*, not a
-callable tool name. Run it through a real surface instead.
+callable tool name. There are three ways to run it.
+
+**MCP - `exec_action` (always available):**
+
+```jsonc
+// Code Mode
+await tools.solx.exec_action({
+  tool: "act__builtin__document__entity-save-document",
+  arguments: { name: "note", path: "/notes" }
+})
+// native tool list
+solx_exec_action({ tool: "act__builtin__document__entity-save-document",
+                   arguments: { name: "note", path: "/notes" } })
+```
+
+`tool` takes the encoded name the router printed, or the plain
+`/builtin/document/entity-save-document` reference. `arguments` is the action's
+own parameter object, exactly as the schema the router showed describes it.
+Same action, same result, same in-band errors.
+
+**MCP - direct `tools/call` against the `act__` name** (works when your client
+exposes names the server did not list - many do not):
+
+```jsonc
+// a raw tools/call request
+{ "name": "act__builtin__document__entity-save-document",
+  "arguments": { "name": "note", "path": "/notes" } }
+```
 
 **CLI - simplest, and local:**
 
@@ -184,6 +212,10 @@ Details: `references/creating-actions.md`.
 - **A missing action is not a missing tool.** The catalogue changes under you,
   so `exec` reports `NotFound` in-band rather than pretending the tool never
   existed.
+- **A scoped MCP instance stays scoped.** A `solx-mcp` started with
+  `SOLX_MCP_PATH_PREFIX=/packages/solx-google` only runs actions under that
+  path; anything else comes back as `unknown tool`, through `exec_action` as
+  much as through its `act__` name.
 - **`command` actions may need a working directory or environment.** That lives
   in `command_actions` in `solx-config.json`, not in the row.
 - **The CLI `search` command searches documents only.** Actions are searched

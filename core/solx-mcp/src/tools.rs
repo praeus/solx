@@ -92,6 +92,32 @@ pub fn decode_tool_name(tool_name: &str) -> Option<(String, String)> {
     Some((path, name.to_string()))
 }
 
+/// Resolve a caller-supplied action reference into `(path, name)`.
+///
+/// Accepts the two forms the catalogue uses for an action:
+///
+/// - the encoded tool name the router hands out
+///   (`act__builtin__file__file-put`), and
+/// - the plain `/path/name` reference every other solx surface (the CLI,
+///   the HTTP API, the docs) uses.
+///
+/// The `/path/name` form is only recognized when it starts with a slash,
+/// so a name that is neither form fails here rather than being read as a
+/// root-level action.
+pub fn resolve_action_ref(reference: &str) -> Option<(String, String)> {
+    let reference = reference.trim();
+    if reference.is_empty() {
+        return None;
+    }
+    if let Some(pair) = decode_tool_name(reference) {
+        return Some(pair);
+    }
+    if reference.starts_with('/') {
+        return solx_surface::path::split_ref(reference).ok();
+    }
+    None
+}
+
 // ── base32 (RFC 4648, no padding) — only alnum output, safe for tool names ──
 
 const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -215,5 +241,35 @@ mod tests {
         assert_eq!(decode_tool_name("doc_post"), None);
         assert_eq!(decode_tool_name(""), None);
         assert_eq!(decode_tool_name("act__"), None);
+    }
+
+    #[test]
+    fn resolve_action_ref_takes_the_encoded_name() {
+        assert_eq!(
+            resolve_action_ref("act__builtin__file__file-put"),
+            Some(("/builtin/file".to_string(), "file-put".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_action_ref_takes_a_full_reference() {
+        assert_eq!(
+            resolve_action_ref("/builtin/file/file-put"),
+            Some(("/builtin/file".to_string(), "file-put".to_string()))
+        );
+        assert_eq!(
+            resolve_action_ref("  /weather/forecast  "),
+            Some(("/weather".to_string(), "forecast".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_action_ref_rejects_anything_else() {
+        // A bare word is neither form — reading it as a root-level action
+        // would turn a typo into a different (real) call.
+        assert_eq!(resolve_action_ref("file-put"), None);
+        assert_eq!(resolve_action_ref(""), None);
+        assert_eq!(resolve_action_ref("   "), None);
+        assert_eq!(resolve_action_ref("/"), None);
     }
 }
